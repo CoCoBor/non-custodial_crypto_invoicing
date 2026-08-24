@@ -15,6 +15,7 @@ export interface RecoveryCredential {
 }
 
 export function generateRecoveryCredential(): RecoveryCredential {
+  // default 128= 12 word so 256=24 word
   const mnemonic = generateMnemonic(wordlist, 256);
   const publicKey = derivePublicKeyFromMnemonic(mnemonic);
 

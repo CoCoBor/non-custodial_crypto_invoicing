@@ -5,10 +5,12 @@ export const healthRouter = Router();
 
 healthRouter.get("/live", (_req, res) => {
   res.status(200).json({
-    status: "ok",
-    service: "non-custodial-crypto-invoicing-api",
-    timestamp: new Date().toISOString(),
-    uptimeSeconds: Math.floor(process.uptime()),
+    data: {
+      status: "ok",
+      service: "non-custodial-crypto-invoicing-api",
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+    },
   });
 });
 
@@ -17,21 +19,25 @@ healthRouter.get("/ready", async (_req, res) => {
 
   if (!mongoDBReady) {
     res.status(503).json({
-      status: "not_ready",
-      checks: {
-        mongodb: "unavailable",
+      data: {
+        status: "not_ready",
+        checks: {
+          mongodb: "unavailable",
+        },
+        timestamp: new Date().toISOString(),
       },
-      timestamp: new Date().toISOString(),
     });
 
     return;
   }
 
   res.status(200).json({
-    status: "ready",
-    checks: {
-      mongodb: "available",
+    data: {
+      status: "ready",
+      checks: {
+        mongodb: "available",
+      },
+      timestamp: new Date().toISOString(),
     },
-    timestamp: new Date().toISOString(),
   });
 });

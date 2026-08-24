@@ -7,6 +7,9 @@ const mongoClient = new MongoClient(env.mongodbUri, {
   maxPoolSize: 10,
   minPoolSize: 0,
   maxIdleTimeMS: 60_000,
+  // mongodb can only store binary, when we store buffer it will auto convert to binary
+  // this like to makesure when we read data it will convert to buffer instead of binary
+  promoteBuffers: true,
 
   serverSelectionTimeoutMS: 5_000,
   waitQueueTimeoutMS: 5_000,
@@ -59,13 +62,13 @@ export async function isMongoDBReady(): Promise<boolean> {
   try {
     await database.command({ ping: 1 }, { timeoutMS: 1_000 });
 
-    return true
+    return true;
   } catch (error) {
-    return false
+    return false;
   }
 }
 
-export async function disconnectFromMongoDB():Promise<void>{
-    database = undefined
-    await mongoClient.close()
+export async function disconnectFromMongoDB(): Promise<void> {
+  database = undefined;
+  await mongoClient.close();
 }
