@@ -4,13 +4,16 @@ import { generateRecoveryCredential } from "../security/recovery-credential.js";
 import { computeBlindIndex } from "../security/blind-index.js";
 import { sealSecret } from "../security/secret-envelope.js";
 import { AccountDocument, ACCOUNTS_COLLECTION } from "./account.model.js";
+import { hasMongoErrorCode } from "../infrastructure/database/mongo-errors.js";
 
 export interface CreatedAccount {
   accountId: ObjectId;
   accountNumber: string;
   mnemonic: string;
 }
+
 const MAX_ATTEMPTS = 3;
+
 export async function createAccount(database: Db): Promise<CreatedAccount> {
   const collection = database.collection<AccountDocument>(ACCOUNTS_COLLECTION);
 
@@ -39,13 +42,44 @@ export async function createAccount(database: Db): Promise<CreatedAccount> {
       }
     }
   }
-  throw new Error("failed to create account after multiple attempts due to account number collisions");
-}
-function isDuplicateKeyError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    error.code === 11000 //duplicate key error code
+  throw new Error(
+    "failed to create account after multiple attempts due to account number collisions",
   );
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return hasMongoErrorCode(error, 11000);
+}
+
+export async function findAccountByNumber(
+  database: Db,
+  accountNumber: string,
+): Promise<AccountDocument | null> {
+  const collection = database.collection<AccountDocument>(ACCOUNTS_COLLECTION);
+  const accountNumberLookup = computeBlindIndex(
+    "account-number",
+    accountNumber,
+  );
+  const data = await collection.findOne({ accountNumberLookup });
+
+  if (!data) {
+    return null;
+  }
+
+  return data;
+}
+
+export async function findAccountById(
+  database: Db,
+  accountId: ObjectId,
+): Promise<AccountDocument | null> {
+  const collection = database.collection<AccountDocument>(ACCOUNTS_COLLECTION);
+
+  const data = collection.findOne({ _id: accountId });
+
+  if (!data) {
+    return null;
+  }
+
+  return data;
 }
