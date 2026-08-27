@@ -1,62 +1,49 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, createHmac } from "node:crypto";
 
-const ALGORITHM = "sha1";
+const ALGORITHM = "SHA1"
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const DIGITS = 6;
 const PERIOD_SECONDS = 30;
-const SECRET_BYTES = 20;
+const WINDOW = 1;
 
-const RFC4648_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-
-// Precomputed map for fast O(1) character lookup
-const CHAR_MAP: Record<string, number> = {};
-for (let i = 0; i < RFC4648_ALPHABET.length; i++) {
-  CHAR_MAP[RFC4648_ALPHABET[i]] = i;
-}
-
-export function base32Encode(buffer: Uint8Array): string {
+function base32Encode(buffer: Buffer): string {
   let bits = 0;
   let value = 0;
-  let output = '';
+  let output = "";
 
-  for (let i = 0; i < buffer.length; i++) {
-    value = (value << 8) | buffer[i];
+  for (const byte of buffer) {
+    value = (value << 8) | byte;
     bits += 8;
-
     while (bits >= 5) {
-      output += RFC4648_ALPHABET[(value >>> (bits - 5)) & 31];
+      output += BASE32_ALPHABET[(value >>> (bits - 5)) & 31];
       bits -= 5;
     }
   }
 
   if (bits > 0) {
-    output += RFC4648_ALPHABET[(value << (5 - bits)) & 31];
+    output += BASE32_ALPHABET[(value << (5 - bits)) & 31];
+  }
+
+  while (output.length % 8 !== 0) {
+    output += "=";
   }
 
   return output;
 }
 
-/**
- * Decodes a Base32 string into a Buffer.
- * @param input - The Base32 encoded string (case-insensitive, padding optional)
- */
-export function base32Decode(input: string): Buffer {
-  const cleanInput = input.toUpperCase().replace(/=+$/, '');
-
+function base32Decode(input: string): Buffer | undefined {
+  const cleaned = input.toUpperCase().replace(/=+$/, "");
   let bits = 0;
   let value = 0;
   const bytes: number[] = [];
 
-  for (let i = 0; i < cleanInput.length; i++) {
-    const char = cleanInput[i];
-    const val = CHAR_MAP[char];
-
-    if (val === undefined) {
-      throw new Error(`Invalid Base32 character "${char}" at position ${i}`);
+  for (const char of cleaned) {
+    const index = BASE32_ALPHABET.indexOf(char);
+    if (index === -1) {
+      return undefined;
     }
-
-    value = (value << 5) | val;
+    value = (value << 5) | index;
     bits += 5;
-
     if (bits >= 8) {
       bytes.push((value >>> (bits - 8)) & 255);
       bits -= 8;
@@ -66,18 +53,103 @@ export function base32Decode(input: string): Buffer {
   return Buffer.from(bytes);
 }
 
+function counterToBuffer(counter: number): Buffer {
+  const buffer = Buffer.alloc(8);
+  let remaining = BigInt(Math.floor(counter));
+  // let remaining = 58539840n = 0x037D3F40
+  for (let i = 7; i >= 0; i--) {
+    buffer[i] = Number(remaining & 0xffn);
+    remaining >>= 8n;
+
+    // 	i=7	0x037D3F40	0x40 = 64	buffer[7] = 64	0x00037D3F = 228671
+    // 	i=6	0x00037D3F	0x3F = 63	buffer[6] = 63	0x0000037D = 893
+    // 	i=5	0x0000037D	0x7D = 125	buffer[5] = 125	0x00000003 = 3
+    // 	i=4	0x00000003	0x03 = 3	buffer[4] = 3	0x00000000 = 0
+    // 	i=3	0x00000000	0x00 = 0	buffer[3] = 0	still 0
+    // 	i=2	0	0	buffer[2] = 0	0
+    // 	i=1	0	0	buffer[1] = 0	0
+    // 	i=0	0	0	buffer[0] = 0	0
+  }
+  return buffer;
+}
+
+function hotp(keyBuffer: Buffer, counter: number): string {
+  const counterBuffer = counterToBuffer(counter);
+  // "sha1" only output 20bytes buffer
+  const hmac = createHmac(ALGORITHM, keyBuffer).update(counterBuffer).digest();
+
+  const offset = hmac[hmac.length - 1] & 0x0f;
+  // sample last byte of buffer is 1001_0110 & 0000_1111(0x0f) = 0000_0110 = 6
+  const code =
+    (((hmac[offset] & 0x7f) << 24) |
+      ((hmac[offset + 1] & 0xff) << 16) |
+      ((hmac[offset + 2] & 0xff) << 8) |
+      (hmac[offset + 3] & 0xff)) %
+    10 ** DIGITS;
+
+  //  0x4c & 0x7f) << 24  =  0x4c000000  =  1,275,068,416
+  // (0x93 & 0xff) << 16  =  0x00930000  =      9,633,792
+  // (0x8b & 0xff) << 8   =  0x00008b00  =         35,584
+  // (0x2e & 0xff)        =  0x0000002e  =             46
+  //                                         ─────────────
+  //                      =  0x4c938b2e  =  1,284,737,838
+
+  return String(code).padStart(DIGITS, "0");
+}
+
+function currentStep(atTime: Date): number {
+  return Math.floor(atTime.getTime() / 1000 / PERIOD_SECONDS);
+}
+
 export function generateTotpSecret(): string {
-  return base32Encode(randomBytes(SECRET_BYTES));
+  return base32Encode(randomBytes(20));
 }
 
-export function generateTotpCode(secret: string, atTime?:Date):string{
-    const ke
+export function generateTotpCode(
+  secret: string,
+  atTime: Date = new Date(),
+): string {
+  const keyBuffer = base32Decode(secret);
+  if (!keyBuffer) {
+    throw new Error("invalid base32 secret");
+  }
+  return hotp(keyBuffer, currentStep(atTime));
 }
 
-export function verifyTotpCode(secret:string,code:string,atTime?:Date): number|undefined{
+export function verifyTotpCode(
+  secret: string,
+  code: string,
+  atTime: Date = new Date(),
+): number | undefined {
+  const keyBuffer = base32Decode(secret);
+  if (!keyBuffer) {
+    return undefined;
+  }
 
+  const step = currentStep(atTime);
+
+  for (let window = -WINDOW; window <= WINDOW; window++) {
+    const candidateStep = step + window;
+    if (hotp(keyBuffer, candidateStep) === code) {
+      return candidateStep;
+    }
+  }
+
+  return undefined;
 }
 
-export function buildTotpUri(issuer: string, accountLabel: string,secret:string):string{
-
+export function buildTotpUri(
+  issuer: string,
+  accountLabel: string,
+  secret: string,
+): string {
+  const label = encodeURIComponent(`${issuer}:${accountLabel}`);
+  const params = new URLSearchParams({
+    secret,
+    issuer,
+    algorithm: ALGORITHM,
+    digits: String(DIGITS),
+    period: String(PERIOD_SECONDS),
+  });
+  return `otpauth://totp/${label}?${params.toString()}`;
 }
