@@ -12,6 +12,7 @@ export interface SealedSecret {
   authenticationTag: Buffer;
   ciphertext: Buffer;
 }
+
 const ALGORITHM = "aes-256-gcm";
 const INITIALISATION_VECTOR_BYTE_LENGTH = 12;
 const CURRENT_KEY_VERSION = 1;

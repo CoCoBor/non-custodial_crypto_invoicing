@@ -9,7 +9,7 @@ export function generateAccountNumber(): string {
 }
 
 export function normaliseAccountNumber(input: string): string | undefined {
-    const cleaned: string = input.replaceAll("-", "").replaceAll(" ", "")
+    const cleaned: string = input.replaceAll("-", "").replace(/\s/g, "")
     if(!cleaned.match(/^[0-9]{16}$/)){
         return undefined
     }

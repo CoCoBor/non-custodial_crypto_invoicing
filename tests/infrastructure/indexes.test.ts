@@ -19,10 +19,13 @@ const insertedLookups: string[] = [];
 
 function buildAccount(lookup: string): Omit<AccountDocument, "_id"> {
   return {
+    publicId: `acc_TEST${lookup.slice(-8).toUpperCase()}`,
     accountNumberLookup: lookup,
     accountNumberCipher: sealSecret("account-number", "1234567890123456"),
     recoveryPublicKey: `recovery-${lookup}`,
     totpSecretCipher: null,
+    totpPendingCipher: null,
+    lastUsedTotpStep: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

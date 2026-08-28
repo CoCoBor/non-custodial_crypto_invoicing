@@ -1,13 +1,15 @@
 import { Router } from "express";
 import { getDatabase } from "../infrastructure/database/mongodb.js";
 import {
+  completeTotpEnrolment,
+  consumeTotpStep,
   createAccount,
   findAccountById,
   findAccountByNumber,
+  startTotpEnrolment,
 } from "../accounts/account.repository.js";
 import {
   formatAccountNumberForDisplay,
-  hashBearerToken,
   normaliseAccountNumber,
 } from "../security/secret-generator.js";
 import { z } from "zod";
@@ -17,7 +19,16 @@ import {
   deleteSession,
 } from "../sessions/session.repository.js";
 import { env } from "../config/env.js";
-import { requireSession } from "../middleware/require-session.js";
+import {
+  requirePendingTotpSession,
+  requireSession,
+} from "../middleware/require-session.js";
+import { openSecret, sealSecret } from "../security/secret-envelope.js";
+import {
+  buildTotpUri,
+  generateTotpSecret,
+  verifyTotpCode,
+} from "../security/totp.js";
 
 export const authRouter = Router();
 
@@ -143,6 +154,175 @@ authRouter.post("/logout", async (req, res) => {
   res.status(200).json({
     data: {
       loggedOut: true,
+    },
+  });
+});
+
+authRouter.post("/2fa/setup", requireSession, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  const db = getDatabase();
+  const accountId = req.session!.accountId;
+  const account = await findAccountById(db, accountId);
+  if (!account) {
+    return res.status(401).json({
+      error: { code: "UNAUTHENTICATED", message: "authentication required" },
+    });
+  }
+
+  const { totpSecretCipher, publicId } = account;
+
+  if (totpSecretCipher !== null) {
+    return res.status(409).json({
+      error: {
+        code: "CONFLICT",
+        message: "two-factor authentication is already enabled",
+      },
+    });
+  }
+
+  const secret = generateTotpSecret();
+  const sealed = sealSecret("totp-secret", secret);
+  await startTotpEnrolment(db, accountId, sealed);
+  const uri = buildTotpUri("merchant", publicId, secret);
+
+  res.status(200).json({
+    data: {
+      secret,
+      uri,
+    },
+  });
+});
+
+const totpCodeSchema = z.object({
+  code: z.string(),
+});
+
+authRouter.post("/2fa/enable", requireSession, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const parseResult = totpCodeSchema.safeParse(req.body);
+
+  const db = getDatabase();
+  const accountId = req.session!.accountId;
+  const account = await findAccountById(db, accountId);
+
+  if (!parseResult.success) {
+    return res.status(400).json({
+      error: { code: "INVALID_REQUEST", message: "request body is invalid" },
+    });
+  }
+  if (!account) {
+    return res.status(401).json({
+      error: { code: "UNAUTHENTICATED", message: "authentication required" },
+    });
+  }
+
+  const { totpPendingCipher, totpSecretCipher } = account;
+
+  if (!totpPendingCipher) {
+    return res.status(409).json({
+      error: {
+        code: "CONFLICT",
+        message: "no pending two-factor setup",
+      },
+    });
+  }
+
+  if (totpSecretCipher) {
+    return res.status(409).json({
+      error: {
+        code: "CONFLICT",
+        message: "already enable",
+      },
+    });
+  }
+
+  const secret = openSecret("totp-secret", totpPendingCipher);
+
+  const step = verifyTotpCode(secret, parseResult.data.code);
+  if (step === undefined) {
+    return res.status(401).json({
+      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
+    });
+  }
+
+  const consume = await consumeTotpStep(db, accountId, step);
+  if (!consume) {
+    return res.status(401).json({
+      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
+    });
+  }
+
+  await completeTotpEnrolment(db, accountId);
+
+  res.status(200).json({
+    data: {
+      twoFactorEnabled: true,
+    },
+  });
+});
+
+authRouter.post("/2fa/verify", requirePendingTotpSession, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const parseResult = totpCodeSchema.safeParse(req.body);
+
+  const db = getDatabase();
+  const accountId = req.session!.accountId;
+  const account = await findAccountById(db, accountId);
+
+  if (!parseResult.success) {
+    return res.status(400).json({
+      error: { code: "INVALID_REQUEST", message: "request body is invalid" },
+    });
+  }
+  if (!account || !account.totpSecretCipher) {
+    return res.status(401).json({
+      error: { code: "UNAUTHENTICATED", message: "authentication required" },
+    });
+  }
+
+  const { totpSecretCipher } = account;
+
+  const secret = openSecret("totp-secret", totpSecretCipher);
+
+  const step = verifyTotpCode(secret, parseResult.data.code);
+  if (step === undefined) {
+    return res.status(401).json({
+      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
+    });
+  }
+
+  const consume = await consumeTotpStep(db, accountId, step);
+  if (!consume) {
+    return res.status(401).json({
+      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
+    });
+  }
+
+  const oldToken = req.cookies?.session;
+
+  if (oldToken) {
+    await deleteSession(db, oldToken);
+  }
+
+  const { token } = await createSession(db, {
+    accountId,
+    status: "active",
+    ipAddress: req.ip ?? null,
+    userAgent: req.get("user-agent") ?? null,
+  });
+
+  res.cookie("session", token, {
+    httpOnly: true,
+    secure: env.nodeEnvironment === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 12 * 60 * 60 * 1000,
+  });
+
+  res.status(200).json({
+    data: {
+      requiresTwoFactor: false,
     },
   });
 });

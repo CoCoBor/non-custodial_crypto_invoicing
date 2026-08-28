@@ -4,44 +4,62 @@ import {
   findValidSession,
   touchSession,
 } from "../sessions/session.repository.js";
+import { SessionDocument } from "../sessions/session.model.js";
 
-export const requireSession: RequestHandler = async (
+async function resolveSession(
   req: Request,
   res: Response,
-  next: NextFunction,
-) => {
+): Promise<SessionDocument | undefined> {
   const token = req.cookies?.session;
 
   if (!token) {
-    return res.status(401).json({
+    res.status(401).json({
       error: { code: "UNAUTHENTICATED", message: "authentication required" },
     });
+    return undefined;
   }
 
-  const db = getDatabase();
-  const session = await findValidSession(db, token);
+  const database = getDatabase();
+  const session = await findValidSession(database, token);
 
   if (!session) {
-    return res.status(401).json({
+    res.status(401).json({
       error: { code: "UNAUTHENTICATED", message: "authentication required" },
     });
+    return undefined;
   }
 
-  const { status, _id, accountId } = session;
+  return session;
+}
 
-  if (status !== "active") {
-    return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "authentication required" },
-    });
-  }
+function requireStatus(status: "active" | "pending_totp"): RequestHandler {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const session = await resolveSession(req, res);
 
-  const newExpiresAt = await touchSession(db, _id);
+    if (!session) {
+      return;
+    }
 
-  req.session = {
-    sessionId: _id,
-    accountId: accountId,
-    expiresAt: newExpiresAt,
+    const { _id, accountId } = session;
+
+    if (session.status !== status) {
+      return res.status(401).json({
+        error: { code: "UNAUTHENTICATED", message: "authentication required" },
+      });
+    }
+
+    const database = getDatabase();
+    const expiresAt = await touchSession(database, _id);
+
+    req.session = {
+      sessionId: _id,
+      accountId: accountId,
+      expiresAt,
+    };
+
+    next();
   };
+}
 
-  next();
-};
+export const requireSession = requireStatus("active");
+export const requirePendingTotpSession = requireStatus("pending_totp");

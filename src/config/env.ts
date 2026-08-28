@@ -54,13 +54,13 @@ export const env = Object.freeze({
 });
 
 function readRequiredString(name: string, value: string | undefined): string {
-  const normalizeValue = value?.trim();
+  const normaliseValue = value?.trim();
 
-  if (!normalizeValue) {
+  if (!normaliseValue) {
     throw new Error(`${name} is required`);
   }
 
-  return normalizeValue;
+  return normaliseValue;
 }
 
 function readBase64Key(name: string, value: string | undefined): Buffer {

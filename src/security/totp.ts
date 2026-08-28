@@ -1,3 +1,4 @@
+import { ObjectId } from "mongodb";
 import { randomBytes, createHmac } from "node:crypto";
 
 const ALGORITHM = "SHA1"
@@ -6,7 +7,7 @@ const DIGITS = 6;
 const PERIOD_SECONDS = 30;
 const WINDOW = 1;
 
-function base32Encode(buffer: Buffer): string {
+export function base32Encode(buffer: Buffer): string {
   let bits = 0;
   let value = 0;
   let output = "";
@@ -122,6 +123,7 @@ export function verifyTotpCode(
   atTime: Date = new Date(),
 ): number | undefined {
   const keyBuffer = base32Decode(secret);
+  const normaliseCode = code.replace(/\s/g, "")
   if (!keyBuffer) {
     return undefined;
   }
@@ -130,7 +132,7 @@ export function verifyTotpCode(
 
   for (let window = -WINDOW; window <= WINDOW; window++) {
     const candidateStep = step + window;
-    if (hotp(keyBuffer, candidateStep) === code) {
+    if (hotp(keyBuffer, candidateStep) === normaliseCode) {
       return candidateStep;
     }
   }
@@ -140,10 +142,10 @@ export function verifyTotpCode(
 
 export function buildTotpUri(
   issuer: string,
-  accountLabel: string,
+  accountPublicId: string,
   secret: string,
 ): string {
-  const label = encodeURIComponent(`${issuer}:${accountLabel}`);
+  const label = encodeURIComponent(`${issuer}:${accountPublicId}`);
   const params = new URLSearchParams({
     secret,
     issuer,
