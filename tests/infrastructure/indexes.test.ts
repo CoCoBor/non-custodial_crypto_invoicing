@@ -26,6 +26,8 @@ function buildAccount(lookup: string): Omit<AccountDocument, "_id"> {
     totpSecretCipher: null,
     totpPendingCipher: null,
     lastUsedTotpStep: null,
+    bitcoinAccountKey: null,
+    nextBitcoinAddressIndex: 0,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

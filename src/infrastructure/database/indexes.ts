@@ -8,6 +8,7 @@ import { ACCOUNTS_COLLECTION } from "../../accounts/account.model.js";
 import { SESSIONS_COLLECTION } from "../../sessions/session.model.js";
 import { hasMongoErrorCode } from "./mongo-errors.js";
 import { env } from "../../config/env.js";
+import { INVOICES_COLLECTION } from "../../invoices/invoice.model.js";
 
 async function ensureIndex(
   collection: Collection,
@@ -42,6 +43,7 @@ async function ensureIndex(
 export async function ensureIndexes(database: Db): Promise<void> {
   const accounts = database.collection(ACCOUNTS_COLLECTION);
   const sessions = database.collection(SESSIONS_COLLECTION);
+  const invoices = database.collection(INVOICES_COLLECTION);
   await Promise.all([
     ensureIndex(accounts, { accountNumberLookup: 1 }, { unique: true }),
     ensureIndex(accounts, { recoveryPublicKey: 1 }, { unique: true }),
@@ -49,5 +51,8 @@ export async function ensureIndexes(database: Db): Promise<void> {
     ensureIndex(sessions, { expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ensureIndex(sessions, { tokenHash: 1 }, { unique: true }),
     ensureIndex(sessions, { accountId: 1 }, {}),
+    ensureIndex(invoices, { publicId: 1 }, { unique: true }),
+    ensureIndex(invoices, { address: 1 }, {}),
+    ensureIndex(invoices, { status: 1 }, {}),
   ]);
 }

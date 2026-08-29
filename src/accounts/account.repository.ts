@@ -7,6 +7,7 @@ import { AccountDocument, ACCOUNTS_COLLECTION } from "./account.model.js";
 import { hasMongoErrorCode } from "../infrastructure/database/mongo-errors.js";
 import { base32Encode } from "../security/totp.js";
 import { randomBytes } from "crypto";
+import { BitcoinAccountKey } from "../chains/bitcoin/extended-key.js";
 
 export interface CreatedAccount {
   accountId: ObjectId;
@@ -16,10 +17,9 @@ export interface CreatedAccount {
 
 const MAX_ATTEMPTS = 3;
 
-function generatePublicId(): string {
+function generateAccountPublicId(): string {
   return `acc_${base32Encode(randomBytes(10))}`;
 }
-
 
 export async function createAccount(database: Db): Promise<CreatedAccount> {
   const collection = database.collection<AccountDocument>(ACCOUNTS_COLLECTION);
@@ -27,8 +27,8 @@ export async function createAccount(database: Db): Promise<CreatedAccount> {
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const accountId = new ObjectId();
     const accountNumber = generateAccountNumber();
-    const {publicKey, mnemonic} = generateRecoveryCredential();
-    const publicId = generatePublicId()
+    const { publicKey, mnemonic } = generateRecoveryCredential();
+    const publicId = generateAccountPublicId();
     const date = new Date();
 
     const document: AccountDocument = {
@@ -40,6 +40,8 @@ export async function createAccount(database: Db): Promise<CreatedAccount> {
       totpSecretCipher: null,
       totpPendingCipher: null,
       lastUsedTotpStep: null,
+      bitcoinAccountKey: null,
+      nextBitcoinAddressIndex: 0,
       createdAt: date,
       updatedAt: date,
     };
@@ -146,4 +148,38 @@ export async function consumeTotpStep(
   );
 
   return result.modifiedCount === 1;
+}
+
+export async function setBitcoinAccountKey(
+  database: Db,
+  accountId: ObjectId,
+  accountKey: BitcoinAccountKey,
+): Promise<void> {
+  const collection = database.collection<AccountDocument>(ACCOUNTS_COLLECTION);
+  await collection.updateOne(
+    { _id: accountId },
+    { $set: { bitcoinAccountKey: accountKey, updatedAt: new Date() } },
+  );
+  return;
+}
+
+export async function allocateBitcoinAddressIndex(
+  database: Db,
+  accountId: ObjectId,
+): Promise<number | undefined> {
+  const collection = database.collection<AccountDocument>(ACCOUNTS_COLLECTION);
+  const result = await collection.findOneAndUpdate(
+    { _id: accountId, bitcoinAccountKey: { $ne: null } },
+    { $inc: { nextBitcoinAddressIndex: 1 } },
+    {
+      returnDocument: "before",
+      projection: { nextBitcoinAddressIndex: 1 }, //only return this value
+    },
+  );
+
+  if (!result) {
+    return undefined;
+  }
+
+  return result.nextBitcoinAddressIndex;
 }
