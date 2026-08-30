@@ -32,14 +32,10 @@ import {
 
 export const authRouter = Router();
 
-const loginSchema = z.object({
-  accountNumber: z.string(),
-});
-
 authRouter.post("/register", async (_req, res) => {
   const db = getDatabase();
   const { accountNumber, mnemonic } = await createAccount(db);
-
+  
   res.set("Cache-Control", "no-store");
   res.status(201).json({
     data: {
@@ -48,6 +44,10 @@ authRouter.post("/register", async (_req, res) => {
       recoveryPhrase: mnemonic,
     },
   });
+});
+
+const loginSchema = z.object({
+  accountNumber: z.string(),
 });
 
 authRouter.post("/login", async (req, res) => {

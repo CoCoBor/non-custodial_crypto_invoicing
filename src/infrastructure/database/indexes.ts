@@ -54,5 +54,6 @@ export async function ensureIndexes(database: Db): Promise<void> {
     ensureIndex(invoices, { publicId: 1 }, { unique: true }),
     ensureIndex(invoices, { address: 1 }, {}),
     ensureIndex(invoices, { status: 1 }, {}),
+    ensureIndex(invoices, { expiresAt: 1 }, {}),
   ]);
 }

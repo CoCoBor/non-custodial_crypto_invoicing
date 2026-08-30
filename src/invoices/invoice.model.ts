@@ -19,7 +19,7 @@ export interface InvoiceTimestamps {
 
 export interface InvoiceDocument {
   _id: ObjectId;
-  publicId: string;
+  publicId: string; //unique
   accountId: ObjectId;
   status: InvoiceStatus;
   amountSatoshi: number;

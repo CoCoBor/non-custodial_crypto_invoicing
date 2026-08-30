@@ -5,6 +5,7 @@ import {
   connectToMongoDb,
   disconnectFromMongoDB,
 } from "./infrastructure/database/mongodb.js";
+import { startInvoiceWatcher } from "./invoices/invoice-watcher-scheduler.js";
 
 const app = createApp();
 
@@ -22,6 +23,7 @@ async function startServer(): Promise<void> {
       );
     });
     let isShuttingDown = false;
+    const stopWatcher = startInvoiceWatcher(db);
 
     async function shutDown(signal: NodeJS.Signals): Promise<void> {
       if (isShuttingDown) {
@@ -39,6 +41,7 @@ async function startServer(): Promise<void> {
         }
 
         try {
+          stopWatcher();
           await disconnectFromMongoDB();
           console.log("MongoDB disconnected");
         } catch (error) {

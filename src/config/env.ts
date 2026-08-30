@@ -50,7 +50,10 @@ export const env = Object.freeze({
     process.env.ACCOUNT_LOOKUP_HMAC_KEY,
   ),
 
-  nowNodesApiKey: process.env.NOWNODES_API_KEY?.trim() || undefined,
+  nowNodesApiKey: readRequiredString(
+    "NOWNODES_API_KEY",
+    process.env.NOWNODES_API_KEY,
+  ),
 });
 
 function readRequiredString(name: string, value: string | undefined): string {

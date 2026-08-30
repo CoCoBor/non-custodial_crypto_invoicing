@@ -11,7 +11,8 @@
     "test": "node --import tsx --test --test-concurrency=1 \"tests/**/*.test.ts\"",
     "typecheck": "tsc -p tsconfig.test.json",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "watch:once": "tsx src/invoices/run-watcher-once.ts"
   },
   "dependencies": {
     "@noble/ed25519": "^3.1.0",

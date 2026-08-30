@@ -6,9 +6,9 @@ export const ACCOUNTS_COLLECTION = "accounts";
 
 export interface AccountDocument {
   _id: ObjectId;
-  publicId: string
-  accountNumberLookup: string;
-  accountNumberCipher: SealedSecret;
+  publicId: string //unique
+  accountNumberLookup: string; //unique
+  accountNumberCipher: SealedSecret; //unique
   recoveryPublicKey: string;
   totpSecretCipher: SealedSecret | null;
   totpPendingCipher: SealedSecret | null;
