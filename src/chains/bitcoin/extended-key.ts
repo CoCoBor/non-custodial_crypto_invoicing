@@ -60,6 +60,24 @@ export function parseExtendedPublicKey(
   }
 }
 
+export function addressFromPublicKey(
+  publicKey: Uint8Array,
+  scriptType: BitcoinScriptType,
+): string | undefined {
+  try {
+    switch (scriptType) {
+      case "p2pkh":
+        return p2pkh(publicKey).address;
+      case "p2sh-p2wpkh":
+        return p2sh(p2wpkh(publicKey)).address;
+      case "p2wpkh":
+        return p2wpkh(publicKey).address;
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 // (Hierarchical Deterministic) HD wallet derivation
 export function deriveReceiveAddress(
   account: BitcoinAccountKey,
@@ -75,14 +93,9 @@ export function deriveReceiveAddress(
     if (!child.publicKey) {
       return undefined;
     }
-    switch (account.scriptType) {
-      case "p2pkh":
-        return p2pkh(child.publicKey).address;
-      case "p2sh-p2wpkh":
-        return p2sh(p2wpkh(child.publicKey)).address;
-      case "p2wpkh":
-        return p2wpkh(child.publicKey).address;
-    }
+    return addressFromPublicKey(child.publicKey, account.scriptType)
+    
+
   } catch (error) {
     return undefined;
   }

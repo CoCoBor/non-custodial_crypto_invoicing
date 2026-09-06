@@ -93,14 +93,18 @@ before(async () => {
   await ensureIndexes(database);
 });
 
+// runWatcherPass sweeps the whole collection, so these tests have to own the
+// whole collection. Scoping cleanup to one accountId lets a stray invoice from
+// another file — or from a run that crashed before its cleanup — join the pass
+// and skew the counts.
 beforeEach(async () => {
-  await database.collection(INVOICES_COLLECTION).deleteMany({ accountId });
+  await database.collection(INVOICES_COLLECTION).deleteMany({});
   activityByAddress = new Map();
   addressesFetched = [];
 });
 
 after(async () => {
-  await database.collection(INVOICES_COLLECTION).deleteMany({ accountId });
+  await database.collection(INVOICES_COLLECTION).deleteMany({});
   await disconnectFromMongoDB();
 });
 

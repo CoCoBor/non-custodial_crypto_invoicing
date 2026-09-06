@@ -1,22 +1,21 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getDatabase } from "../infrastructure/database/mongodb.js";
+
+import { setBitcoinAccountKey } from "../../accounts/account.repository.js";
 import {
   deriveReceiveAddress,
   parseExtendedPublicKey,
-} from "../chains/bitcoin/extended-key.js";
-import {
-  setBitcoinAccountKey,
-} from "../accounts/account.repository.js";
-import { requireSession } from "../middleware/require-session.js";
+} from "../../chains/bitcoin/extended-key.js";
+import { getDatabase } from "../../infrastructure/database/mongodb.js";
+import { requireSession } from "../../middleware/require-session.js";
 
-export const settlementRouter = Router();
+export const bitcoinSettlementRouter = Router();
 
 const extendedPublicKeySchema = z.object({
   extendedPublicKey: z.string(),
 });
 
-settlementRouter.put("/bitcoin", requireSession, async (req, res) => {
+bitcoinSettlementRouter.put("/", requireSession, async (req, res) => {
   res.set("Cache-Control", "no-store");
   const parseResult = extendedPublicKeySchema.safeParse(req.body);
 

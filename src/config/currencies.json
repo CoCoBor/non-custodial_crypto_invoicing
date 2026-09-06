@@ -1,0 +1,7 @@
+{
+  "usd": {
+    "name": "United States Dollar",
+    "sign": "$",
+    "decimals": 2
+  }
+}

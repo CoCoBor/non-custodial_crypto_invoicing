@@ -1,14 +1,17 @@
 import { Router } from "express";
 import { z } from "zod";
-import { requireSession } from "../middleware/require-session.js";
-import { getDatabase } from "../infrastructure/database/mongodb.js";
-import { findAccountById } from "../accounts/account.repository.js";
+
+import { findAccountById } from "../../accounts/account.repository.js";
+import { getDatabase } from "../../infrastructure/database/mongodb.js";
 import {
   createInvoice,
   CreateInvoiceInput,
-} from "../invoices/invoice.repository.js";
+} from "../../invoices/invoice.repository.js";
+import { requireSession } from "../../middleware/require-session.js";
+import { buildPaymentUri } from "./payment-uri.js";
+import { findNetwork } from "../../config/cryptos.js";
 
-export const invoiceRouter = Router();
+export const createInvoiceRouter = Router();
 
 const invoiceSchema = z.object({
   amountSatoshi: z.number(),
@@ -16,22 +19,12 @@ const invoiceSchema = z.object({
   underpaidTolerancePercent: z.number().optional(),
 });
 
-const DUST_LIMIT_SATOSHI = 546;
 const DEFAULT_LIFETIME_MINUTES = 30;
 const DEFAULT_UNDERPAID_TOLERANCE_PERCENT = 0;
-const SATOSHIS_PER_COIN = 100_000_000
-const MAX_MONEY = 21_000_000 * SATOSHIS_PER_COIN
+const SATOSHIS_PER_COIN = 100_000_000;
+const MAX_MONEY = 21_000_000 * SATOSHIS_PER_COIN;
 
-function satoshiToBtcString(amountSatoshi: number): string {
-  const padded = String(amountSatoshi).padStart(9, "0");
-  const wholePart = padded.slice(0, -8);
-  const fractionalPart = padded.slice(-8).replace(/0+$/, ""); // "50000000" ->"5"
-  return fractionalPart.length > 0
-    ? `${wholePart}.${fractionalPart}`
-    : wholePart;
-}
-
-invoiceRouter.post("/", requireSession, async (req, res) => {
+createInvoiceRouter.post("/", requireSession, async (req, res) => {
   res.set("Cache-Control", "no-store");
   const parseResult = invoiceSchema.safeParse(req.body);
 
@@ -50,7 +43,14 @@ invoiceRouter.post("/", requireSession, async (req, res) => {
     parseResult.data.underpaidTolerancePercent ??
     DEFAULT_UNDERPAID_TOLERANCE_PERCENT;
 
-  if (!Number.isInteger(amountSatoshi) || amountSatoshi < DUST_LIMIT_SATOSHI || amountSatoshi> MAX_MONEY) {
+    const bitcoin = findNetwork("btc", "bitcoin")
+    const minimumAmount = bitcoin?.dustThreshold??546
+
+  if (
+    !Number.isInteger(amountSatoshi) ||
+    amountSatoshi < minimumAmount ||
+    amountSatoshi > MAX_MONEY
+  ) {
     return res.status(400).json({
       error: {
         code: "INVALID_AMOUNT",
@@ -59,7 +59,11 @@ invoiceRouter.post("/", requireSession, async (req, res) => {
     });
   }
 
-  if (!Number.isInteger(lifetimeMinutes) || lifetimeMinutes < 1 || lifetimeMinutes > 60) {
+  if (
+    !Number.isInteger(lifetimeMinutes) ||
+    lifetimeMinutes < 1 ||
+    lifetimeMinutes > 60
+  ) {
     return res.status(400).json({
       error: {
         code: "INVALID_LIFETIME",
@@ -129,9 +133,9 @@ invoiceRouter.post("/", requireSession, async (req, res) => {
       status,
       amountSatoshi: invoice.amountSatoshi,
       address,
-      paymentUri: `bitcoin:${address}?amount=${satoshiToBtcString(invoice.amountSatoshi)}`,
+      paymentUri: buildPaymentUri(address, invoice.amountSatoshi),
       expiresAt,
-      underpaidTolerancePercent: invoice.underpaidTolerancePercent
+      underpaidTolerancePercent: invoice.underpaidTolerancePercent,
     },
   });
 });

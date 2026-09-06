@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { isMongoDBReady } from "../infrastructure/database/mongodb.js";
+
+import { isMongoDBReady } from "../../infrastructure/database/mongodb.js";
 
 export const healthRouter = Router();
 

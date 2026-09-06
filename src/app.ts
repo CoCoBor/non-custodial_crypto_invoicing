@@ -1,24 +1,24 @@
 import express from "express";
+import cookieParser from "cookie-parser";
 
 import { errorHandler } from "./middleware/error-handler.js";
 import { notFoundHandler } from "./middleware/not-found.js";
-import { healthRouter } from "./routes/health.route.js";
-import { authRouter } from "./routes/auth.route.js";
-import cookieParser from "cookie-parser";
-import { settlementRouter } from "./routes/settlement.route.js";
-import { invoiceRouter } from "./routes/invoice.route.js";
+import { authRouter } from "./routes/auth/index.js";
+import { healthRouter } from "./routes/health/index.js";
+import { invoiceRouter } from "./routes/invoice/index.js";
+import { settlementRouter } from "./routes/settlement/index.js";
 
 export function createApp() {
   const app = express();
 
   app.disable("x-powered-by");
   app.use(express.json({ limit: "100kb" }));
+  app.use(cookieParser());
 
-  app.use(cookieParser())
   app.use("/health", healthRouter);
-  app.use("/auth", authRouter)
-  app.use("/settlement", settlementRouter)
-  app.use("/invoices", invoiceRouter)
+  app.use("/auth", authRouter);
+  app.use("/settlement", settlementRouter);
+  app.use("/invoices", invoiceRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

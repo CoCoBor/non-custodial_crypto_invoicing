@@ -1,0 +1,120 @@
+{
+  "btc": {
+    "name": "Bitcoin",
+    "networks": {
+      "bitcoin": {
+        "name": "Bitcoin",
+        "decimals": 8,
+        "dustThreshold": 546,
+        "explorerTransactionUrl": "https://mempool.space/tx/{txId}"
+      }
+    }
+  },
+  "ltc": {
+    "name": "Litecoin",
+    "networks": {
+      "litecoin": {
+        "name": "Litecoin",
+        "decimals": 8,
+        "explorerTransactionUrl": "https://blockchair.com/litecoin/transaction/{txId}"
+      }
+    }
+  },
+  "eth": {
+    "name": "Ethereum",
+    "networks": {
+      "ethereum": {
+        "name": "Ethereum",
+        "decimals": 18,
+        "explorerTransactionUrl": "https://etherscan.io/tx/{txId}"
+      }
+    }
+  },
+  "sol": {
+    "name": "Solana",
+    "networks": {
+      "solana": {
+        "name": "Solana",
+        "decimals": 9,
+        "explorerTransactionUrl": "https://solscan.io/tx/{txId}"
+      }
+    }
+  },
+  "xmr": {
+    "name": "Monero",
+    "networks": {
+      "monero": {
+        "name": "Monero",
+        "decimals": 12,
+        "explorerTransactionUrl": "https://monero.com/tx/{txId}"
+      }
+    }
+  },
+  "ton": {
+    "name": "Toncoin",
+    "networks": {
+      "ton": {
+        "name": "TON",
+        "decimals": 9,
+        "explorerTransactionUrl": "https://tonscan.org/tx/{txId}"
+      }
+    }
+  },
+  "usdt": {
+    "name": "Tether USD",
+    "networks": {
+      "ethereum": {
+        "name": "Ethereum",
+        "decimals": 6,
+        "contractAddress": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        "explorerTransactionUrl": "https://etherscan.io/tx/{txId}"
+      },
+      "bsc": {
+        "name": "BNB Smart Chain",
+        "decimals": 18,
+        "contractAddress": "0x55d398326f99059fF775485246999027B3197955",
+        "explorerTransactionUrl": "https://bscscan.com/tx/{txId}"
+      },
+      "solana": {
+        "name": "Solana",
+        "decimals": 6,
+        "contractAddress": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        "explorerTransactionUrl": "https://solscan.io/tx/{txId}"
+      }
+    }
+  },
+  "usdc": {
+    "name": "USD Coin",
+    "networks": {
+      "ethereum": {
+        "name": "Ethereum",
+        "decimals": 6,
+        "contractAddress": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "explorerTransactionUrl": "https://etherscan.io/tx/{txId}"
+      },
+      "bsc": {
+        "name": "BNB Smart Chain",
+        "decimals": 18,
+        "contractAddress": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+        "explorerTransactionUrl": "https://bscscan.com/tx/{txId}"
+      },
+      "solana": {
+        "name": "Solana",
+        "decimals": 6,
+        "contractAddress": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "explorerTransactionUrl": "https://solscan.io/tx/{txId}"
+      }
+    }
+  },
+  "dai": {
+    "name": "Dai Stablecoin",
+    "networks": {
+      "ethereum": {
+        "name": "Ethereum",
+        "decimals": 18,
+        "contractAddress": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        "explorerTransactionUrl": "https://etherscan.io/tx/{txId}"
+      }
+    }
+  }
+}
