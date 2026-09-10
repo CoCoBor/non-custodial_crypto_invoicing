@@ -53,8 +53,8 @@ describe("createAccount", () => {
     assert.match((await create()).accountNumber, /^[0-9]{16}$/);
   });
 
-  it("returns a 24 word recovery mnemonic", async () => {
-    assert.equal((await create()).mnemonic.split(" ").length, 24);
+  it("returns a 12 word recovery mnemonic", async () => {
+    assert.equal((await create()).mnemonic.split(" ").length, 12);
   });
 
   it("creates a different account every time", async () => {

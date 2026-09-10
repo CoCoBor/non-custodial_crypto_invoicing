@@ -1,8 +1,8 @@
 import { Router } from "express";
 
 import { getDatabase } from "../../infrastructure/database/mongodb.js";
-import { findInvoiceByPublicId } from "../../invoices/invoice-watcher-scheduler.js";
 import { buildPaymentUri } from "./payment-uri.js";
+import { findInvoiceByPublicId } from "../../invoices/invoice.repository.js";
 
 export const invoiceStatusRouter = Router();
 

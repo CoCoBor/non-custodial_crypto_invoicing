@@ -1,25 +1,6 @@
-import { Db, MongoClient, ServerApiVersion } from "mongodb";
+import { type Db,ServerApiVersion } from "mongodb";
 import { env } from "../../config/env.js";
-
-const mongoClient = new MongoClient(env.mongodbUri, {
-  appName: "non-custodial-crypto-invoicing-api",
-
-  maxPoolSize: 10,
-  minPoolSize: 0,
-  maxIdleTimeMS: 60_000,
-  // mongodb can only store binary, when we store buffer it will auto convert to binary
-  // this like to makesure when we read data it will convert to buffer instead of binary
-  promoteBuffers: true,
-
-  serverSelectionTimeoutMS: 5_000,
-  waitQueueTimeoutMS: 5_000,
-
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
-});
+import mongoose from "mongoose";
 
 let database: Db | undefined;
 
@@ -29,17 +10,39 @@ export async function connectToMongoDb(): Promise<Db> {
   }
 
   try {
-    await mongoClient.connect();
+    await mongoose.connect(env.mongodbUri, {
+      dbName: env.mongodbDatabase,
+      appName: "non-custodial-crypto-invoicing-api",
 
-    const connectDatabase = mongoClient.db(env.mongodbDatabase);
+      maxPoolSize: 10,
+      minPoolSize: 0,
+      maxIdleTimeMS: 60_000,
+      serverSelectionTimeoutMS: 5_000,
+      waitQueueTimeoutMS: 5_000,
+      promoteBuffers: true,
 
-    await connectDatabase.command({ ping: 1 });
+      serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+      },
 
-    database = connectDatabase;
+      autoIndex: false,
+      autoCreate: false,
+    });
 
+    const connectedDatabase = mongoose.connection.db;
+
+    if (!connectedDatabase) {
+      throw new Error("MongoDB connection is unavailable");
+    }
+
+    await connectedDatabase.command({ ping: 1 });
+
+    database = connectedDatabase;
     return database;
   } catch (error) {
-    await mongoClient.close();
+    await mongoose.disconnect();
     throw error;
   }
 }
@@ -70,5 +73,5 @@ export async function isMongoDBReady(): Promise<boolean> {
 
 export async function disconnectFromMongoDB(): Promise<void> {
   database = undefined;
-  await mongoClient.close();
+  await mongoose.disconnect();
 }

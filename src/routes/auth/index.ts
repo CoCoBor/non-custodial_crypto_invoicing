@@ -9,6 +9,7 @@ import { twoFactorRouter } from "./2fa.js";
 export const authRouter = Router();
 
 authRouter.use("/register", registerRouter);
+authRouter.use("/create", registerRouter);
 authRouter.use("/login", loginRouter);
 authRouter.use("/logout", logoutRouter);
 authRouter.use("/session", sessionRouter);

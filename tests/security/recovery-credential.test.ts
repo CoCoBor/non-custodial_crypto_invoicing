@@ -22,8 +22,10 @@ function signAsClient(mnemonic: string, challenge: Buffer): Buffer {
 }
 
 describe("generateRecoveryCredential", () => {
-  it("produces a 24 word mnemonic", () => {
-    assert.equal(generateRecoveryCredential().mnemonic.split(" ").length, 24);
+  it("produces a 12 word mnemonic", () => {
+    // 128 bits of entropy. Short enough that a merchant will actually write it
+    // down, which is the failure mode that loses accounts.
+    assert.equal(generateRecoveryCredential().mnemonic.split(" ").length, 12);
   });
 
   it("produces a different mnemonic every time", () => {
@@ -63,6 +65,26 @@ describe("derivePublicKeyFromMnemonic", () => {
     assert.notEqual(
       derivePublicKeyFromMnemonic(generateRecoveryCredential().mnemonic),
       derivePublicKeyFromMnemonic(generateRecoveryCredential().mnemonic),
+    );
+  });
+
+  // Accounts created before the switch to 128 bits still hold a 24 word
+  // phrase, and their public key has to keep deriving the same way.
+  it("still derives from a valid 24 word mnemonic", () => {
+    const legacy = `${new Array(23).fill("abandon").join(" ")} art`;
+
+    assert.equal(
+      derivePublicKeyFromMnemonic(legacy),
+      "HeNS5EzTM2clk_IzSnMOGAqvKQ3omqFtSA3llONOKWE",
+    );
+  });
+
+  it("derives a stable public key from a known 12 word vector", () => {
+    const known = `${new Array(11).fill("abandon").join(" ")} about`;
+
+    assert.equal(
+      derivePublicKeyFromMnemonic(known),
+      "xXheGGW3CJOK_4Fh1XMAZJZmOxqhCDTjltxWaGmixmo",
     );
   });
 

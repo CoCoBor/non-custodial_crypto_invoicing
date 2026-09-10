@@ -6,8 +6,6 @@ import { after, before, describe, it } from "node:test";
 
 import type { Db, ObjectId } from "mongodb";
 
-import { ACCOUNTS_COLLECTION } from "../../src/accounts/account.model.js";
-import { createAccount } from "../../src/accounts/account.repository.js";
 import { createApp } from "../../src/app.js";
 import {
   connectToMongoDb,
@@ -20,6 +18,11 @@ import {
   type SessionDocument,
 } from "../../src/sessions/session.model.js";
 import { createSession } from "../../src/sessions/session.repository.js";
+import {
+  createTestMerchant,
+  deleteTestMerchants,
+  type TestMerchant,
+} from "../helpers/merchant.js";
 
 const COOKIE_NAME = "session";
 
@@ -29,11 +32,15 @@ let baseUrl: string;
 
 const createdAccountIds: ObjectId[] = [];
 
-async function newAccountId(): Promise<ObjectId> {
-  const account = await createAccount(database);
-  createdAccountIds.push(account.accountId);
+async function newMerchant(): Promise<TestMerchant> {
+  const merchant = await createTestMerchant();
+  createdAccountIds.push(merchant.accountId);
 
-  return account.accountId;
+  return merchant;
+}
+
+async function newAccountId(): Promise<ObjectId> {
+  return (await newMerchant()).accountId;
 }
 
 async function newToken(status: "active" | "pending_totp" = "active") {
@@ -87,12 +94,7 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdAccountIds.length > 0) {
-    await sessions().deleteMany({ accountId: { $in: createdAccountIds } });
-    await database
-      .collection(ACCOUNTS_COLLECTION)
-      .deleteMany({ _id: { $in: createdAccountIds } });
-  }
+  await deleteTestMerchants(database, createdAccountIds);
 
   server.close();
   await once(server, "close");
@@ -168,6 +170,51 @@ describe("GET /auth/session with an active session", () => {
       !Number.isNaN(Date.parse(String(body.data.memberSince))),
       "memberSince is not a date",
     );
+  });
+
+  it("serialises the expiry as an ISO string in the future", async () => {
+    const { token } = await newToken();
+    const { body } = await get("/auth/session", token);
+
+    // Guards against handing back `Date.toISOString` rather than calling it:
+    // JSON.stringify drops a function silently, so the field would simply
+    // vanish from the payload with nothing thrown anywhere.
+    const raw = body.data?.sessionExpiresAt;
+    assert.equal(typeof raw, "string", "sessionExpiresAt must be serialised");
+    assert.match(String(raw), /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/);
+    assert.ok(
+      Date.parse(String(raw)) > Date.now(),
+      "a session that reports an expiry in the past is already useless",
+    );
+  });
+
+  it("returns only the fields the client needs", async () => {
+    const { token } = await newToken();
+    const { body } = await get("/auth/session", token);
+
+    assert.deepEqual(Object.keys(body.data ?? {}).sort(), [
+      "memberSince",
+      "sessionExpiresAt",
+      "twoFactorEnabled",
+      "userId",
+    ]);
+  });
+
+  it("identifies the merchant by its public uuid, not its _id", async () => {
+    const merchant = await newMerchant();
+    const { token } = await createSession(database, {
+      accountId: merchant.accountId,
+      status: "active",
+      ipAddress: null,
+      userAgent: null,
+    });
+
+    const { body } = await get("/auth/session", token);
+
+    assert.equal(body.data?.userId, merchant.userId);
+    // An ObjectId carries its creation time, so it must not be the handle the
+    // client sees.
+    assert.notEqual(body.data?.userId, merchant.accountId.toString());
   });
 
   it("never exposes the account number, its hash, or internal ids", async () => {

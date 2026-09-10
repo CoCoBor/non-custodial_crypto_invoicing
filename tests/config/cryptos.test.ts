@@ -5,6 +5,7 @@ import {
   cryptos,
   explorerTransactionUrl,
   findNetwork,
+  isPayable,
   parseCryptoConfig,
 } from "../../src/config/cryptos.js";
 import {
@@ -22,10 +23,13 @@ function validConfig(): Record<string, unknown> {
   return {
     btc: {
       name: "Bitcoin",
+      enabled: true,
       networks: {
         bitcoin: {
           name: "Bitcoin",
+          enabled: true,
           decimals: 8,
+          requiredConfirmations: 1,
           dustThreshold: 546,
           explorerTransactionUrl: "https://mempool.space/tx/{txId}",
         },
@@ -74,6 +78,12 @@ describe("parseCryptoConfig", () => {
     );
   });
 
+  it("requires at least one confirmation, because zero would settle an unconfirmed payment", () => {
+    assert.throws(() => parseCryptoConfig(withNetwork({ requiredConfirmations: 0 })));
+    assert.throws(() => parseCryptoConfig(withNetwork({ requiredConfirmations: -3 })));
+    assert.throws(() => parseCryptoConfig(withNetwork({ requiredConfirmations: 1.5 })));
+  });
+
   it("rejects impossible decimals", () => {
     assert.throws(() => parseCryptoConfig(withNetwork({ decimals: -1 })));
     assert.throws(() => parseCryptoConfig(withNetwork({ decimals: 1.5 })));
@@ -92,10 +102,13 @@ describe("parseCryptoConfig", () => {
     const parsed = parseCryptoConfig({
       eth: {
         name: "Ethereum",
+        enabled: true,
         networks: {
           ethereum: {
             name: "Ethereum",
+            enabled: true,
             decimals: 18,
+            requiredConfirmations: 10,
             explorerTransactionUrl: "https://etherscan.io/tx/{txId}",
           },
         },
@@ -129,6 +142,8 @@ describe("the shipped cryptos.json", () => {
 
     assert.equal(bitcoin.decimals, 8);
     assert.equal(bitcoin.dustThreshold, 546);
+    assert.equal(bitcoin.requiredConfirmations, 1);
+    assert.equal(bitcoin.enabled, true);
   });
 
   // The reason the table nests networks under an asset rather than using one
@@ -139,6 +154,20 @@ describe("the shipped cryptos.json", () => {
     assert.equal(findNetwork("usdt", "ethereum")?.decimals, 6);
     assert.equal(findNetwork("usdt", "bsc")?.decimals, 18);
     assert.equal(findNetwork("usdt", "solana")?.decimals, 6);
+  });
+
+  it("carries the confirmation depth each chain needs, which differs widely", () => {
+    // From v2's config.yml `confs` — the values its poller actually used.
+    // Its cryptos.json claims 1 for every asset, which contradicts them.
+    assert.equal(findNetwork("ltc", "litecoin")?.requiredConfirmations, 3);
+    assert.equal(findNetwork("eth", "ethereum")?.requiredConfirmations, 10);
+    assert.equal(findNetwork("xmr", "monero")?.requiredConfirmations, 10);
+    assert.equal(findNetwork("usdt", "solana")?.requiredConfirmations, 1);
+  });
+
+  it("marks only what is implemented as payable", () => {
+    assert.equal(cryptos.btc?.enabled, true);
+    assert.equal(cryptos.usdt?.enabled, false, "usdt is described, not built");
   });
 
   it("carries the token contract address per network", () => {
@@ -180,6 +209,41 @@ const INHERITED_KEYS = [
   "hasOwnProperty",
   "valueOf",
 ];
+
+describe("isPayable", () => {
+  // Two switches answering different questions: "we no longer support this
+  // asset" and "this one chain is degraded or not built yet".
+  it("is true only where an implementation actually exists", () => {
+    assert.equal(isPayable("btc", "bitcoin"), true);
+  });
+
+  it("is false for an asset described in the table but not implemented", () => {
+    // The table documents 13 (asset, network) pairs; one of them is built.
+    // Without this, a /coins endpoint would advertise assets that cannot pay.
+    assert.equal(isPayable("usdt", "ethereum"), false);
+    assert.equal(isPayable("eth", "ethereum"), false);
+    assert.equal(isPayable("xmr", "monero"), false);
+  });
+
+  it("is false for anything unknown, and never throws", () => {
+    assert.equal(isPayable("doge", "dogecoin"), false);
+    assert.equal(isPayable("btc", "lightning"), false);
+    for (const key of INHERITED_KEYS) {
+      assert.equal(isPayable(key, "bitcoin"), false);
+      assert.equal(isPayable("btc", key), false);
+    }
+  });
+
+  it("is false when either switch is off", () => {
+    const assetOff = parseCryptoConfig(
+      JSON.parse(JSON.stringify(validConfig())) as Record<string, unknown>,
+    );
+    assert.equal(assetOff.btc?.enabled, true);
+
+    const networkOff = parseCryptoConfig(withNetwork({ enabled: false }));
+    assert.equal(networkOff.btc?.networks.bitcoin?.enabled, false);
+  });
+});
 
 describe("findNetwork", () => {
   it("returns undefined for an unknown asset or network instead of throwing", () => {

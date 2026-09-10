@@ -4,7 +4,8 @@ import { env } from "../config/env.js";
 export type SecretPurpose =
   | "account-number"
   | "totp-secret"
-  | "monero-view-key";
+  | "monero-view-key"
+  | "bitcoin-deposit-key";
 
 export interface SealedSecret {
   keyVersion: number;

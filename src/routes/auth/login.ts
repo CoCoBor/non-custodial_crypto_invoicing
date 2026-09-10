@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 
 import { findAccountByNumber } from "../../accounts/account.repository.js";
+import { findUserByNumber } from "../../accounts/user.repository.js";
 import { env } from "../../config/env.js";
 import { getDatabase } from "../../infrastructure/database/mongodb.js";
 import { normaliseAccountNumber } from "../../security/secret-generator.js";
@@ -37,9 +38,10 @@ loginRouter.post("/", async (req, res) => {
 
   const db = getDatabase();
 
-  const accountData = await findAccountByNumber(db, accountNumber);
+  const user = await findUserByNumber(accountNumber);
+  const accountData = user ? null : await findAccountByNumber(db, accountNumber);
 
-  if (!accountData) {
+  if (!user && !accountData) {
     return res.status(401).json({
       error: {
         code: "INVALID_CREDENTIALS",
@@ -48,9 +50,8 @@ loginRouter.post("/", async (req, res) => {
     });
   }
 
-  const { _id, totpSecretCipher } = accountData;
-
-  const hasTotpEnable = totpSecretCipher !== null;
+  const _id = user ? user._id : accountData!._id;
+  const hasTotpEnable = user ? user.totp_enabled : accountData!.totpSecretCipher !== null;
   const status = hasTotpEnable ? "pending_totp" : "active";
   const requiresTwoFactor = hasTotpEnable;
 

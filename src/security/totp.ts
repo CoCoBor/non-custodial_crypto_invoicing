@@ -1,4 +1,3 @@
-import { ObjectId } from "mongodb";
 import { randomBytes, createHmac } from "node:crypto";
 
 const ALGORITHM = "SHA1"

@@ -10,13 +10,13 @@ import * as ed from "@noble/ed25519";
 ed.hashes.sha512 = sha512;
 
 export interface RecoveryCredential {
-  mnemonic: string; //24 word
+  mnemonic: string; //12 word
   publicKey: string;
 }
 
 export function generateRecoveryCredential(): RecoveryCredential {
   // default 128= 12 word so 256=24 word
-  const mnemonic = generateMnemonic(wordlist, 256);
+  const mnemonic = generateMnemonic(wordlist, 128);
   const publicKey = derivePublicKeyFromMnemonic(mnemonic);
 
   if (!publicKey) {

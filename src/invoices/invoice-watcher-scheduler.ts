@@ -23,11 +23,3 @@ export function startInvoiceWatcher(database: Db): () => void {
 
   return () => clearInterval(interval);
 }
-
-export async function findInvoiceByPublicId(
-  database: Db,
-  invoiceId: string,
-): Promise<InvoiceDocument | null> {
-  const collection = database.collection<InvoiceDocument>(INVOICES_COLLECTION);
-  return collection.findOne({ publicId: invoiceId });
-}

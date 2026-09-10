@@ -323,3 +323,86 @@ describe("robustness", () => {
     assert.equal(result.updated, 1, "only the invoice that actually changed counts");
   });
 });
+
+function invoices() {
+  return database.collection<InvoiceDocument>(INVOICES_COLLECTION);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settlement statuses
+//
+// `processing`, `completed` and `failed` are not observations — they record
+// that the platform acted. The watcher must never write over them: a settled
+// invoice pushed back to "confirmed" can be claimed by settlement a second
+// time, and a second claim is a second broadcast of the same coins.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("settled invoices", () => {
+  for (const status of ["processing", "completed", "failed", "cancelled"] as const) {
+    it(`never re-reads a ${status} invoice, so a settled invoice costs no provider call`, async () => {
+      const invoice = await seedInvoice({ status, paidSatoshi: AMOUNT });
+      activityByAddress.set(invoice.address, activity(AMOUNT));
+
+      const result = await runWatcherPass(database, fakeFetch, NOW);
+
+      assert.equal(
+        addressesFetched.includes(invoice.address),
+        false,
+        `a ${status} invoice was fetched from the provider`,
+      );
+      assert.equal(result.checked, 0);
+    });
+
+    it(`leaves a ${status} invoice untouched`, async () => {
+      const invoice = await seedInvoice({ status, paidSatoshi: AMOUNT });
+      activityByAddress.set(invoice.address, activity(AMOUNT));
+
+      await runWatcherPass(database, fakeFetch, NOW);
+
+      const after = await invoices().findOne({ _id: invoice._id });
+      assert.equal(after?.status, status);
+    });
+  }
+
+  // The one that matters. The query runs at the start of the pass; the write
+  // happens after a network call per invoice. Everything that changed in
+  // between is invisible to a filter applied at read time.
+  it("cannot resurrect an invoice that settlement claimed mid-pass", async () => {
+    const invoice = await seedInvoice({ status: "confirming", paidSatoshi: 0 });
+    activityByAddress.set(invoice.address, activity(AMOUNT));
+
+    // Settlement claims the invoice while the watcher is waiting on the
+    // provider — exactly the window between the read and the write.
+    const racingFetch = async (address: string) => {
+      await invoices().updateOne(
+        { _id: invoice._id },
+        { $set: { status: "processing" } },
+      );
+
+      return activityByAddress.get(address);
+    };
+
+    await runWatcherPass(database, racingFetch, NOW);
+
+    const after = await invoices().findOne({ _id: invoice._id });
+    assert.equal(
+      after?.status,
+      "processing",
+      "the watcher overwrote a settled status; settlement can now claim it twice",
+    );
+  });
+
+  it("still lets settlement claim a confirmed invoice, which is its input", async () => {
+    // `confirmed` is terminal for the watcher but not for settlement, so it
+    // must not be lumped in with the settled statuses.
+    const invoice = await seedInvoice({ status: "confirmed", paidSatoshi: AMOUNT });
+
+    const claimed = await invoices().findOneAndUpdate(
+      { _id: invoice._id, status: "confirmed" },
+      { $set: { status: "processing" } },
+      { returnDocument: "after" },
+    );
+
+    assert.equal(claimed?.status, "processing");
+  });
+});

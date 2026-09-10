@@ -21,13 +21,16 @@
     "@scure/bip32": "^2.3.0",
     "@scure/bip39": "^2.3.0",
     "@scure/btc-signer": "^2.3.0",
+    "bitcore-lib": "^10.10.7",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "mongodb": "^7.5.0",
+    "mongoose": "^9.9.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/bitcore-lib": "^0.15.6",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",

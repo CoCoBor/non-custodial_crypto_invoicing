@@ -1,28 +1,19 @@
 import { Router } from "express";
+import { findUserById } from "../../accounts/user.repository.js";
 import { z } from "zod";
 
-import {
-  completeTotpEnrolment,
-  consumeTotpStep,
-  findAccountById,
-  startTotpEnrolment,
-} from "../../accounts/account.repository.js";
 import { env } from "../../config/env.js";
 import { getDatabase } from "../../infrastructure/database/mongodb.js";
 import {
   requirePendingTotpSession,
   requireSession,
 } from "../../middleware/require-session.js";
-import { openSecret, sealSecret } from "../../security/secret-envelope.js";
-import {
-  buildTotpUri,
-  generateTotpSecret,
-  verifyTotpCode,
-} from "../../security/totp.js";
+import { buildTotpUri } from "../../security/totp.js";
 import {
   createSession,
   deleteSession,
 } from "../../sessions/session.repository.js";
+import * as UserTotp from "../../accounts/user-totp.repository.js";
 
 export const twoFactorRouter = Router();
 
@@ -30,98 +21,86 @@ const totpCodeSchema = z.object({
   code: z.string(),
 });
 
-twoFactorRouter.post("/setup", requireSession, async (req, res) => {
+twoFactorRouter.use((_req, res, next) => {
   res.set("Cache-Control", "no-store");
+  next();
+});
 
-  const db = getDatabase();
+twoFactorRouter.post("/setup", requireSession, async (req, res) => {
   const accountId = req.session!.accountId;
-  const account = await findAccountById(db, accountId);
-  if (!account) {
+  const user = await findUserById(accountId);
+
+  if (!user) {
     return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "authentication required" },
+      error: {
+        code: "UNAUTHENTICATED",
+        message: "authentication required",
+      },
     });
   }
 
-  const { totpSecretCipher, publicId } = account;
-
-  if (totpSecretCipher !== null) {
+  if (user.totp_enabled) {
     return res.status(409).json({
       error: {
-        code: "CONFLICT",
+        code: "TOTP_ALREADY_ENABLED",
         message: "two-factor authentication is already enabled",
       },
     });
   }
 
-  const secret = generateTotpSecret();
-  const sealed = sealSecret("totp-secret", secret);
-  await startTotpEnrolment(db, accountId, sealed);
-  const uri = buildTotpUri("merchant", publicId, secret);
+  const secret = await UserTotp.prepareUserTotp(accountId);
+  if (secret === undefined) {
+    return res.status(409).json({
+      error: {
+        code: "TOTP_SETUP_UNAVAILABLE",
+        message: "two-factor setup is no longer available",
+      },
+    });
+  }
 
   res.status(200).json({
     data: {
       secret,
-      uri,
+      uri: buildTotpUri("merchant", user.user_id, secret),
     },
   });
 });
 
 twoFactorRouter.post("/enable", requireSession, async (req, res) => {
-  res.set("Cache-Control", "no-store");
-  const parseResult = totpCodeSchema.safeParse(req.body);
+  const parsed = totpCodeSchema.safeParse(req.body);
 
-  const db = getDatabase();
-  const accountId = req.session!.accountId;
-  const account = await findAccountById(db, accountId);
-
-  if (!parseResult.success) {
+  if (!parsed.success) {
     return res.status(400).json({
       error: { code: "INVALID_REQUEST", message: "request body is invalid" },
     });
   }
-  if (!account) {
+  const accountId = req.session!.accountId;
+  const user = await findUserById(accountId);
+  if (!user) {
     return res.status(401).json({
       error: { code: "UNAUTHENTICATED", message: "authentication required" },
     });
   }
 
-  const { totpPendingCipher, totpSecretCipher } = account;
-
-  if (!totpPendingCipher) {
+  if (user.totp_enabled) {
     return res.status(409).json({
       error: {
-        code: "CONFLICT",
-        message: "no pending two-factor setup",
+        code: "TOTP_ALREADY_ENABLED",
+        message: "two-factor authentication is already enabled",
       },
     });
   }
 
-  if (totpSecretCipher) {
+  const enable = await UserTotp.enableUserTotp(accountId, parsed.data.code);
+
+  if (!enable) {
     return res.status(409).json({
       error: {
-        code: "CONFLICT",
-        message: "already enable",
+        code: "TOTP_ENABLE_FAILED",
+        message: "setup is unavailable or the code is not valid",
       },
     });
   }
-
-  const secret = openSecret("totp-secret", totpPendingCipher);
-
-  const step = verifyTotpCode(secret, parseResult.data.code);
-  if (step === undefined) {
-    return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
-    });
-  }
-
-  const consume = await consumeTotpStep(db, accountId, step);
-  if (!consume) {
-    return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
-    });
-  }
-
-  await completeTotpEnrolment(db, accountId);
 
   res.status(200).json({
     data: {
@@ -131,42 +110,30 @@ twoFactorRouter.post("/enable", requireSession, async (req, res) => {
 });
 
 twoFactorRouter.post("/verify", requirePendingTotpSession, async (req, res) => {
-  res.set("Cache-Control", "no-store");
-  const parseResult = totpCodeSchema.safeParse(req.body);
+  const parsed = totpCodeSchema.safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_REQUEST",
+        message: "code must be a six-digit string",
+      },
+    });
+  }
+  const accountId = req.session!.accountId;
+
+  const verified = await UserTotp.verifyUserTotp(accountId, parsed.data.code);
+
+  if (!verified) {
+    return res.status(401).json({
+      error: {
+        code: "INVALID_TOTP",
+        message: "the code is not valid or has already been used",
+      },
+    });
+  }
 
   const db = getDatabase();
-  const accountId = req.session!.accountId;
-  const account = await findAccountById(db, accountId);
-
-  if (!parseResult.success) {
-    return res.status(400).json({
-      error: { code: "INVALID_REQUEST", message: "request body is invalid" },
-    });
-  }
-  if (!account || !account.totpSecretCipher) {
-    return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "authentication required" },
-    });
-  }
-
-  const { totpSecretCipher } = account;
-
-  const secret = openSecret("totp-secret", totpSecretCipher);
-
-  const step = verifyTotpCode(secret, parseResult.data.code);
-  if (step === undefined) {
-    return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
-    });
-  }
-
-  const consume = await consumeTotpStep(db, accountId, step);
-  if (!consume) {
-    return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "the code is not valid" },
-    });
-  }
-
   const oldToken = req.cookies?.session;
 
   if (oldToken) {

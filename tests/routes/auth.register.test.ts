@@ -6,14 +6,14 @@ import { after, before, describe, it } from "node:test";
 
 import type { Db } from "mongodb";
 
-import { ACCOUNTS_COLLECTION } from "../../src/accounts/account.model.js";
+import { USERS_COLLECTION, User } from "../../src/accounts/user.model.js";
 import { createApp } from "../../src/app.js";
 import {
   connectToMongoDb,
   disconnectFromMongoDB,
 } from "../../src/infrastructure/database/mongodb.js";
-import { ensureIndexes } from "../../src/infrastructure/database/indexes.js";
 import { computeBlindIndex } from "../../src/security/blind-index.js";
+import { derivePublicKeyFromMnemonic } from "../../src/security/recovery-credential.js";
 
 let database: Db;
 let server: Server;
@@ -26,6 +26,7 @@ interface RegisterResponse {
     accountNumber: string;
     accountNumberDisplay: string;
     recoveryPhrase: string;
+    userId: string;
   };
 }
 
@@ -48,7 +49,7 @@ async function register(): Promise<{
 
 before(async () => {
   database = await connectToMongoDb();
-  await ensureIndexes(database);
+  await User.createIndexes();
 
   server = createApp().listen(0);
   await once(server, "listening");
@@ -59,8 +60,8 @@ before(async () => {
 after(async () => {
   if (createdLookups.length > 0) {
     await database
-      .collection(ACCOUNTS_COLLECTION)
-      .deleteMany({ accountNumberLookup: { $in: createdLookups } });
+      .collection(USERS_COLLECTION)
+      .deleteMany({ account_hash: { $in: createdLookups } });
   }
 
   server.close();
@@ -91,11 +92,24 @@ describe("POST /auth/register", () => {
     assert.match(data.accountNumberDisplay, /^\d{4}-\d{4}-\d{4}-\d{4}$/);
   });
 
-  it("returns a 24 word recovery phrase", async () => {
-    assert.equal(
-      (await register()).body.data.recoveryPhrase.split(" ").length,
-      24,
+  it("returns a 12 word recovery phrase for the merchant to write down", async () => {
+    const { recoveryPhrase } = (await register()).body.data;
+
+    assert.equal(recoveryPhrase.split(" ").length, 12);
+    // A phrase the server cannot derive a key from is a phrase that can never
+    // recover the account, so it has to be checked here and not only on use.
+    assert.ok(derivePublicKeyFromMnemonic(recoveryPhrase));
+  });
+
+  it("issues a different recovery phrase to every merchant", async () => {
+    assert.notEqual(
+      (await register()).body.data.recoveryPhrase,
+      (await register()).body.data.recoveryPhrase,
     );
+  });
+
+  it("returns a public UUID", async () => {
+    assert.match((await register()).body.data.userId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
 
   it("tells caches and proxies never to store the response", async () => {
@@ -111,8 +125,8 @@ describe("POST /auth/register", () => {
   it("actually persists an account that can be found by blind index", async () => {
     const { body } = await register();
 
-    const found = await database.collection(ACCOUNTS_COLLECTION).findOne({
-      accountNumberLookup: computeBlindIndex(
+    const found = await database.collection(USERS_COLLECTION).findOne({
+      account_hash: computeBlindIndex(
         "account-number",
         body.data.accountNumber,
       ),
@@ -130,8 +144,54 @@ describe("POST /auth/register", () => {
       second.body.data.accountNumber,
     );
     assert.notEqual(
+      first.body.data.userId,
+      second.body.data.userId,
+    );
+    assert.notEqual(
       first.body.data.recoveryPhrase,
       second.body.data.recoveryPhrase,
+    );
+  });
+
+  it("never stores the recovery phrase it handed out", async () => {
+    const { body } = await register();
+
+    const found = await database.collection(USERS_COLLECTION).findOne({
+      account_hash: computeBlindIndex(
+        "account-number",
+        body.data.accountNumber,
+      ),
+    });
+    const stored = JSON.stringify(found);
+
+    // Holding the phrase would make the server able to spend on the merchant's
+    // behalf, which is the whole property the non-custodial design rests on.
+    assert.ok(!stored.includes(body.data.recoveryPhrase));
+
+    // Checking adjacent pairs rather than single words: a stored phrase always
+    // carries at least one pair, while a lone word like "art" or "able" would
+    // match by chance inside a base64 key and make this fail on good data.
+    const words = body.data.recoveryPhrase.split(" ");
+    for (let i = 0; i < words.length - 1; i++) {
+      const pair = `${words[i]} ${words[i + 1]}`;
+      assert.ok(!stored.includes(pair), `the recovery phrase leaked: "${pair}"`);
+    }
+    assert.ok(!stored.includes(body.data.accountNumber));
+  });
+
+  it("stores only the public key derived from the phrase", async () => {
+    const { body } = await register();
+
+    const found = await database.collection(USERS_COLLECTION).findOne({
+      account_hash: computeBlindIndex(
+        "account-number",
+        body.data.accountNumber,
+      ),
+    });
+
+    assert.equal(
+      found?.recovery_public_key,
+      derivePublicKeyFromMnemonic(body.data.recoveryPhrase),
     );
   });
 
@@ -142,6 +202,7 @@ describe("POST /auth/register", () => {
       "accountNumber",
       "accountNumberDisplay",
       "recoveryPhrase",
+      "userId",
     ]);
   });
 

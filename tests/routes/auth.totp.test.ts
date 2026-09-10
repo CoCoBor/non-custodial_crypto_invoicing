@@ -6,8 +6,7 @@ import { after, before, describe, it } from "node:test";
 
 import type { Db, ObjectId } from "mongodb";
 
-import { ACCOUNTS_COLLECTION } from "../../src/accounts/account.model.js";
-import { createAccount } from "../../src/accounts/account.repository.js";
+import { USERS_COLLECTION } from "../../src/accounts/user.model.js";
 import { createApp } from "../../src/app.js";
 import {
   connectToMongoDb,
@@ -15,7 +14,10 @@ import {
 } from "../../src/infrastructure/database/mongodb.js";
 import { ensureIndexes } from "../../src/infrastructure/database/indexes.js";
 import { generateTotpCode } from "../../src/security/totp.js";
-import { SESSIONS_COLLECTION } from "../../src/sessions/session.model.js";
+import {
+  createTestMerchant,
+  deleteTestMerchants,
+} from "../helpers/merchant.js";
 
 const COOKIE_NAME = "session";
 
@@ -62,20 +64,21 @@ async function call(
   };
 }
 
-/** Registers an account and logs in, returning an active session token. */
+/** Registers a merchant and logs in, returning an active session token. */
 async function signedInAccount() {
-  const account = await createAccount(database);
-  createdAccountIds.push(account.accountId);
+  const merchant = await createTestMerchant();
+  createdAccountIds.push(merchant.accountId);
 
   const login = await call("POST", "/auth/login", {
-    body: { accountNumber: account.accountNumber },
+    body: { accountNumber: merchant.accountNumber },
   });
 
-  return {
-    accountNumber: account.accountNumber,
-    accountId: account.accountId,
-    token: tokenFrom(login.headers)!,
-  };
+  return { ...merchant, token: tokenFrom(login.headers)! };
+}
+
+/** Reads the stored merchant straight from the collection. */
+function storedMerchant(accountId: ObjectId) {
+  return database.collection(USERS_COLLECTION).findOne({ _id: accountId });
 }
 
 /**
@@ -115,14 +118,7 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdAccountIds.length > 0) {
-    await database
-      .collection(SESSIONS_COLLECTION)
-      .deleteMany({ accountId: { $in: createdAccountIds } });
-    await database
-      .collection(ACCOUNTS_COLLECTION)
-      .deleteMany({ _id: { $in: createdAccountIds } });
-  }
+  await deleteTestMerchants(database, createdAccountIds);
 
   server.close();
   await once(server, "close");
@@ -228,7 +224,9 @@ describe("POST /auth/2fa/enable", () => {
       body: { code: "000000" },
     });
 
-    assert.equal(response.status, 401);
+    // The same 409 as "no setup started": telling the two apart would say
+    // whether an enrolment is in flight on somebody else's account.
+    assert.equal(response.status, 409);
 
     const login = await call("POST", "/auth/login", {
       body: { accountNumber: account.accountNumber },
@@ -247,6 +245,50 @@ describe("POST /auth/2fa/enable", () => {
 
     assert.equal(response.status, 200);
     assert.equal(response.body.data?.twoFactorEnabled, true);
+  });
+
+  it("actually flips the stored flag, not just the response body", async () => {
+    const account = await signedInAccount();
+    const setup = await call("POST", "/auth/2fa/setup", { token: account.token });
+
+    await call("POST", "/auth/2fa/enable", {
+      token: account.token,
+      body: { code: generateTotpCode(String(setup.body.data?.secret)) },
+    });
+
+    // Writing to a misspelled field would still report success here: the rest
+    // of the $set lands, so modifiedCount is 1 while the flag stays false and
+    // the merchant is locked out of a second factor they were told was on.
+    const stored = await storedMerchant(account.accountId);
+
+    assert.equal(stored?.totp_enabled, true);
+  });
+
+  it("consumes the pending secret and seals the live one", async () => {
+    const account = await signedInAccount();
+    const setup = await call("POST", "/auth/2fa/setup", { token: account.token });
+    const secret = String(setup.body.data?.secret);
+
+    await call("POST", "/auth/2fa/enable", {
+      token: account.token,
+      body: { code: generateTotpCode(secret) },
+    });
+
+    const stored = await storedMerchant(account.accountId);
+
+    assert.equal(stored?.totp_pending_secret, null, "enrolment must not linger");
+    assert.ok(stored?.totp_secret, "the live secret must be stored");
+    // Sealed, never the base32 the authenticator app was given.
+    assert.ok(!JSON.stringify(stored).includes(secret));
+  });
+
+  it("never stores the pending secret in the clear either", async () => {
+    const account = await signedInAccount();
+    const setup = await call("POST", "/auth/2fa/setup", { token: account.token });
+
+    const stored = await storedMerchant(account.accountId);
+
+    assert.ok(!JSON.stringify(stored).includes(String(setup.body.data?.secret)));
   });
 
   it("makes the next login ask for a second factor", async () => {
@@ -402,5 +444,9 @@ describe("replay protection", () => {
       401,
       "a code that already worked must not work again inside its window",
     );
+    // Two guards carry this today: the `$lt` on totp_last_used_step, and the
+    // modifiedCount check, which sees 0 because rewriting the same step
+    // changes nothing. Adding another mutable field to that $set would retire
+    // the second guard and leave the comparison operator load-bearing alone.
   });
 });

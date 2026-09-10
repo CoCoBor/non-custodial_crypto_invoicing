@@ -1,10 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import {
-  buildPaymentUri,
-  formatSmallestUnit,
-} from "../../../src/routes/invoice/payment-uri.js";
+import { formatSmallestUnit } from "../../../src/money/format.js";
+import { buildPaymentUri } from "../../../src/routes/invoice/payment-uri.js";
 
 // The decimal string is built by padding and slicing an integer rather than
 // dividing by a power of ten. Division produces exponential notation for small
