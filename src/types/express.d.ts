@@ -5,8 +5,8 @@ declare global{
     namespace Express{
         interface Request{
             session?:{
-                sessionId: ObjectId
-                accountId: ObjectId
+                sessionId: string
+                userId: string
                 expiresAt: Date
             }
         }

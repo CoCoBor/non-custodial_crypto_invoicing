@@ -1,0 +1,194 @@
+[
+  {
+    "source": "bitstamp",
+    "url": "https://www.bitstamp.net/api/v2/ticker/btcusdt/",
+    "receivedAtMs": 1789404028614,
+    "expected": {
+      "source": "bitstamp",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "btcusdt",
+      "bid": "78659.59",
+      "ask": "78678.37",
+      "volume": "8.82037864",
+      "sourceTimestampMs": 1789404028000,
+      "receivedAtMs": 1789404028614
+    }
+  },
+  {
+    "source": "kraken",
+    "url": "https://api.kraken.com/0/public/Ticker?pair=XBTUSDT",
+    "receivedAtMs": 1789404028606,
+    "expected": {
+      "source": "kraken",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "XBTUSDT",
+      "bid": "78661.60000",
+      "ask": "78664.90000",
+      "volume": "100.35195498",
+      "sourceTimestampMs": null,
+      "receivedAtMs": 1789404028606
+    }
+  },
+  {
+    "source": "binance",
+    "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT&symbolStatus=TRADING",
+    "receivedAtMs": 1789404028529,
+    "expected": {
+      "source": "binance",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "BTCUSDT",
+      "bid": "78666.37000000",
+      "ask": "78666.38000000",
+      "volume": "13032.67009000",
+      "sourceTimestampMs": 1789404028012,
+      "receivedAtMs": 1789404028529
+    }
+  },
+  {
+    "source": "mexc",
+    "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=BTCUSDT",
+    "receivedAtMs": 1789404028530,
+    "expected": {
+      "source": "mexc",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "BTCUSDT",
+      "bid": "78667.07",
+      "ask": "78667.08",
+      "volume": "6136.01208473",
+      "sourceTimestampMs": 1789404028495,
+      "receivedAtMs": 1789404028530
+    }
+  },
+  {
+    "source": "bybit",
+    "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT",
+    "receivedAtMs": 1789404028508,
+    "expected": {
+      "source": "bybit",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "BTCUSDT",
+      "bid": "78665.1",
+      "ask": "78665.2",
+      "volume": "5791.205958",
+      "sourceTimestampMs": 1789404028504,
+      "receivedAtMs": 1789404028508
+    }
+  },
+  {
+    "source": "okx",
+    "url": "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT",
+    "receivedAtMs": 1789404028575,
+    "expected": {
+      "source": "okx",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "BTC-USDT",
+      "bid": "78661.5",
+      "ask": "78661.6",
+      "volume": "5123.26277772",
+      "sourceTimestampMs": 1789404028164,
+      "receivedAtMs": 1789404028575
+    }
+  },
+  {
+    "source": "gate",
+    "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",
+    "receivedAtMs": 1789404028839,
+    "expected": {
+      "source": "gate",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "BTC_USDT",
+      "bid": "78663.6",
+      "ask": "78663.7",
+      "volume": "5514.40835816",
+      "sourceTimestampMs": null,
+      "receivedAtMs": 1789404028839
+    }
+  },
+  {
+    "source": "kucoin",
+    "url": "https://api.kucoin.com/api/v1/market/stats?symbol=BTC-USDT",
+    "receivedAtMs": 1789404028623,
+    "expected": {
+      "source": "kucoin",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "BTC-USDT",
+      "bid": "78675.1",
+      "ask": "78675.2",
+      "volume": "5810.74777362",
+      "sourceTimestampMs": 1789404027006,
+      "receivedAtMs": 1789404028623
+    }
+  },
+  {
+    "source": "cryptocom",
+    "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=BTC_USDT",
+    "receivedAtMs": 1789404028652,
+    "expected": {
+      "source": "cryptocom",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "BTC_USDT",
+      "bid": "78667.99",
+      "ask": "78668.00",
+      "volume": "2389.2034",
+      "sourceTimestampMs": 1789404028497,
+      "receivedAtMs": 1789404028652
+    }
+  },
+  {
+    "source": "xt",
+    "url": "https://sapi.xt.com/v4/public/ticker?symbol=btc_usdt",
+    "receivedAtMs": 1789404028592,
+    "expected": {
+      "source": "xt",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "btc_usdt",
+      "bid": "78666.37",
+      "ask": "78666.38",
+      "volume": "3899.58439",
+      "sourceTimestampMs": 1789404027572,
+      "receivedAtMs": 1789404028592
+    }
+  },
+  {
+    "source": "gemini",
+    "url": "https://api.gemini.com/v1/pubticker/btcusdt",
+    "receivedAtMs": 1789404029747,
+    "expected": {
+      "source": "gemini",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "btcusdt",
+      "bid": "78663.32000",
+      "ask": "78665.41000",
+      "volume": "1.20819941",
+      "sourceTimestampMs": 1789404000000,
+      "receivedAtMs": 1789404029747
+    }
+  },
+  {
+    "source": "bitfinex",
+    "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tBTCUST",
+    "receivedAtMs": 1789404028631,
+    "expected": {
+      "source": "bitfinex",
+      "baseAsset": "btc",
+      "quoteAsset": "usdt",
+      "marketSymbol": "tBTCUST",
+      "bid": "78669",
+      "ask": "78678",
+      "volume": "620.13031691",
+      "sourceTimestampMs": null,
+      "receivedAtMs": 1789404028631
+    }
+  }
+]

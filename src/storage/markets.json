@@ -1,0 +1,197 @@
+{
+  "btc": {
+    "usd": {
+      "bitstamp": "btcusd",
+      "kraken": "XXBTZUSD",
+      "binance": "BTCUSD",
+      "bybit": "BTCUSD",
+      "okx": "BTC-USD",
+      "gate": "BTC_USD",
+      "cryptocom": "BTC_USD",
+      "gemini": "btcusd",
+      "bitfinex": "tBTCUSD"
+    },
+    "usdt": {
+      "bitstamp": "btcusdt",
+      "kraken": "XBTUSDT",
+      "binance": "BTCUSDT",
+      "mexc": "BTCUSDT",
+      "bybit": "BTCUSDT",
+      "okx": "BTC-USDT",
+      "gate": "BTC_USDT",
+      "kucoin": "BTC-USDT",
+      "cryptocom": "BTC_USDT",
+      "xt": "btc_usdt",
+      "gemini": "btcusdt",
+      "bitfinex": "tBTCUST"
+    }
+  },
+  "eth": {
+    "usd": {
+      "bitstamp": "ethusd",
+      "kraken": "XETHZUSD",
+      "binance": "ETHUSD",
+      "bybit": "ETHUSD",
+      "okx": "ETH-USD",
+      "gate": "ETH_USD",
+      "cryptocom": "ETH_USD",
+      "gemini": "ethusd",
+      "bitfinex": "tETHUSD"
+    },
+    "usdt": {
+      "bitstamp": "ethusdt",
+      "kraken": "ETHUSDT",
+      "binance": "ETHUSDT",
+      "mexc": "ETHUSDT",
+      "bybit": "ETHUSDT",
+      "okx": "ETH-USDT",
+      "gate": "ETH_USDT",
+      "kucoin": "ETH-USDT",
+      "cryptocom": "ETH_USDT",
+      "xt": "eth_usdt",
+      "gemini": "ethusdt",
+      "bitfinex": "tETHUST"
+    }
+  },
+  "sol": {
+    "usd": {
+      "bitstamp": "solusd",
+      "kraken": "SOLUSD",
+      "binance": "SOLUSD",
+      "okx": "SOL-USD",
+      "cryptocom": "SOL_USD",
+      "gemini": "solusd",
+      "bitfinex": "tSOLUSD"
+    },
+    "usdt": {
+      "kraken": "SOLUSDT",
+      "binance": "SOLUSDT",
+      "mexc": "SOLUSDT",
+      "bybit": "SOLUSDT",
+      "okx": "SOL-USDT",
+      "gate": "SOL_USDT",
+      "kucoin": "SOL-USDT",
+      "cryptocom": "SOL_USDT",
+      "xt": "sol_usdt",
+      "bitfinex": "tSOLUST"
+    }
+  },
+  "ltc": {
+    "usd": {
+      "bitstamp": "ltcusd",
+      "kraken": "XLTCZUSD",
+      "okx": "LTC-USD",
+      "cryptocom": "LTC_USD",
+      "gemini": "ltcusd",
+      "bitfinex": "tLTCUSD"
+    },
+    "usdt": {
+      "kraken": "LTCUSDT",
+      "binance": "LTCUSDT",
+      "mexc": "LTCUSDT",
+      "bybit": "LTCUSDT",
+      "okx": "LTC-USDT",
+      "gate": "LTC_USDT",
+      "kucoin": "LTC-USDT",
+      "cryptocom": "LTC_USDT",
+      "xt": "ltc_usdt",
+      "bitfinex": "tLTCUST"
+    }
+  },
+  "xmr": {
+    "usdt": {
+      "kraken": "XMRUSDT",
+      "mexc": "XMRUSDT",
+      "kucoin": "XMR-USDT",
+      "xt": "xmr_usdt",
+      "bitfinex": "tXMRUST"
+    },
+    "usd": {
+      "kraken": "XXMRZUSD",
+      "bitfinex": "tXMRUSD"
+    }
+  },
+  "bnb": {
+    "usd": {
+      "bitstamp": "bnbusd",
+      "kraken": "BNBUSD",
+      "binance": "BNBUSD",
+      "okx": "BNB-USD",
+      "gemini": "bnbusd"
+    },
+    "usdt": {
+      "kraken": "BNBUSDT",
+      "binance": "BNBUSDT",
+      "mexc": "BNBUSDT",
+      "bybit": "BNBUSDT",
+      "okx": "BNB-USDT",
+      "gate": "BNB_USDT",
+      "kucoin": "BNB-USDT",
+      "xt": "bnb_usdt"
+    }
+  },
+  "ton": {
+    "usd": {
+      "bitstamp": "tonusd",
+      "kraken": "TONUSD",
+      "okx": "GRAM-USD",
+      "cryptocom": "GRAM_USD",
+      "gemini": "gramusd",
+      "bitfinex": "tTONUSD"
+    },
+    "usdt": {
+      "kraken": "TONUSDT",
+      "binance": "GRAMUSDT",
+      "mexc": "GRAMUSDT",
+      "bybit": "GRAMUSDT",
+      "okx": "GRAM-USDT",
+      "gate": "GRAM_USDT",
+      "kucoin": "GRAM-USDT",
+      "cryptocom": "GRAM_USDT",
+      "xt": "gram_usdt",
+      "bitfinex": "tTONUST"
+    }
+  },
+  "usdt": {
+    "usd": {
+      "bitstamp": "usdtusd",
+      "kraken": "USDTZUSD",
+      "binance": "USDTUSD",
+      "bybit": "USDTUSD",
+      "okx": "USDT-USD",
+      "cryptocom": "USDT_USD",
+      "gemini": "usdtusd",
+      "bitfinex": "tUSTUSD"
+    }
+  },
+  "usdc": {
+    "usd": {
+      "bitstamp": "usdcusd",
+      "kraken": "USDCUSD",
+      "binance": "USDCUSD",
+      "gemini": "usdcusd",
+      "bitfinex": "tUDCUSD"
+    },
+    "usdt": {
+      "bitstamp": "usdcusdt",
+      "kraken": "USDCUSDT",
+      "binance": "USDCUSDT",
+      "mexc": "USDCUSDT",
+      "bybit": "USDCUSDT",
+      "okx": "USDC-USDT",
+      "gate": "USDC_USDT",
+      "kucoin": "USDC-USDT",
+      "xt": "usdc_usdt",
+      "bitfinex": "tUDCUST"
+    }
+  },
+  "dai": {
+    "usd": {
+      "kraken": "DAIUSD",
+      "gemini": "daiusd"
+    },
+    "usdt": {
+      "kraken": "DAIUSDT"
+    }
+  }
+}

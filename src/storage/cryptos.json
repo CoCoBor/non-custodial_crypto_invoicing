@@ -1,0 +1,113 @@
+{
+    "btc": {
+        "name": "Bitcoin",
+        "chain": { "name": "Bitcoin", "symbol": "btc" },
+        "symbol": "btc",
+        "explorer_link": "https://mempool.space/tx/***",
+        "decimal": 8,
+        "required_confirmations": 1
+    },
+    "ltc": {
+        "name": "Litecoin",
+        "chain": { "name": "Litecoin", "symbol": "ltc" },
+        "symbol": "ltc",
+        "explorer_link": "https://blockchair.com/litecoin/transaction/***",
+        "decimal": 8,
+        "required_confirmations": 1
+    },
+    "eth": {
+        "name": "Ethereum",
+        "chain": { "name": "Ethereum", "symbol": "eth" },
+        "symbol": "eth",
+        "explorer_link": "https://etherscan.io/tx/***",
+        "decimal": 18,
+        "required_confirmations": 1
+    },
+    "sol": {
+        "name": "Solana",
+        "chain": { "name": "Solana", "symbol": "sol" },
+        "symbol": "sol",
+        "explorer_link": "https://solscan.io/tx/***",
+        "decimal": 9,
+        "required_confirmations": 1
+    },
+    "xmr": {
+        "name": "Monero",
+        "chain": { "name": "Monero", "symbol": "xmr" },
+        "symbol": "xmr",
+        "explorer_link": "https://monero.com/tx/***",
+        "decimal": 12,
+        "required_confirmations": 1
+    },
+    "ton": {
+        "name": "Toncoin",
+        "chain": { "name": "Toncoin", "symbol": "ton" },
+        "symbol": "ton",
+        "explorer_link": "https://tonscan.org/tx/***",
+        "decimal": 9,
+        "required_confirmations": 1
+    },
+    "usdteth": {
+        "name": "Tether USD",
+        "chain": { "name": "Ethereum", "symbol": "eth" },
+        "symbol": "usdt",
+        "explorer_link": "https://etherscan.io/tx/***",
+        "contract_address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        "decimal": 6,
+        "required_confirmations": 1
+    },
+    "daieth": {
+        "name": "Dai Stablecoin",
+        "chain": { "name": "Ethereum", "symbol": "eth" },
+        "symbol": "dai",
+        "explorer_link": "https://etherscan.io/tx/***",
+        "contract_address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+        "decimal": 18,
+        "required_confirmations": 1
+    },
+    "usdceth": {
+        "name": "USDC",
+        "chain": { "name": "Ethereum", "symbol": "eth" },
+        "symbol": "usdc",
+        "explorer_link": "https://etherscan.io/tx/***",
+        "contract_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+        "decimal": 6,
+        "required_confirmations": 1
+    },
+    "usdtbsc": {
+        "name": "Tether USD (BSC)",
+        "chain": { "name": "BNB Smart Chain", "symbol": "bsc" },
+        "symbol": "usdt",
+        "explorer_link": "https://bscscan.com/tx/***",
+        "contract_address": "0x55d398326f99059fF775485246999027B3197955",
+        "decimal": 18,
+        "required_confirmations": 1
+    },
+    "usdcbsc": {
+        "name": "USD Coin (BSC)",
+        "chain": { "name": "BNB Smart Chain", "symbol": "bsc" },
+        "symbol": "usdc",
+        "explorer_link": "https://bscscan.com/tx/***",
+        "contract_address": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
+        "decimal": 18,
+        "required_confirmations": 1
+    },
+    "usdtsol": {
+        "name": "Tether USD (Solana)",
+        "chain": { "name": "Solana", "symbol": "sol" },
+        "symbol": "usdt",
+        "explorer_link": "https://solscan.io/tx/***",
+        "mint_address": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+        "decimal": 6,
+        "required_confirmations": 1
+    },
+    "usdcsol": {
+        "name": "USD Coin (Solana)",
+        "chain": { "name": "Solana", "symbol": "sol" },
+        "symbol": "usdc",
+        "explorer_link": "https://solscan.io/tx/***",
+        "mint_address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "decimal": 6,
+        "required_confirmations": 1
+    }
+}

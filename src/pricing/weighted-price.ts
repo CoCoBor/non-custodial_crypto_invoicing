@@ -1,3 +1,4 @@
+import { findMarkets } from "../config/markets.js";
 import { parseDecimalToScaledInteger } from "../money/decimal.js";
 import { formatSmallestUnit } from "../money/format.js";
 
@@ -11,12 +12,15 @@ export interface WeightedPriceInput {
   tickers: MarketTicker[];
   priceDecimals: number;
   volumeDecimals: number;
+  /** Defaults to priceDecimals; round once after weighting all inputs. */
+  outputDecimals?: number;
 }
 
 export function calculateWeightedPrice(
   input: WeightedPriceInput,
 ): string | undefined {
   const { tickers, priceDecimals, volumeDecimals } = input;
+  const outputDecimals = input.outputDecimals ?? priceDecimals;
 
   // Checked here rather than left to the parser: an empty ticker list never
   // runs the .map() below, so a bad scale would slip through unnoticed.
@@ -34,6 +38,10 @@ export function calculateWeightedPrice(
     volumeDecimals > 36
   ) {
     throw new RangeError("volumeDecimals must be an integer between 0 and 36");
+  }
+
+  if (!Number.isInteger(outputDecimals) || outputDecimals < 0 || outputDecimals > priceDecimals) {
+    throw new RangeError("outputDecimals must be an integer between 0 and priceDecimals");
   }
 
   const parsed = tickers.map((ticker) => {
@@ -67,12 +75,12 @@ export function calculateWeightedPrice(
   }
 
   const numerator = weightedSum;
-  const denominator = 2n * totalVolume;
+  const denominator = 2n * totalVolume * 10n ** BigInt(priceDecimals - outputDecimals);
 
   const quotient = numerator / denominator;
   const remainder = numerator % denominator;
   // Round half up: 2*remainder >= denominator means the dropped part is >= 0.5
   const roundedPrice = remainder * 2n >= denominator ? quotient + 1n : quotient;
 
-  return formatSmallestUnit(roundedPrice, priceDecimals);
+  return formatSmallestUnit(roundedPrice, outputDecimals);
 }

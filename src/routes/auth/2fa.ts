@@ -1,34 +1,26 @@
 import { Router } from "express";
-import { findUserById } from "../../accounts/user.repository.js";
+
+import * as userFunc from "../../auth/user.function.js";
+import * as totpRepo from "../../auth/totp.repository.js";
+import { buildTotpUri } from "../../auth/totp.function.js";
+import { requirePendingTotpSession, requireSession } from "../../middleware/require-session.js";
 import { z } from "zod";
 
-import { env } from "../../config/env.js";
-import { getDatabase } from "../../infrastructure/database/mongodb.js";
-import {
-  requirePendingTotpSession,
-  requireSession,
-} from "../../middleware/require-session.js";
-import { buildTotpUri } from "../../security/totp.js";
-import {
-  createSession,
-  deleteSession,
-} from "../../sessions/session.repository.js";
-import * as UserTotp from "../../accounts/user-totp.repository.js";
-
 export const twoFactorRouter = Router();
-
-const totpCodeSchema = z.object({
-  code: z.string(),
-});
 
 twoFactorRouter.use((_req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
 
+const totpCodeSchema = z.object({
+  code: z.string().length(6),
+});
+
 twoFactorRouter.post("/setup", requireSession, async (req, res) => {
-  const accountId = req.session!.accountId;
-  const user = await findUserById(accountId);
+  const userId = req.session!.userId;
+
+  const user = await userFunc.findUserByUserId(userId);
 
   if (!user) {
     return res.status(401).json({
@@ -48,7 +40,7 @@ twoFactorRouter.post("/setup", requireSession, async (req, res) => {
     });
   }
 
-  const secret = await UserTotp.prepareUserTotp(accountId);
+  const secret = await totpRepo.prepareUserTotp(userId);
   if (secret === undefined) {
     return res.status(409).json({
       error: {
@@ -59,10 +51,7 @@ twoFactorRouter.post("/setup", requireSession, async (req, res) => {
   }
 
   res.status(200).json({
-    data: {
-      secret,
-      uri: buildTotpUri("merchant", user.user_id, secret),
-    },
+    data: { secret, uri: buildTotpUri("merchant", user.user_id, secret) },
   });
 });
 
@@ -74,11 +63,17 @@ twoFactorRouter.post("/enable", requireSession, async (req, res) => {
       error: { code: "INVALID_REQUEST", message: "request body is invalid" },
     });
   }
-  const accountId = req.session!.accountId;
-  const user = await findUserById(accountId);
+
+  const userId = req.session!.userId;
+
+  const user = await userFunc.findUserByUserId(userId);
+
   if (!user) {
     return res.status(401).json({
-      error: { code: "UNAUTHENTICATED", message: "authentication required" },
+      error: {
+        code: "UNAUTHENTICATED",
+        message: "authentication required",
+      },
     });
   }
 
@@ -91,7 +86,7 @@ twoFactorRouter.post("/enable", requireSession, async (req, res) => {
     });
   }
 
-  const enable = await UserTotp.enableUserTotp(accountId, parsed.data.code);
+  const enable = await totpRepo.enableUserTotp(userId, parsed.data.code);
 
   if (!enable) {
     return res.status(409).json({
@@ -120,44 +115,9 @@ twoFactorRouter.post("/verify", requirePendingTotpSession, async (req, res) => {
       },
     });
   }
-  const accountId = req.session!.accountId;
 
-  const verified = await UserTotp.verifyUserTotp(accountId, parsed.data.code);
-
-  if (!verified) {
-    return res.status(401).json({
-      error: {
-        code: "INVALID_TOTP",
-        message: "the code is not valid or has already been used",
-      },
-    });
-  }
-
-  const db = getDatabase();
-  const oldToken = req.cookies?.session;
-
-  if (oldToken) {
-    await deleteSession(db, oldToken);
-  }
-
-  const { token } = await createSession(db, {
-    accountId,
-    status: "active",
-    ipAddress: req.ip ?? null,
-    userAgent: req.get("user-agent") ?? null,
-  });
-
-  res.cookie("session", token, {
-    httpOnly: true,
-    secure: env.nodeEnvironment === "production",
-    sameSite: "strict",
-    path: "/",
-    maxAge: 12 * 60 * 60 * 1000,
-  });
-
-  res.status(200).json({
-    data: {
-      requiresTwoFactor: false,
-    },
-  });
+  const userId = req.session!.userId
+  
+  const varified = await totpRepo.verifyUserTptp(userId, parsed.data.code)
+  
 });

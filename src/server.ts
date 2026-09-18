@@ -1,11 +1,9 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
-import { ensureIndexes } from "./infrastructure/database/indexes.js";
 import {
   connectToMongoDb,
   disconnectFromMongoDB,
 } from "./infrastructure/database/mongodb.js";
-import { startInvoiceWatcher } from "./invoices/invoice-watcher-scheduler.js";
 
 const app = createApp();
 
@@ -13,7 +11,6 @@ async function startServer(): Promise<void> {
   try {
     const db = await connectToMongoDb();   
 
-    await ensureIndexes(db)
     
     console.log("MongoDB connected");
 
@@ -23,7 +20,6 @@ async function startServer(): Promise<void> {
       );
     });
     let isShuttingDown = false;
-    const stopWatcher = startInvoiceWatcher(db);
 
     async function shutDown(signal: NodeJS.Signals): Promise<void> {
       if (isShuttingDown) {
@@ -41,7 +37,6 @@ async function startServer(): Promise<void> {
         }
 
         try {
-          stopWatcher();
           await disconnectFromMongoDB();
           console.log("MongoDB disconnected");
         } catch (error) {

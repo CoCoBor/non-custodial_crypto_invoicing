@@ -1,8 +1,7 @@
 import { NextFunction, Request, RequestHandler, Response } from "express";
-import { getDatabase } from "../infrastructure/database/mongodb.js";
-import * as Session from "../sessions/session.repository.js";
-import { SessionDocument } from "../sessions/session.model.js";
-import { findUserById } from "../accounts/user.repository.js";
+import * as sessionRepo from "../sessions/session.repository.js";
+import { SessionDocument } from "../database/session.model.js";
+import { findUserByUserId } from "../auth/user.function.js";
 
 async function resolveSession(
   req: Request,
@@ -17,8 +16,7 @@ async function resolveSession(
     return undefined;
   }
 
-  const database = getDatabase();
-  const session = await Session.findValidSession(database, token);
+  const session = await sessionRepo.findValidSession(token);
 
   if (!session) {
     res.status(401).json({
@@ -38,7 +36,7 @@ function requireStatus(status: "active" | "pending_totp"): RequestHandler {
       return;
     }
 
-    const { _id, accountId } = session;
+    const { sessionId, userId } = session;
 
     if (session.status !== status) {
       return res.status(401).json({
@@ -46,7 +44,7 @@ function requireStatus(status: "active" | "pending_totp"): RequestHandler {
       });
     }
 
-    const user = await findUserById(session.accountId);
+    const user = await findUserByUserId(userId);
 
     if (!user) {
       return res.status(401).json({
@@ -57,12 +55,11 @@ function requireStatus(status: "active" | "pending_totp"): RequestHandler {
       });
     }
 
-    const database = getDatabase();
-    const expiresAt = await Session.touchSession(database, _id);
+    const expiresAt = await sessionRepo.touchSession(sessionId);
 
     req.session = {
-      sessionId: _id,
-      accountId: accountId,
+      sessionId,
+      userId,
       expiresAt,
     };
 

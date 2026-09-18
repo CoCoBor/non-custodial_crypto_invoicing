@@ -1,0 +1,678 @@
+import { z } from "zod";
+
+import { decimalStrToBigInt, intToDecimalStr } from "./money.function.js";
+
+import cryptos from "../storage/cryptos.json" with { type: "json" };
+import marketConfig from "../storage/markets.json" with { type: "json" };
+
+const EXTRA_PRICE_DECIMALS = 8;
+const CALCULATION_DECIMALS = 36;
+const PRICE_DECIMALS = 10;
+const MIN_SOURCES = 4;
+
+const MAX_AGE_MS = 60_000;
+const MAX_FUTURE_MS = 5_000;
+
+type CryptoId = keyof typeof cryptos;
+type Currency = "usd" | "usdt";
+
+/**
+ * 根据法币金额和单价，计算应付的币最小单位。
+ * coinPrice 必须使用与 fiatAmount 相同的计价货币。
+ */
+export function getUsdToCrypto(input: {
+  fiatAmount: string;
+  fiatDecimals: number;
+  coinPrice: string;
+  coinDecimals: number;
+}):
+  | {
+      paymentUnits: bigint;
+      fiatUnits: bigint;
+    }
+  | undefined {
+  const { fiatAmount, fiatDecimals, coinPrice, coinDecimals } = input;
+
+  if (
+    !Number.isInteger(fiatDecimals) ||
+    fiatDecimals < 0 ||
+    fiatDecimals > 18
+  ) {
+    throw new RangeError("fiatDecimals must be an integer from 0 to 18");
+  }
+
+  if (
+    !Number.isInteger(coinDecimals) ||
+    coinDecimals < 0 ||
+    coinDecimals > 36
+  ) {
+    throw new RangeError("coinDecimals must be an integer from 0 to 36");
+  }
+
+  const fiatUnits = decimalStrToBigInt(fiatAmount, fiatDecimals);
+
+  const priceDecimals = fiatDecimals + EXTRA_PRICE_DECIMALS;
+
+  const priceInteger = decimalStrToBigInt(coinPrice, priceDecimals);
+
+  if (
+    fiatUnits === undefined ||
+    priceInteger === undefined ||
+    fiatUnits <= 0n ||
+    priceInteger <= 0n
+  ) {
+    return undefined;
+  }
+
+  const extraPriceMultiplier = 10n ** BigInt(EXTRA_PRICE_DECIMALS);
+
+  const amountAtPriceScale = fiatUnits * extraPriceMultiplier;
+
+  const unitsPerCoin = 10n ** BigInt(coinDecimals);
+  const numerator = amountAtPriceScale * unitsPerCoin;
+
+  // 向上取整到币的最小单位。
+  const paymentUnits = (numerator + priceInteger - 1n) / priceInteger;
+
+  return {
+    paymentUnits,
+    fiatUnits,
+  };
+}
+
+// 每家交易所只负责 URL 和自己的响应字段。
+// 金额格式、正数和 bid <= ask 在 getTicker 统一检查。
+const exchanges = {
+  binance: {
+    url: (market: string) =>
+      `https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        symbol: z.string(),
+        bidPrice: z.string(),
+        askPrice: z.string(),
+        volume: z.string(),
+        closeTime: z.number(),
+      })
+      .transform((data) => ({
+        symbol: data.symbol,
+        bid: data.bidPrice,
+        ask: data.askPrice,
+        volume: data.volume,
+        timeMs: data.closeTime,
+      })),
+  },
+
+  bybit: {
+    url: (market: string) =>
+      `https://api.bybit.com/v5/market/tickers?category=spot&symbol=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        retCode: z.literal(0),
+        time: z.number(),
+        result: z.object({
+          category: z.literal("spot"),
+          list: z
+            .array(
+              z.object({
+                symbol: z.string(),
+                bid1Price: z.string(),
+                ask1Price: z.string(),
+                volume24h: z.string(),
+              }),
+            )
+            .length(1),
+        }),
+      })
+      .transform((data) => ({
+        symbol: data.result.list[0].symbol,
+        bid: data.result.list[0].bid1Price,
+        ask: data.result.list[0].ask1Price,
+        volume: data.result.list[0].volume24h,
+        timeMs: data.time,
+      })),
+  },
+
+  okx: {
+    url: (market: string) =>
+      `https://www.okx.com/api/v5/market/ticker?instId=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        code: z.literal("0"),
+        data: z
+          .array(
+            z.object({
+              instType: z.literal("SPOT"),
+              instId: z.string(),
+              bidPx: z.string(),
+              askPx: z.string(),
+              vol24h: z.string(),
+              ts: z.string().regex(/^[0-9]+$/),
+            }),
+          )
+          .length(1),
+      })
+      .transform(({ data }) => ({
+        symbol: data[0].instId,
+        bid: data[0].bidPx,
+        ask: data[0].askPx,
+        volume: data[0].vol24h,
+        timeMs: Number(data[0].ts),
+      })),
+  },
+
+  gate: {
+    url: (market: string) =>
+      `https://api.gateio.ws/api/v4/spot/tickers?currency_pair=${encodeURIComponent(market)}`,
+
+    schema: z
+      .array(
+        z.object({
+          currency_pair: z.string(),
+          highest_bid: z.string(),
+          lowest_ask: z.string(),
+          base_volume: z.string(),
+        }),
+      )
+      .length(1)
+      .transform(([data]) => ({
+        symbol: data.currency_pair,
+        bid: data.highest_bid,
+        ask: data.lowest_ask,
+        volume: data.base_volume,
+        timeMs: null,
+      })),
+  },
+
+  bitstamp: {
+    url: (market: string) =>
+      `https://www.bitstamp.net/api/v2/ticker/${encodeURIComponent(market)}/`,
+
+    schema: z
+      .object({
+        bid: z.string(),
+        ask: z.string(),
+        volume: z.string(),
+        timestamp: z.string().regex(/^[0-9]+$/),
+        market_type: z.literal("SPOT"),
+      })
+      .transform((data) => ({
+        // 响应没有市场名称，市场由请求 URL 指定。
+        symbol: "",
+        bid: data.bid,
+        ask: data.ask,
+        volume: data.volume,
+        timeMs: Number(data.timestamp) * 1000,
+      })),
+  },
+
+  kraken: {
+    url: (market: string) =>
+      `https://api.kraken.com/0/public/Ticker?pair=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        error: z.array(z.string()).length(0),
+        result: z.record(
+          z.string(),
+          z.object({
+            b: z.tuple([z.string()]).rest(z.unknown()),
+            a: z.tuple([z.string()]).rest(z.unknown()),
+            v: z.tuple([z.unknown(), z.string()]).rest(z.unknown()),
+          }),
+        ),
+      })
+      .refine((data) => Object.keys(data.result).length === 1)
+      .transform((data) => {
+        const [symbol, ticker] = Object.entries(data.result)[0];
+
+        return {
+          symbol,
+          bid: ticker.b[0],
+          ask: ticker.a[0],
+          // v[0] 是今天，v[1] 是过去 24 小时。
+          volume: ticker.v[1],
+          timeMs: null,
+        };
+      }),
+  },
+
+  mexc: {
+    url: (market: string) =>
+      `https://api.mexc.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        symbol: z.string(),
+        bidPrice: z.string(),
+        askPrice: z.string(),
+        volume: z.string(),
+        closeTime: z.number(),
+      })
+      .transform((data) => ({
+        symbol: data.symbol,
+        bid: data.bidPrice,
+        ask: data.askPrice,
+        volume: data.volume,
+        timeMs: data.closeTime,
+      })),
+  },
+
+  kucoin: {
+    url: (market: string) =>
+      `https://api.kucoin.com/api/v1/market/stats?symbol=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        code: z.literal("200000"),
+        data: z.object({
+          symbol: z.string(),
+          buy: z.string(),
+          sell: z.string(),
+          vol: z.string(),
+          time: z.number(),
+        }),
+      })
+      .transform(({ data }) => ({
+        symbol: data.symbol,
+        bid: data.buy,
+        ask: data.sell,
+        volume: data.vol,
+        timeMs: data.time,
+      })),
+  },
+
+  cryptocom: {
+    url: (market: string) =>
+      `https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        code: z.literal(0),
+        result: z.object({
+          data: z
+            .array(
+              z.object({
+                i: z.string(),
+                b: z.string(),
+                k: z.string(),
+                v: z.string(),
+                t: z.number(),
+              }),
+            )
+            .length(1),
+        }),
+      })
+      .transform(({ result }) => ({
+        symbol: result.data[0].i,
+        bid: result.data[0].b,
+        // k 是 ask，a 是最近成交价。
+        ask: result.data[0].k,
+        volume: result.data[0].v,
+        timeMs: result.data[0].t,
+      })),
+  },
+
+  xt: {
+    url: (market: string) =>
+      `https://sapi.xt.com/v4/public/ticker?symbol=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        rc: z.literal(0),
+        result: z
+          .array(
+            z.object({
+              s: z.string(),
+              bp: z.string(),
+              ap: z.string(),
+              q: z.string(),
+              t: z.number(),
+            }),
+          )
+          .length(1),
+      })
+      .transform(({ result }) => ({
+        symbol: result[0].s,
+        bid: result[0].bp,
+        ask: result[0].ap,
+        volume: result[0].q,
+        timeMs: result[0].t,
+      })),
+  },
+
+  gemini: {
+    url: (market: string) =>
+      `https://api.gemini.com/v1/pubticker/${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        bid: z.string(),
+        ask: z.string(),
+        volume: z.record(z.string(), z.unknown()),
+      })
+      .transform((data) => ({
+        symbol: "",
+        bid: data.bid,
+        ask: data.ask,
+        // getTicker 根据 market 提取正确的币种成交量。
+        volume: "",
+        timeMs: null,
+        volumes: data.volume,
+      })),
+  },
+
+  bitfinex: {
+    url: (market: string) =>
+      `https://api-pub.bitfinex.com/v2/tickers?symbols=${encodeURIComponent(market)}`,
+
+    schema: z
+      .array(
+        z
+          .tuple([
+            z.string(), // 0: symbol
+            z.string(), // 1: bid
+            z.unknown(), // 2: bid size
+            z.string(), // 3: ask
+            z.unknown(), // 4: ask size
+            z.unknown(), // 5: daily change
+            z.unknown(), // 6: daily change percentage
+            z.unknown(), // 7: last price
+            z.string(), // 8: volume
+          ])
+          .rest(z.unknown()),
+      )
+      .length(1)
+      .transform(([data]) => ({
+        symbol: data[0],
+        bid: data[1],
+        ask: data[3],
+        volume: data[8],
+        timeMs: null,
+      })),
+  },
+};
+
+type Exchange = keyof typeof exchanges;
+
+const exchangeNames = Object.keys(exchanges) as Exchange[];
+
+const markets: Record<
+  string,
+  Partial<Record<Currency, Partial<Record<Exchange, string>>>>
+> = marketConfig;
+
+// 这三个来源可以单独读取行情。
+// 目前使用的接口尚未确认成交量窗口与其他来源一致，暂不加权。
+const excludedFromWeighting = new Set<Exchange>(["bitstamp", "bitfinex", "xt"]);
+
+const tickerSchema = z.object({
+  symbol: z.string(),
+  bid: z.string(),
+  ask: z.string(),
+  volume: z.string(),
+  timeMs: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(Number.MAX_SAFE_INTEGER)
+    .nullable(),
+});
+
+type Ticker = {
+  exchange: Exchange;
+  bid: bigint;
+  ask: bigint;
+  volume: bigint;
+  sourceTimeMs: number | null;
+  receivedAtMs: number;
+};
+
+/**
+ * 读取一家交易所。
+ * 返回的 bid、ask、volume 都是放大 36 位的 bigint。
+ * 未配置市场、请求失败或数据无效时返回 undefined。
+ */
+export async function getTicker(
+  exchange: Exchange,
+  coin: string,
+  currency: Currency = "usdt",
+): Promise<Ticker | undefined> {
+  const base = coin.toLowerCase();
+  const market = markets[base]?.[currency]?.[exchange];
+
+  if (!market) return undefined;
+
+  const config = exchanges[exchange];
+
+  try {
+    const response = await fetch(config.url(market), {
+      signal: AbortSignal.timeout(5_000),
+      headers: { Accept: "application/json" },
+    });
+
+    if (!response.ok) return undefined;
+
+    let raw: unknown;
+
+    if (exchange === "bitfinex") {
+      // Node.js 24：保留 JSON 数字的原始文本，避免 Number 舍入。
+      raw = JSON.parse(
+        await response.text(),
+        (_key: string, value: unknown, context?: { source?: string }) => {
+          if (typeof value !== "number") return value;
+
+          if (!context?.source) {
+            throw new Error("Original JSON number is unavailable");
+          }
+
+          return expandNumber(context.source);
+        },
+      );
+    } else {
+      raw = await response.json();
+    }
+
+    let candidate: z.infer<typeof tickerSchema>;
+
+    if (exchange === "gemini") {
+      // 明确使用 Gemini schema，TypeScript 就知道 volumes 的类型。
+      const parsed = exchanges.gemini.schema.safeParse(raw);
+
+      if (!parsed.success) return undefined;
+
+      const data = parsed.data;
+
+      const volumeKey = market.slice(0, -currency.length).toUpperCase();
+
+      const volume = z.string().parse(data.volumes[volumeKey]);
+
+      const timestamp = z
+        .union([z.number(), z.string().regex(/^[0-9]+$/)])
+        .parse(data.volumes.timestamp);
+
+      candidate = {
+        symbol: data.symbol,
+        bid: data.bid,
+        ask: data.ask,
+        volume,
+        timeMs: Number(timestamp),
+      };
+    } else {
+      const parsed = config.schema.safeParse(raw);
+
+      if (!parsed.success) return undefined;
+
+      candidate = parsed.data;
+    }
+
+    const checked = tickerSchema.safeParse(candidate);
+
+    if (!checked.success) return undefined;
+
+    const data = checked.data;
+
+    // 这两家响应不包含市场名称，其他来源必须与配置一致。
+    if (
+      exchange !== "bitstamp" &&
+      exchange !== "gemini" &&
+      data.symbol !== market
+    ) {
+      return undefined;
+    }
+
+    const bid = decimalStrToBigInt(data.bid, CALCULATION_DECIMALS);
+    const ask = decimalStrToBigInt(data.ask, CALCULATION_DECIMALS);
+    const volume = decimalStrToBigInt(data.volume, CALCULATION_DECIMALS);
+
+    if (
+      bid === undefined ||
+      ask === undefined ||
+      volume === undefined ||
+      bid <= 0n ||
+      ask <= 0n ||
+      volume <= 0n ||
+      bid > ask
+    ) {
+      return undefined;
+    }
+
+    return {
+      exchange,
+      bid,
+      ask,
+      volume,
+      sourceTimeMs: data.timeMs,
+      receivedAtMs: Date.now(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 取得多个交易所加权后的参考价格字符串。
+ * USD 和 USDT 分开计算，不互相替代。
+ */
+export async function getPrice(
+  cryptoId: CryptoId,
+  currency: Currency,
+): Promise<string | undefined> {
+  const asset = cryptos[cryptoId];
+
+  if (!asset) return undefined;
+
+  const coin = asset.symbol.toLowerCase();
+
+  // 同一资产的单位换算，不表示 USDT 等于 USD。
+  if (coin === currency) return "1";
+
+  const configuredMarkets = markets[coin]?.[currency];
+
+  if (!configuredMarkets) return undefined;
+
+  const availableExchanges = exchangeNames.filter(
+    (exchange) =>
+      configuredMarkets[exchange] !== undefined &&
+      !excludedFromWeighting.has(exchange),
+  );
+
+  if (availableExchanges.length < MIN_SOURCES) {
+    return undefined;
+  }
+
+  const results = await Promise.allSettled(
+    availableExchanges.map((exchange) => getTicker(exchange, coin, currency)),
+  );
+
+  const now = Date.now();
+  const tickers: Ticker[] = [];
+
+  // 整批请求完成后，统一检查时间。
+  for (const result of results) {
+    if (result.status !== "fulfilled" || result.value === undefined) {
+      continue;
+    }
+
+    const ticker = result.value;
+    const receivedAge = now - ticker.receivedAtMs;
+
+    if (receivedAge < -MAX_FUTURE_MS || receivedAge > MAX_AGE_MS) {
+      continue;
+    }
+
+    if (ticker.sourceTimeMs !== null) {
+      const sourceAge = now - ticker.sourceTimeMs;
+
+      if (sourceAge < -MAX_FUTURE_MS || sourceAge > MAX_AGE_MS) {
+        continue;
+      }
+    }
+
+    tickers.push(ticker);
+  }
+
+  if (tickers.length < MIN_SOURCES) return undefined;
+
+  let weightedTotal = 0n;
+  let totalVolume = 0n;
+
+  for (const ticker of tickers) {
+    weightedTotal += (ticker.bid + ticker.ask) * ticker.volume;
+
+    totalVolume += ticker.volume;
+  }
+
+  const scaleDifference = 10n ** BigInt(CALCULATION_DECIMALS - PRICE_DECIMALS);
+
+  // 除以 2 得到买卖中间价，同时调整输出精度。
+  const denominator = 2n * totalVolume * scaleDifference;
+
+  let price = weightedTotal / denominator;
+  const remainder = weightedTotal % denominator;
+
+  // 最终结果四舍五入一次。
+  if (remainder * 2n >= denominator) {
+    price += 1n;
+  }
+
+  if (price === 0n) return undefined;
+
+  return intToDecimalStr(price, PRICE_DECIMALS);
+}
+
+/**
+ * 将 JSON 原始数字文本中的科学计数法展开。
+ * 例如 "1.25e-3" → "0.00125"。
+ */
+function expandNumber(value: string): string {
+  const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(value);
+
+  if (!match || value.length > 100) {
+    throw new Error("Invalid numeric value");
+  }
+
+  const [, sign, whole, fraction = "", exponent = "0"] = match;
+  const shift = Number(exponent);
+
+  if (!Number.isSafeInteger(shift) || Math.abs(shift) > 100) {
+    throw new Error("Numeric exponent is out of range");
+  }
+
+  const digits = whole + fraction;
+  const position = whole.length + shift;
+
+  if (position <= 0) {
+    return sign + "0." + "0".repeat(-position) + digits;
+  }
+
+  if (position >= digits.length) {
+    return sign + digits + "0".repeat(position - digits.length);
+  }
+
+  return sign + digits.slice(0, position) + "." + digits.slice(position);
+}
+

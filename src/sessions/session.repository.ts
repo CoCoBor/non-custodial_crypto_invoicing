@@ -1,43 +1,42 @@
-import { Db, ObjectId } from "mongodb";
-import {
-  SessionDocument,
-  SESSIONS_COLLECTION,
-  SessionStatus,
-} from "./session.model.js";
 import {
   generateSessionToken,
   hashBearerToken,
 } from "../security/secret-generator.js";
-
-export interface CreateSessionInput {
-  accountId: ObjectId;
-  status: SessionStatus;
-  ipAddress: string | null;
-  userAgent: string | null;
-}
+import {
+  Session,
+  SessionDocument,
+  SessionStatus,
+} from "../database/session.model.js";
+import { randomUUID } from "node:crypto";
 
 export interface CreatedSession {
-  sessionId: ObjectId;
+  sessionId: string;
   token: string;
 }
 
 export async function createSession(
-  database: Db,
-  input: CreateSessionInput,
-): Promise<CreatedSession> {
-  const { accountId, status, ipAddress, userAgent } = input;
-  const collection = database.collection<SessionDocument>(SESSIONS_COLLECTION);
-  const sessionId = new ObjectId();
+  input: {
+  userId: string;
+  status: SessionStatus;
+  ipAddress: string | null;
+  userAgent: string | null;
+},
+): Promise<{
+  sessionId: string;
+  token: string;
+}> {
+  const { userId, status, ipAddress, userAgent } = input;
+  const sessionId = randomUUID();
   const token = generateSessionToken();
   const date = new Date();
   const lastSeenDate = date;
   const expiredDate = new Date(lastSeenDate.getTime() + 30 * 60 * 1000);
   const absoluteExpiredDate = new Date(date.getTime() + 12 * 60 * 60 * 1000);
 
-  const document: SessionDocument = {
-    _id: sessionId,
+  const document = {
+    sessionId,
     tokenHash: hashBearerToken(token),
-    accountId: accountId,
+    userId,
     status: status,
     createdAt: date,
     lastSeenAt: lastSeenDate,
@@ -47,7 +46,7 @@ export async function createSession(
     userAgent: userAgent,
   };
 
-  await collection.insertOne(document);
+  await Session.insertOne(document);
 
   return {
     sessionId,
@@ -56,53 +55,41 @@ export async function createSession(
 }
 
 export async function findValidSession(
-  database: Db,
   token: string,
 ): Promise<SessionDocument | null> {
-  const collection = database.collection<SessionDocument>(SESSIONS_COLLECTION);
   const tokenHash = hashBearerToken(token);
   const now = new Date();
 
   try {
-    const session = await collection.findOne({
+    const session = await Session.findOne({
       tokenHash: tokenHash,
       expiresAt: { $gt: now },
       absoluteExpiresAt: { $gt: now },
     });
-    if (!session) {
-      return null;
-    }
+    if (!session) return null;
+
     return session;
   } catch (error) {
     throw error;
   }
 }
 
-export async function touchSession(
-  database: Db,
-  sessionId: ObjectId,
-): Promise<Date> {
-  const collection = database.collection<SessionDocument>(SESSIONS_COLLECTION);
-
+export async function touchSession(sessionId: string): Promise<Date> {
   const date = new Date();
 
   const newExpiresAt = new Date(date.getTime() + 30 * 60 * 1000);
 
-  await collection.updateOne(
-    { _id: sessionId },
+  await Session.updateOne(
+    { sessionId },
     { $set: { expiresAt: newExpiresAt, lastSeenAt: date } },
   );
 
   return newExpiresAt;
 }
 
-export async function deleteSession(
-  database: Db,
-  token: string,
-): Promise<void> {
-  const collection = database.collection<SessionDocument>(SESSIONS_COLLECTION);
-  const tokenHash = hashBearerToken(token)
-  await collection.deleteOne({ tokenHash });
+export async function deleteSession(token: string): Promise<void> {
+  const tokenHash = hashBearerToken(token);
+  await Session.deleteOne({ tokenHash });
 
-  return
+  return;
 }
