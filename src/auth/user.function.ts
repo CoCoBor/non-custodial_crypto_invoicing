@@ -100,3 +100,7 @@ export async function validateTurnstile(
 
   return false;
 }
+
+export function findUserByMerchantKey(merchant_key: string){
+    return User.findOne({merchant_key}).exec()
+}

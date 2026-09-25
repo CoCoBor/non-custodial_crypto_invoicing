@@ -3,8 +3,16 @@ import { Router } from "express";
 import * as userFunc from "../../auth/user.function.js";
 import * as totpRepo from "../../auth/totp.repository.js";
 import { buildTotpUri } from "../../auth/totp.function.js";
-import { requirePendingTotpSession, requireSession } from "../../middleware/require-session.js";
+import {
+  requirePendingTotpSession,
+  requireSession,
+} from "../../middleware/require-session.js";
 import { z } from "zod";
+import {
+  createSession,
+  deleteSession,
+} from "../../sessions/session.repository.js";
+import { env } from "../../config/env.js";
 
 export const twoFactorRouter = Router();
 
@@ -116,8 +124,35 @@ twoFactorRouter.post("/verify", requirePendingTotpSession, async (req, res) => {
     });
   }
 
-  const userId = req.session!.userId
-  
-  const varified = await totpRepo.verifyUserTptp(userId, parsed.data.code)
-  
+  const userId = req.session!.userId;
+
+  const verified = await totpRepo.verifyUserTptp(userId, parsed.data.code);
+
+  if (!verified)
+    return res.status(401).json({
+      error: {
+        code: "INVALID_TOTP",
+        message: "the code is not valid or has already been used",
+      },
+    });
+
+  const oldToken = req.cookies?.session;
+  if (oldToken) await deleteSession(oldToken);
+
+  const { token } = await createSession({
+    userId,
+    status: "active",
+    ipAddress: req.ip ?? null,
+    userAgent: req.get("user-agent") ?? null,
+  });
+
+  res.cookie("session", token, {
+    httpOnly: true,
+    secure: env.nodeEnvironment === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 10 * 60 * 60 * 1000,
+  });
+
+  res.status(200).json({ data: { requiresTwoFactor: false } });
 });

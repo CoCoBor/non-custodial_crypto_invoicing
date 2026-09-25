@@ -54,6 +54,11 @@ export const env = Object.freeze({
     "NOWNODES_API_KEY",
     process.env.NOWNODES_API_KEY,
   ),
+
+  platformBtcAddress: readRequiredString(
+  "PLATFORM_BTC_ADDRESS",
+  process.env.PLATFORM_BTC_ADDRESS,
+),
 });
 
 function readRequiredString(name: string, value: string | undefined): string {

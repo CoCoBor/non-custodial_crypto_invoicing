@@ -4,14 +4,13 @@ import {
   connectToMongoDb,
   disconnectFromMongoDB,
 } from "./infrastructure/database/mongodb.js";
+import { startInvoiceWatcher } from "./invoice/invoice.watcher.js";
 
 const app = createApp();
 
 async function startServer(): Promise<void> {
   try {
-    const db = await connectToMongoDb();   
-
-    
+    await connectToMongoDb();
     console.log("MongoDB connected");
 
     const server = app.listen(env.port, () => {
@@ -19,6 +18,9 @@ async function startServer(): Promise<void> {
         `API listening at http://localhost:${env.port} in ${env.nodeEnvironment} mode`,
       );
     });
+    const stopInvoiceWatcher = startInvoiceWatcher();
+    console.log("Invoice watcher started");
+
     let isShuttingDown = false;
 
     async function shutDown(signal: NodeJS.Signals): Promise<void> {
@@ -28,6 +30,7 @@ async function startServer(): Promise<void> {
 
       isShuttingDown = true;
       console.log(`${signal} received; stopping the HTTP server`);
+      const watcherStopped = stopInvoiceWatcher();
       server.close(async (error) => {
         if (error) {
           console.error("The HTTP server did not stop cleanly", error);
@@ -37,6 +40,7 @@ async function startServer(): Promise<void> {
         }
 
         try {
+          await watcherStopped;
           await disconnectFromMongoDB();
           console.log("MongoDB disconnected");
         } catch (error) {
@@ -44,14 +48,13 @@ async function startServer(): Promise<void> {
           process.exitCode = 1;
         }
       });
-
     }
-      process.once("SIGINT", shutDown);
-      process.once("SIGTERM", shutDown);
+    process.once("SIGINT", shutDown);
+    process.once("SIGTERM", shutDown);
   } catch (error) {
-    console.error("Application startup failed", error)
-    process.exitCode = 1
+    console.error("Application startup failed", error);
+    process.exitCode = 1;
   }
 }
 
-void startServer()
+void startServer();

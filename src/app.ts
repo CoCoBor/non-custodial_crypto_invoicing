@@ -5,7 +5,7 @@ import { errorHandler } from "./middleware/error-handler.js";
 import { notFoundHandler } from "./middleware/not-found.js";
 import { authRouter } from "./routes/auth/index.js";
 import { healthRouter } from "./routes/health/index.js";
-// import { invoiceRouter } from "./routes/invoice/index.js";
+import { invoiceRouter } from "./routes/invoice/index.js";
 // import { settlementRouter } from "./routes/settlement/index.js";
 
 export function createApp() {
@@ -18,7 +18,7 @@ export function createApp() {
   app.use("/health", healthRouter);
   app.use("/auth", authRouter);
   // app.use("/settlement", settlementRouter);
-  // app.use("/invoices", invoiceRouter);
+  app.use("/invoices", invoiceRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

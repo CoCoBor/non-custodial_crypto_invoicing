@@ -1,5 +1,5 @@
 import { NextFunction, Request, RequestHandler, Response } from "express";
-import * as sessionRepo from "../sessions/session.repository.js";
+import * as Session from "../sessions/session.repository.js";
 import { SessionDocument } from "../database/session.model.js";
 import { findUserByUserId } from "../auth/user.function.js";
 
@@ -16,7 +16,7 @@ async function resolveSession(
     return undefined;
   }
 
-  const session = await sessionRepo.findValidSession(token);
+  const session = await Session.findValidSession(token);
 
   if (!session) {
     res.status(401).json({
@@ -55,7 +55,7 @@ function requireStatus(status: "active" | "pending_totp"): RequestHandler {
       });
     }
 
-    const expiresAt = await sessionRepo.touchSession(sessionId);
+    const expiresAt = await Session.touchSession(sessionId);
 
     req.session = {
       sessionId,

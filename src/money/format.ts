@@ -31,3 +31,16 @@ export function formatSmallestUnit(
     ? `${wholePart}.${fractionalPart}`
     : wholePart;
 }
+
+export function ceilDivide(
+  amount: bigint,
+  divisor: bigint,
+): bigint {
+  if (amount < 0n || divisor <= 0n) {
+    throw new RangeError(
+      "amount must be non-negative and divisor must be positive",
+    );
+  }
+
+  return (amount + divisor - 1n) / divisor;
+}

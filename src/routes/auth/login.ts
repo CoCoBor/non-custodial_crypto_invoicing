@@ -59,11 +59,11 @@ loginRouter.post("/", loginLimiter, async (req, res) => {
 
   const { user_id, totp_enabled } = user;
 
-  const requiredTwoFactor = totp_enabled ? "active" : "pending_totp";
-
+  const requiredTwoFactor = totp_enabled;
+  const status = totp_enabled ? "pending_totp" : "active";
   const { token } = await sessionRepo.createSession({
     userId: user_id,
-    status: requiredTwoFactor,
+    status,
     ipAddress: req.ip ?? null,
     userAgent: req.get("user-agent") ?? null,
   });

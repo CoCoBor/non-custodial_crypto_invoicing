@@ -3,7 +3,6 @@ import { generateRecoveryCredential } from "../security/recovery-credential.js";
 import { computeBlindIndex } from "../security/blind-index.js";
 import { sealSecret } from "../security/secret-envelope.js";
 import { hasMongoErrorCode } from "../infrastructure/database/mongo-errors.js";
-import { ObjectId } from "mongodb";
 import { User } from "../database/users.model.js";
 
 function generateAccountNumber() {

@@ -4,6 +4,7 @@ import { decimalStrToBigInt, intToDecimalStr } from "./money.function.js";
 
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import marketConfig from "../storage/markets.json" with { type: "json" };
+import { ceilDivide } from "../money/format.js";
 
 const EXTRA_PRICE_DECIMALS = 8;
 const CALCULATION_DECIMALS = 36;
@@ -71,9 +72,8 @@ export function getUsdToCrypto(input: {
   const unitsPerCoin = 10n ** BigInt(coinDecimals);
   const numerator = amountAtPriceScale * unitsPerCoin;
 
-  // 向上取整到币的最小单位。
-  const paymentUnits = (numerator + priceInteger - 1n) / priceInteger;
-
+  const paymentUnits = ceilDivide(numerator,priceInteger)
+  
   return {
     paymentUnits,
     fiatUnits,

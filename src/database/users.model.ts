@@ -35,7 +35,7 @@ export const userSchema = new Schema(
     totp_enabled: { type: Boolean, default: false },
     totp_last_used_step: { type: Number, default: null, select: false },
     merchant_key: { type: String, default: "" },
-    merchant_fee: { type: Number, default: 0.005 },
+    merchant_fee: { type: String, default: "0.005" },
     telegram_id: { type: Number },
     telegram_name: { type: String },
     invoices: [{ id: { type: String, default: "" } }],
