@@ -6,18 +6,6 @@ import { z } from "zod";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import { decimalStrToBigInt } from "./money.function.js";
 
-export function generateBtcAddress(): {
-  address: string;
-  encryptedPrivateKey: SealedSecret;
-} {
-  const privateKey = new bitcore.PrivateKey();
-
-  return {
-    address: privateKey.toAddress().toString(),
-    encryptedPrivateKey: sealSecret("bitcoin-deposit-key", privateKey.toWIF()),
-  };
-}
-
 export async function findInvoiceById(invoiceId: string, userId: string) {
   return await Invoice.findOne({
     invoice_id: invoiceId,

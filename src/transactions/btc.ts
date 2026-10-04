@@ -6,6 +6,9 @@ import { ceilDivide } from "../money/format.js";
 import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { openSecret } from "../security/secret-envelope.js";
+import { getPrice } from "../invoice/price.function.js";
+
+const PRICE_SCALE = 18;
 
 const btcUtxosSchema = z.array(
   z.object({
@@ -52,7 +55,7 @@ async function post(path: string, body: string): Promise<unknown> {
   });
 }
 
-export async function getBtcUtxos(address: string): Promise<
+async function getBtcUtxos(address: string): Promise<
   | {
       txid: string;
       vout: number;
@@ -79,7 +82,7 @@ export async function getBtcUtxos(address: string): Promise<
     .filter((utxo) => utxo.amount > 0n);
 }
 
-export async function getBtcFeeRate(): Promise<bigint | undefined> {
+async function getBtcFeeRate(): Promise<bigint | undefined> {
   const parsed = z
     .object({ result: z.string() })
     .safeParse(await get(`estimatefee/2?conservative=true`));
@@ -90,7 +93,7 @@ export async function getBtcFeeRate(): Promise<bigint | undefined> {
   return feeRate !== undefined && feeRate > 0n ? feeRate : undefined;
 }
 
-export function estimateBtcTransactionSize(
+function estimateBtcTransactionSize(
   inputCount: number,
   outputAddresses: string[],
 ): number {
@@ -119,7 +122,7 @@ export function estimateBtcTransactionSize(
   return transactionVbyte;
 }
 
-export function calculateMerchantPayout(input: {
+function calculateMerchantPayout(input: {
   totalAmount: bigint;
   networkFee: bigint;
   merchantFeeRate: string; //0.005
@@ -155,7 +158,7 @@ export function calculateMerchantPayout(input: {
   };
 }
 
-export function getBtcDustLimit(address: string): bigint {
+function getBtcDustLimit(address: string): bigint {
   const script = bitcore.Script.fromAddress(address);
   const outputBytes = 8 + 1 + script.toBuffer().length;
   const spendingBytes = script.isWitnessProgram() ? 67 : 148;
@@ -164,14 +167,22 @@ export function getBtcDustLimit(address: string): bigint {
   return BigInt(outputBytes + spendingBytes) * dustSatsPerByte;
 }
 
-export function prepareBtcPayout(input: {
+function prepareBtcPayout(input: {
   totalAmount: bigint;
   inputCount: number;
   merchantAddress: string;
   platformAddress: string;
   merchantFeeRate: string;
   satsPer1000Vbytes: bigint;
-}) {
+}):
+  | {
+      networkFee: bigint;
+      platformFee: bigint;
+      merchantAmount: bigint;
+      transactionVbytes: number;
+      output: { address: string; amount: bigint }[];
+    }
+  | undefined {
   const {
     totalAmount,
     inputCount,
@@ -239,7 +250,28 @@ function satoshisToNumber(amount: bigint): number {
   return Number(amount);
 }
 
-export async function broadcastBtcTransaction(
+async function satoshisToFiatUnits(
+  satoshis: bigint,
+): Promise<string | undefined> {
+  try {
+    const price = await getPrice("btc", "usd");
+    if (price === undefined) return undefined;
+
+    const priceUnits = decimalStrToBigInt(price, PRICE_SCALE);
+    if (priceUnits === undefined) return undefined;
+
+    // sats ÷ 10^8 = BTC;  × price = USD;  × 100 = cents
+    const cents =
+      (satoshis * priceUnits * 100n) /
+      (100_000_000n * 10n ** BigInt(PRICE_SCALE));
+
+    return cents.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+async function broadcastBtcTransaction(
   transactionHex: string,
 ): Promise<string | undefined> {
   const parsed = z
@@ -257,14 +289,15 @@ export async function transferBtcToMerchant(
       invoice_id: invoiceId,
       crypto: "btc",
       status: { $in: ["confirmed", "processing"] },
-
-    }).select("+private.private_key +tx.raw").exec()
+    })
+      .select("+private.private_key +tx.raw")
+      .exec();
 
     if (!invoice) return undefined;
 
     async function fail(reason: string) {
       await Invoice.updateOne(
-        { invoice_id: invoice?.invoice_id, status: "confirmed" },
+        { invoice_id: invoiceId, status: "confirmed" },
         { $set: { status: "failed", "timestamps.failed": Date.now() } },
       ).exec();
 
@@ -364,7 +397,7 @@ export async function transferBtcToMerchant(
           "Deposit address and compressed private key do not match",
         );
 
-      // create transaction
+      // create transaction & input transaction vin
       const transaction = new bitcore.Transaction().from(
         utxos.map(
           (utxo) =>
@@ -377,11 +410,11 @@ export async function transferBtcToMerchant(
         ),
       );
 
-      // bitcore never throw err when a duplicate transaction in a utxos 
+      // bitcore never throw err when a duplicate transaction in a utxos
       if (transaction.inputs.length !== utxos.length) {
         throw new Error("Duplicate UTXOs");
       }
-
+      // input transaction vout
       for (const output of payout.output) {
         transaction.to(output.address, satoshisToNumber(output.amount));
       }
@@ -417,10 +450,14 @@ export async function transferBtcToMerchant(
           "Signed transaction pays more fee than its size requires",
         );
       }
+      const receivedAmountFiat = await satoshisToFiatUnits(
+        payout.merchantAmount,
+      );
+      
 
       // ─── Save transaction to db ───────────────────────────────────────
       invoice = await Invoice.findOneAndUpdate(
-        { invoice_id: invoice.invoice_id, status: "confirmed" },
+        { invoice_id: invoiceId, status: "confirmed" },
         {
           $set: {
             status: "processing",
@@ -428,11 +465,14 @@ export async function transferBtcToMerchant(
             "tx.out": transaction.id,
             "tx.raw": transactionHex,
             received_amount: payout.merchantAmount.toString(),
+            ...(receivedAmountFiat !== undefined && {
+              received_amount_fiat: receivedAmountFiat,
+            }),
             network_fee: payout.networkFee.toString(),
             platform_fee: payout.platformFee.toString(),
           },
         },
-        { new: true },
+        { returnDocument: "after" },
       )
         .select("+tx.raw")
         .exec();
@@ -474,7 +514,7 @@ export async function transferBtcToMerchant(
 
     const update = await Invoice.updateOne(
       {
-        invoice_id: invoice.invoice_id,
+        invoice_id: invoiceId,
         status: "processing",
         "tx.out": transactionId,
       },
@@ -490,3 +530,5 @@ export async function transferBtcToMerchant(
     );
   }
 }
+// ─── Swap helpers ──────────────────────────────────────────────────────────────
+

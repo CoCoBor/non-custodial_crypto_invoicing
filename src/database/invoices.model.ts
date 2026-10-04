@@ -39,10 +39,11 @@ const invoiceSchema = new Schema(
     remainder_amount: { type: Number, default: 0 }, // amount payer must pay for invoice to be confirmed
     remainder_amount_fiat: { type: Number, default: 0 }, // amount payer must pay for invoice to be confirmed in the invoice currency
     received_amount: { type: String, default: "0" }, // amount sent to merchant after all fees
-    received_amount_fiat: { type: Number, default: 0 }, // amount sent to merchant after all fees in the invoice currency
+    received_amount_fiat: { type: String, default: null }, // amount sent to merchant after all fees in the invoice currency
     network_fee: { type: String, default: "0" }, // fee to transfer the received asset to the merchant
     platform_fee: { type: String, default: "0" }, // fee charged by the platform, based on user's merchant fee
     swap_fee: { type: Number, default: 0 }, // if to_crypto is another crypto and NEAR Intents is used, fee = amount transferred - network fees - near estimated receive quote
+    review_reason: { type: String, default: "" },
     crypto: { type: String, default: "" }, // cryptocurrency ticker
     address: { type: String, default: "" }, // invoice payment address
     to_crypto: { type: String, default: "" }, // cryptocurrency ticker to convert to
@@ -55,6 +56,8 @@ const invoiceSchema = new Schema(
       in: { type: String, default: "" },
       out: { type: String, default: "" },
       raw: { type: String, default: "", select: false },
+      platform_out: { type: String, default: ""},
+      platform_raw: { type: String, default: "", select: false },
     },
     timestamps: {
       created: { type: Number, default: null },
@@ -71,7 +74,6 @@ const invoiceSchema = new Schema(
     },
   },
   { collection: "invoices" },
-  
 );
 invoiceSchema.index({ invoice_id: 1 }, { unique: true });
 export const Invoice = model("Invoice", invoiceSchema);

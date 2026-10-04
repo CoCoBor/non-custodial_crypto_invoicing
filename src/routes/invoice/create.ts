@@ -6,6 +6,7 @@ import * as priceFunc from "../../invoice/price.function.js";
 import cryptos from "../../storage/cryptos.json" with { type: "json" };
 import * as invoiceFunc from "../../invoice/invoice.function.js";
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
+import { generateBtcAddress } from '../../crypto/btc.js';
 export const createInvoiceRouter = Router();
 
 const createSchema = z.object({
@@ -73,7 +74,7 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
       },
     });
 
-  const deposit = invoiceFunc.generateBtcAddress();
+  const deposit = generateBtcAddress();
 
   const invoice = await invoiceRepo.createInvoice({
     userId: merchant.user_id,

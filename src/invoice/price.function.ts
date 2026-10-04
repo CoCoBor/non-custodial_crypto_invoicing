@@ -18,8 +18,8 @@ type CryptoId = keyof typeof cryptos;
 type Currency = "usd" | "usdt";
 
 /**
- * 根据法币金额和单价，计算应付的币最小单位。
- * coinPrice 必须使用与 fiatAmount 相同的计价货币。
+ * Calculates the payable amount in the coin's smallest unit from a fiat amount and unit price.
+ * coinPrice must be quoted in the same currency as fiatAmount.
  */
 export function getUsdToCrypto(input: {
   fiatAmount: string;
@@ -80,8 +80,8 @@ export function getUsdToCrypto(input: {
   };
 }
 
-// 每家交易所只负责 URL 和自己的响应字段。
-// 金额格式、正数和 bid <= ask 在 getTicker 统一检查。
+// Each exchange only defines its URL and its own response fields.
+// Amount format, positive values, and bid <= ask are checked once in getTicker.
 const exchanges = {
   binance: {
     url: (market: string) =>
@@ -200,7 +200,7 @@ const exchanges = {
         market_type: z.literal("SPOT"),
       })
       .transform((data) => ({
-        // 响应没有市场名称，市场由请求 URL 指定。
+        // The response has no market name; the request URL sets the market.
         symbol: "",
         bid: data.bid,
         ask: data.ask,
@@ -233,7 +233,7 @@ const exchanges = {
           symbol,
           bid: ticker.b[0],
           ask: ticker.a[0],
-          // v[0] 是今天，v[1] 是过去 24 小时。
+          // v[0] is today; v[1] is the last 24 hours.
           volume: ticker.v[1],
           timeMs: null,
         };
@@ -309,7 +309,7 @@ const exchanges = {
       .transform(({ result }) => ({
         symbol: result.data[0].i,
         bid: result.data[0].b,
-        // k 是 ask，a 是最近成交价。
+        // k is the ask; a is the last trade price.
         ask: result.data[0].k,
         volume: result.data[0].v,
         timeMs: result.data[0].t,
@@ -358,7 +358,7 @@ const exchanges = {
         symbol: "",
         bid: data.bid,
         ask: data.ask,
-        // getTicker 根据 market 提取正确的币种成交量。
+        // getTicker picks the right coin's volume based on the market.
         volume: "",
         timeMs: null,
         volumes: data.volume,
@@ -405,8 +405,8 @@ const markets: Record<
   Partial<Record<Currency, Partial<Record<Exchange, string>>>>
 > = marketConfig;
 
-// 这三个来源可以单独读取行情。
-// 目前使用的接口尚未确认成交量窗口与其他来源一致，暂不加权。
+// These three sources can still be read on their own.
+// Their volume window is not yet confirmed to match the other sources, so they are left out of weighting for now.
 const excludedFromWeighting = new Set<Exchange>(["bitstamp", "bitfinex", "xt"]);
 
 const tickerSchema = z.object({
@@ -432,9 +432,9 @@ type Ticker = {
 };
 
 /**
- * 读取一家交易所。
- * 返回的 bid、ask、volume 都是放大 36 位的 bigint。
- * 未配置市场、请求失败或数据无效时返回 undefined。
+ * Reads one exchange.
+ * The returned bid, ask, and volume are bigints scaled up by 36 decimal places.
+ * Returns undefined when the market is not configured, the request fails, or the data is invalid.
  */
 export async function getTicker(
   exchange: Exchange,
@@ -459,7 +459,7 @@ export async function getTicker(
     let raw: unknown;
 
     if (exchange === "bitfinex") {
-      // Node.js 24：保留 JSON 数字的原始文本，避免 Number 舍入。
+      // Node.js 24: keep the original text of JSON numbers to avoid Number rounding.
       raw = JSON.parse(
         await response.text(),
         (_key: string, value: unknown, context?: { source?: string }) => {
@@ -479,7 +479,7 @@ export async function getTicker(
     let candidate: z.infer<typeof tickerSchema>;
 
     if (exchange === "gemini") {
-      // 明确使用 Gemini schema，TypeScript 就知道 volumes 的类型。
+      // Use the Gemini schema explicitly so TypeScript knows the type of volumes.
       const parsed = exchanges.gemini.schema.safeParse(raw);
 
       if (!parsed.success) return undefined;
@@ -515,7 +515,7 @@ export async function getTicker(
 
     const data = checked.data;
 
-    // 这两家响应不包含市场名称，其他来源必须与配置一致。
+    // These two responses have no market name; every other source must match the configured market.
     if (
       exchange !== "bitstamp" &&
       exchange !== "gemini" &&
@@ -554,8 +554,8 @@ export async function getTicker(
 }
 
 /**
- * 取得多个交易所加权后的参考价格字符串。
- * USD 和 USDT 分开计算，不互相替代。
+ * Returns a weighted reference price across exchanges, as a string.
+ * USD and USDT are calculated separately and never substitute for each other.
  */
 export async function getPrice(
   cryptoId: CryptoId,
@@ -567,7 +567,7 @@ export async function getPrice(
 
   const coin = asset.symbol.toLowerCase();
 
-  // 同一资产的单位换算，不表示 USDT 等于 USD。
+  // A same-asset unit conversion; it does not mean USDT equals USD.
   if (coin === currency) return "1";
 
   const configuredMarkets = markets[coin]?.[currency];
@@ -591,7 +591,7 @@ export async function getPrice(
   const now = Date.now();
   const tickers: Ticker[] = [];
 
-  // 整批请求完成后，统一检查时间。
+  // Check timestamps together once the whole batch has finished.
   for (const result of results) {
     if (result.status !== "fulfilled" || result.value === undefined) {
       continue;
@@ -628,13 +628,13 @@ export async function getPrice(
 
   const scaleDifference = 10n ** BigInt(CALCULATION_DECIMALS - PRICE_DECIMALS);
 
-  // 除以 2 得到买卖中间价，同时调整输出精度。
+  // Divide by 2 for the bid/ask midpoint, and rescale to the output precision.
   const denominator = 2n * totalVolume * scaleDifference;
 
   let price = weightedTotal / denominator;
   const remainder = weightedTotal % denominator;
 
-  // 最终结果四舍五入一次。
+  // Round half up, once, on the final result.
   if (remainder * 2n >= denominator) {
     price += 1n;
   }
@@ -645,8 +645,8 @@ export async function getPrice(
 }
 
 /**
- * 将 JSON 原始数字文本中的科学计数法展开。
- * 例如 "1.25e-3" → "0.00125"。
+ * Expands scientific notation in raw JSON number text.
+ * For example, "1.25e-3" → "0.00125".
  */
 function expandNumber(value: string): string {
   const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(value);

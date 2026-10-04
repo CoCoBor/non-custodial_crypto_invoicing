@@ -5,7 +5,9 @@ export type SecretPurpose =
   | "account-number"
   | "totp-secret"
   | "monero-view-key"
-  | "bitcoin-deposit-key";
+  | "bitcoin-deposit-key"
+  | "litecoin-deposit-key"
+  | "ethereum-deposit-key";
 
 export interface SealedSecret {
   keyVersion: number;
