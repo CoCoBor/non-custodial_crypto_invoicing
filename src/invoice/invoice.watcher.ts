@@ -1,6 +1,6 @@
 import { env } from "../config/env.js";
 import { Invoice } from "../database/invoices.model.js";
-import { transferBtcToMerchant } from "../transactions/btc.js";
+import { transferBtcToMerchant, updateSwapStatus } from "../transactions/btc.js";
 import { checkInvoicePayment } from "./invoice.function.js";
 
 export function startInvoiceWatcher() {
@@ -22,7 +22,9 @@ export function startInvoiceWatcher() {
           ],
         },
       })
-        .select("invoice_id user_id status -_id")
+        .select(
+          "invoice_id user_id status to_crypto tx.out swap.deposit_address -_id",
+        )
         .lean()
         .exec();
 
@@ -34,6 +36,20 @@ export function startInvoiceWatcher() {
             invoice.invoice_id,
             env.platformBtcAddress,
           );
+
+          const isSwap = invoice.to_crypto !== "btc";
+          if (
+            isSwap &&
+            invoice.status === "processing" &&
+            invoice.tx?.out &&
+            invoice.swap?.deposit_address
+          ) {
+            await updateSwapStatus(
+              invoice.invoice_id,
+              invoice.tx.out,
+              invoice.swap.deposit_address,
+            );
+          }
           continue;
         }
 
@@ -41,7 +57,7 @@ export function startInvoiceWatcher() {
           invoice.invoice_id,
           invoice.user_id,
         );
-        
+
         if (!result) continue;
 
         if (result && result.status !== invoice.status)

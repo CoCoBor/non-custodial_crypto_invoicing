@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { SealedSecret } from "../security/secret-envelope.js";
 import { Invoice } from "../database/invoices.model.js";
+import cryptos from "../storage/cryptos.json" with { type: "json" };
 
 export async function createInvoice(input: {
   userId: string;
@@ -8,7 +9,9 @@ export async function createInvoice(input: {
   fiatUnits: bigint;
   address: string;
   encryptedPrivateKey: SealedSecret;
+  crypto: string;
   payoutAddress: string;
+  toCrypto: keyof typeof cryptos;
   lifetime: number;
 }) {
   const invoiceId = randomUUID();
@@ -19,12 +22,12 @@ export async function createInvoice(input: {
     user_id: input.userId,
     status: "waiting",
     currency: "usd",
-    crypto: "btc",
+    crypto: input.crypto,
     amount: input.paymentUnits.toString(),
     amount_fiat: input.fiatUnits.toString(),
     paid_amount: "0",
     address: input.address,
-    to_crypto: "btc",
+    to_crypto: input.toCrypto,
     to_address: input.payoutAddress,
     lifetime: input.lifetime,
     underpaid: 0,
@@ -55,5 +58,7 @@ export async function createInvoice(input: {
     address,
     lifetime,
     createdAt: timestamps?.created,
+    toCrypto: result.to_crypto,
+    toAddress: result.to_address,
   };
 }

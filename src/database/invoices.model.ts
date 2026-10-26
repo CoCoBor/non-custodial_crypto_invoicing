@@ -56,8 +56,22 @@ const invoiceSchema = new Schema(
       in: { type: String, default: "" },
       out: { type: String, default: "" },
       raw: { type: String, default: "", select: false },
-      platform_out: { type: String, default: ""},
-      platform_raw: { type: String, default: "", select: false },
+      platform_out: { type: String, default: "" }, //use when swap
+      platform_raw: { type: String, default: "", select: false }, //use when swap
+    },
+    swap: {
+      deposit_address: { type: String, default: "" },
+      status: { type: String, default: "" },
+      deadline: { type: String, default: "" },
+      destination_txids: { type: [String], default: [] },
+      origin_txids: { type: [String], default: [] },
+      refunded_amount: { type: String, default: "0" },
+
+      quote_response: {
+        type: Schema.Types.Mixed,
+        default: null,
+        select: false,
+      },
     },
     timestamps: {
       created: { type: Number, default: null },

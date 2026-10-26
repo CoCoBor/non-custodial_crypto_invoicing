@@ -56,9 +56,11 @@ export const env = Object.freeze({
   ),
 
   platformBtcAddress: readRequiredString(
-  "PLATFORM_BTC_ADDRESS",
-  process.env.PLATFORM_BTC_ADDRESS,
-),
+    "PLATFORM_BTC_ADDRESS",
+    process.env.PLATFORM_BTC_ADDRESS,
+  ),
+
+  nearIntentsJwt: readRequiredString("NEAR_INTENTS", process.env.NEAR_INTENTS),
 });
 
 function readRequiredString(name: string, value: string | undefined): string {
