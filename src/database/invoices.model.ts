@@ -54,10 +54,10 @@ const invoiceSchema = new Schema(
     callback_url: { type: String, default: "" }, // url where transaction notifications are sent to
     tx: {
       in: { type: String, default: "" },
-      out: { type: String, default: "" },
-      raw: { type: String, default: "", select: false },
-      platform_out: { type: String, default: "" }, //use when swap
-      platform_raw: { type: String, default: "", select: false }, //use when swap
+      out: { type: String, default: "" }, // txid
+      raw: { type: String, default: "", select: false }, // txhex
+      platform_out: { type: String, default: "" }, 
+      platform_raw: { type: String, default: "", select: false }, 
     },
     swap: {
       deposit_address: { type: String, default: "" },

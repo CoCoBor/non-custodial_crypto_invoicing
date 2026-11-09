@@ -10,42 +10,17 @@ import { openSecret } from "../security/secret-envelope.js";
 const ETH_CHAIN_ID = 1n;
 const ETH_TRANSFER_GAS = 21_000n;
 
-const MERCHANT_NONCE = 0;
-const PLATFORM_NONCE = 1;
-
-// merchant_fee is a rate such as "0.005". Scale it up to a whole number so bigint can use it.
-const FEE_RATE_DECIMALS = 8;
-const FEE_RATE_SCALE = 10n ** BigInt(FEE_RATE_DECIMALS);
-
 // Increase the suggested legacy gas price by 25%.
 // This increases the actual fee and does not guarantee inclusion.
 const GAS_PRICE_HEADROOM_PERCENT = 125n;
 
-// JSON-RPC sends numbers as hex strings without leading zeros, e.g. "0x5208" = 21000.
-const quantitySchema = z.string().regex(/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/);
+const MERCHANT_NONCE = 0;
+const PLATFORM_NONCE = 1;
 
-// A transaction hash: "0x" followed by 64 hex characters.
-const transactionIdSchema = z.string().regex(/^0x[0-9a-fA-F]{64}$/);
+const FEE_RATE_DECIMALS = 8;
+const FEE_RATE_SCALE = 10n ** BigInt(FEE_RATE_DECIMALS);
 
-// The receipt fields we use. A receipt only exists once the transaction is in a block.
-const receiptSchema = z.object({
-  transactionHash: transactionIdSchema,
-  blockNumber: quantitySchema,
-  status: z.enum(["0x0", "0x1"]), // "0x1" = success, "0x0" = reverted
-  gasUsed: quantitySchema, // gas actually used; 21000 for a plain transfer
-  effectiveGasPrice: quantitySchema, // price actually paid per gas, in wei
-});
-
-const rpcErrorSchema = z.object({
-  error: z.object({ code: z.number(), message: z.string() }),
-});
-
-const rpcResultSchema = z.object({ result: z.unknown() });
-
-/**
- * Calls one Ethereum JSON-RPC method on NOWNodes and returns its `result`.
- * Returns undefined when the request fails or the node answers with an error.
- */
+const STUCK_TX_REVIEW_MS = 24 * 60 * 60 * 1000;
 async function post(method: string, params: unknown[]): Promise<unknown> {
   try {
     const res = await fetch("https://eth.nownodes.io/", {
@@ -66,72 +41,60 @@ async function post(method: string, params: unknown[]): Promise<unknown> {
     });
 
     if (!res.ok) {
-      console.warn("ETH RPC HTTP error:", method, res.status);
+      console.warn("ETH RPC HTTP failed:", method, res.status);
       return undefined;
     }
 
     const body: unknown = await res.json();
 
-    // Check for an error first, so the node's reason is logged instead of lost.
-    // Never log params: for eth_sendRawTransaction they hold the whole signed transaction.
-    const rpcError = rpcErrorSchema.safeParse(body);
+    const rpcError = z
+      .object({
+        error: z.object({ code: z.number(), message: z.string() }),
+      })
+      .safeParse(body);
+
     if (rpcError.success) {
       console.warn(
-        "ETH RPC error:",
+        "ETH rpc error",
         method,
-        rpcError.data.error.code,
-        rpcError.data.error.message,
+        rpcError.data?.error.code,
+        rpcError.data?.error.message,
       );
       return undefined;
     }
 
-    // `result: null` is a real answer, e.g. a receipt for a transaction not yet in a block.
-    const parsed = rpcResultSchema.safeParse(body);
-
-    return parsed.success ? parsed.data.result : undefined;
+    const rpcResult = z.object({ result: z.unknown() }).safeParse(body);
+    return rpcResult.success ? rpcResult.data.result : undefined;
   } catch (error) {
-    // Timeouts and network failures land here.
     console.warn(
       "ETH RPC request failed:",
       method,
       error instanceof Error ? error.message : "unknown error",
     );
-    return undefined;
   }
 }
 
-/** Calls a method that returns a hex number, and converts the result to bigint. */
 async function getEthQuantity(method: string, params: unknown[]) {
-  const parsed = quantitySchema.safeParse(await post(method, params));
-
+  const parsed = z
+    .string()
+    .regex(/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/)
+    .safeParse(await post(method, params));
   return parsed.success ? BigInt(parsed.data) : undefined;
 }
 
-/** Balance of an address in wei, as of the latest block. */
 async function getEthBalance(address: string) {
-  return getEthQuantity("eth_getBalance", [address, "latest"]);
+  return await getEthQuantity("eth_getBalance", [address, "latest"]);
 }
 
-/** The node's current gas price in wei. Returns undefined if it is missing or zero. */
 async function getEthGasPrice() {
-  const gasPrice = await getEthQuantity("eth_gasPrice", []);
-
-  return gasPrice !== undefined && gasPrice > 0n ? gasPrice : undefined;
+  const gas = await getEthQuantity("eth_gasPrice", []);
+  return gas !== undefined && gas > 0n ? gas : undefined;
 }
 
-/**
- * How many transactions an address has sent, which is also its next nonce.
- * "latest" counts only transactions already in a block.
- * "pending" also counts ones still waiting in the node's mempool.
- */
 async function getEthNonce(address: string, block: "latest" | "pending") {
-  return getEthQuantity("eth_getTransactionCount", [address, block]);
+  return await getEthQuantity("eth_getTransactionCount", [address, block]);
 }
 
-/**
- * The contract code stored at an address.
- * "0x" (empty) means a normal wallet. Anything else is a contract or a delegated wallet.
- */
 async function getEthCode(address: string) {
   const parsed = z
     .string()
@@ -141,133 +104,152 @@ async function getEthCode(address: string) {
   return parsed.success ? parsed.data : undefined;
 }
 
-/**
- * Splits a deposit into the network fee, the platform fee and the merchant's share.
- * The platform fee is taken from what is left after the network fee, rounded up.
- * Returns undefined when the rate is invalid or nothing would be left for the merchant.
- */
-function calculateMerchantPayout(input: {
-  totalAmount: bigint;
-  networkFee: bigint;
-  merchantFeeRate: string;
-}):
-  | {
-      networkFee: bigint;
-      platformFee: bigint;
-      merchantAmount: bigint;
-    }
-  | undefined {
-  const { totalAmount, networkFee, merchantFeeRate } = input;
+async function broadcastEthTx(hex: string) {
+  const parsed = z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{64}$/)
+    .safeParse(await post("eth_sendRawTransaction", [hex]));
 
-  const feeRate = decimalStrToBigInt(merchantFeeRate, FEE_RATE_DECIMALS);
-
-  if (
-    feeRate === undefined ||
-    feeRate >= FEE_RATE_SCALE ||
-    networkFee < 0n ||
-    totalAmount <= networkFee
-  )
-    return undefined;
-
-  const amountAfterNetworkFee = totalAmount - networkFee;
-
-  const platformFee = ceilDivide(
-    amountAfterNetworkFee * feeRate,
-    FEE_RATE_SCALE,
-  );
-
-  const merchantAmount = amountAfterNetworkFee - platformFee;
-
-  if (merchantAmount <= 0n) return undefined;
-
-  return {
-    networkFee,
-    platformFee,
-    merchantAmount,
-  };
+  return parsed.success ? parsed.data : undefined;
 }
 
-/**
- * Works out the payout for a deposit, all in wei.
- * Normally there are two transfers: one to the merchant and one to the platform.
- * If the deposit is too small for two transfers, or the platform fee would not even
- * cover its own transfer, the platform fee is dropped and the merchant gets
- * everything left after a single transfer fee.
- */
-function prepareEthPayout(input: {
-  totalAmount: bigint;
-  merchantFeeRate: string;
-  gasPrice: bigint;
-}) {
-  const { totalAmount, merchantFeeRate, gasPrice } = input;
-
-  if (gasPrice <= 0n) throw new RangeError("Gas price must be positive");
-
-  const singleTransactionFee = ETH_TRANSFER_GAS * gasPrice;
-
-  if (totalAmount <= singleTransactionFee) return undefined;
-
-  const payout = calculateMerchantPayout({
-    totalAmount,
-    networkFee: singleTransactionFee * 2n,
-    merchantFeeRate,
+// 0x0 is completed but fund revert, rather than fail
+async function getEthTxReceipt(txId: string) {
+  const res = await post("eth_getTransactionReceipt", [txId]);
+  if (res === null) return null;
+  const receiptSchema = z.object({
+    transactionHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+    blockNumber: z.string().regex(/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/),
+    status: z.enum(["0x0", "0x1"]), // "0x1" = success, "0x0" = reverted
+    gasUsed: z.string().regex(/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/), // gas actually used; 21000 for a plain transfer
+    effectiveGasPrice: z.string().regex(/^0x(?:0|[1-9a-fA-F][0-9a-fA-F]*)$/), // price actually paid per gas, in wei
   });
 
-  if (!payout || payout.platformFee <= singleTransactionFee)
-    return {
-      networkFee: singleTransactionFee,
-      platformFee: 0n,
-      merchantAmount: totalAmount - singleTransactionFee,
-    };
+  const parsed = receiptSchema.safeParse(res);
 
-  return payout;
-}
-
-/**
- * Sends a signed transaction to the network and returns its hash.
- * Returns undefined when the node rejects it, including "already known" when it is sent again.
- */
-async function broadcastEthTransaction(transactionHex: string) {
-  const parsed = transactionIdSchema.safeParse(
-    await post("eth_sendRawTransaction", [transactionHex]),
-  );
-
-  return parsed.success ? parsed.data.toLowerCase() : undefined;
-}
-
-/**
- * Looks up the receipt of a transaction.
- * - receipt:   the transaction is in a block (check `status` to see if it succeeded)
- * - null:      not in a block yet (still waiting, or dropped from the mempool)
- * - undefined: the lookup itself failed, so we do not know
- */
-async function getEthTransactionReceipt(transactionId: string) {
-  const data = await post("eth_getTransactionReceipt", [transactionId]);
-  if (data === null) return null;
-
-  const parsed = receiptSchema.safeParse(data);
-
-  if (
-    !parsed.success ||
-    parsed.data.transactionHash.toLowerCase() !== transactionId
-  )
+  if (!parsed.success || parsed.data.transactionHash.toLowerCase() !== txId)
     return undefined;
 
   return parsed.data;
 }
 
-/**
- * Pays out a confirmed ETH invoice from its deposit address. Runs in two steps:
- *
- * 1. "confirmed":  check the addresses and balance, sign the merchant and platform
- *    transfers, and save them with the invoice as it moves to "processing".
- * 2. "processing": send the saved transfers in nonce order and wait for their receipts.
- *    The invoice becomes "completed" only when every transfer is in a block and succeeded.
- *
- * Safe to call again at any time: after step 1 it only re-sends the same signed
- * transactions and never signs new ones.
- */
-export async function transferEthToMerchant(
+function decideTransferCount(input: {
+  balance: bigint;
+  gasPrice: bigint;
+  feeRate: bigint;
+}): { platformFee: bigint; merchantAmount: bigint } | undefined {
+  const { balance, feeRate, gasPrice } = input;
+
+  if (feeRate === 0n) {
+    const merchantAmount = balance - gasPrice * ETH_TRANSFER_GAS;
+    if (merchantAmount <= 0n) return undefined;
+    return {
+      platformFee: 0n,
+      merchantAmount,
+    };
+  }
+
+  const networkFee = gasPrice * ETH_TRANSFER_GAS * 2n;
+  const net = balance - networkFee;
+  if (net <= 0n) return undefined;
+  const platformFee = ceilDivide(net * feeRate, FEE_RATE_SCALE);
+
+  const merchantAmount = net - platformFee;
+
+  if (merchantAmount <= 0n) return undefined;
+
+  return {
+    platformFee,
+    merchantAmount,
+  };
+}
+
+function prepareEthPayout(input: {
+  chainId: bigint;
+  merchantAddress: string;
+  platformAddress: string;
+  balance: bigint;
+  gasPrice: bigint;
+  feeRate: bigint;
+}):
+  | {
+      chainId: bigint;
+      nonce: number;
+      to: string;
+      value: bigint;
+      gasPrice: bigint;
+    }[]
+  | undefined {
+  const {
+    chainId,
+    merchantAddress,
+    platformAddress,
+    balance,
+    gasPrice,
+    feeRate,
+  } = input;
+  if (chainId !== 1n) return;
+  if (!isAddress(merchantAddress)) {
+    return;
+  }
+  if (!isAddress(platformAddress)) return undefined;
+  if (input.gasPrice <= 0n) return undefined;
+
+  const count = decideTransferCount({ balance, gasPrice, feeRate });
+  if (count === undefined) return undefined;
+
+  let payout = [
+    {
+      chainId,
+      nonce: MERCHANT_NONCE,
+      to: merchantAddress,
+      value: count.merchantAmount,
+      gasPrice,
+    },
+  ];
+
+  if (count.platformFee > 0n) {
+    payout.push({
+      chainId,
+      nonce: PLATFORM_NONCE,
+      to: platformAddress,
+      value: count.platformFee,
+      gasPrice,
+    });
+  }
+
+  return payout;
+}
+
+async function sign(
+  wallet: Wallet,
+  txs: {
+    chainId: bigint;
+    nonce: number;
+    to: string;
+    value: bigint;
+    gasPrice: bigint;
+  }[],
+): Promise<{ nonce: number; transactionHex: string; transactionId: string }[]> {
+  const signed = [];
+  for (const tx of txs) {
+    const hex = await wallet.signTransaction({
+      ...tx,
+      type: 0,
+      gasLimit: ETH_TRANSFER_GAS,
+    });
+
+    signed.push({
+      nonce: tx.nonce,
+      transactionHex: hex,
+      transactionId: keccak256(hex),
+    });
+  }
+
+  return signed;
+}
+
+async function transferEthToMerchant(
   invoiceId: string,
   platformAddress: string,
 ) {
@@ -279,133 +261,131 @@ export async function transferEthToMerchant(
     })
       .select("+private.private_key +tx.raw +tx.platform_raw")
       .exec();
-
     if (!invoice) return undefined;
 
-    // Marks a confirmed invoice as failed. Only for problems that waiting will not fix.
     async function fail(reason: string) {
-      await Invoice.updateOne(
+      const result = await Invoice.updateOne(
         { invoice_id: invoiceId, status: "confirmed" },
-        { $set: { status: "failed", "timestamps.failed": Date.now() } },
+        {
+          $set: {
+            status: "failed",
+            "timestamps.failed": Date.now(),
+            review_reason: reason,
+          },
+        },
       ).exec();
 
-      console.error("ETH payout failed:", invoiceId, reason);
-    }
-
-    // Make sure the node is Ethereum mainnet before trusting any balance or nonce from it.
-    const chainId = await getEthQuantity("eth_chainId", []);
-
-    if (chainId !== ETH_CHAIN_ID) {
-      console.warn("Ethereum mainnet RPC is unavailable:", invoiceId);
-      return;
-    }
-
-    // ─── Step 1: sign and save the payout (runs once per invoice) ──────────
-    if (invoice.status === "confirmed") {
-      if (invoice.to_crypto !== "eth" || invoice.fee_paid_by_payer)
-        return await fail(
-          "Only native ETH payouts with merchant-paid fees are supported",
+      if (result.matchedCount === 0) {
+        console.warn(
+          "ETH payout: could not mark failed, invoice is no longer confirmed:",
+          invoiceId,
+          reason,
         );
+        return;
+      }
+      console.error("Eth payout failed:", invoiceId, reason);
+    }
 
+    if (invoice.status === "confirmed") {
       const user = await User.findOne({ user_id: invoice.user_id })
         .select("merchant_fee")
         .exec();
 
-      if (!user) return await fail("Merchant was not found");
-
-      if (!invoice.private?.private_key)
-        return await fail("Deposit private key is missing");
-
-      // Every address must be a normal wallet. A contract runs code when it receives
-      // ETH, which needs more than 21000 gas, so our transfer to it would fail.
-      for (const address of [
-        invoice.address,
-        invoice.to_address,
-        platformAddress,
-      ]) {
-        if (!isAddress(address) || BigInt(address) <= 0xffffn)
-          return await fail(
-            "Expected a valid wallet address outside the reserved address range",
-          );
-
-        const code = await getEthCode(address);
-
-        // Lookup failed: try again on the next run.
-        if (code === undefined) return;
-
-        if (code !== "0x")
-          return await fail(
-            "Contract and delegated wallets are not supported by this payout flow",
-          );
-      }
-      const depositAddress = getAddress(invoice.address);
-      const merchantAddress = getAddress(invoice.to_address);
-      const platformWalletAddress = getAddress(platformAddress);
-
-      if (
-        merchantAddress === depositAddress ||
-        platformWalletAddress === depositAddress
-      )
-        return await fail(
-          "Payout address must differ from the deposit address",
+      if (!user) {
+        await fail(
+          `Payout stopped: merchant account ${invoice.user_id} was not found. All funds are still at deposit address ${invoice.address}. Check whether the merchant was deleted, then pay out manually.`,
         );
+        return;
+      }
 
-      const feeRate = decimalStrToBigInt(user.merchant_fee, FEE_RATE_DECIMALS);
+      if (!invoice.private?.private_key) {
+        await fail(
+          `Payout stopped: the deposit private key is missing from the database. All funds are still at deposit address ${invoice.address}. Restore the key from backup; without it the funds cannot be moved.`,
+        );
+        return;
+      }
 
-      if (feeRate === undefined || feeRate >= FEE_RATE_SCALE)
-        return await fail("Invalid merchant fee rate");
-
-      const totalAmount = await getEthBalance(depositAddress);
-
+      const merchantAddress = invoice.to_address;
       const networkGasPrice = await getEthGasPrice();
-      const gasPrice =
-        networkGasPrice === undefined
-          ? undefined
-          : ceilDivide(networkGasPrice * GAS_PRICE_HEADROOM_PERCENT, 100n);
+      if (networkGasPrice === undefined) {
+        console.warn("Eth gas price unavailable: will retry:", invoiceId);
+        return;
+      }
+      const gasPrice = ceilDivide(
+        networkGasPrice * GAS_PRICE_HEADROOM_PERCENT,
+        100n,
+      );
+      const merchantFeeRate = user.merchant_fee;
+      const feeRate = decimalStrToBigInt(merchantFeeRate, FEE_RATE_DECIMALS);
+      if (feeRate === undefined) {
+        await fail(
+          `Payout stopped: merchant fee rate "${merchantFeeRate}" is not a valid decimal. All funds are still at deposit address ${invoice.address}. Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`,
+        );
+        return;
+      }
+      if (feeRate >= FEE_RATE_SCALE) {
+        await fail(
+          `Payout stopped: merchant fee rate "${merchantFeeRate}" is 100% or more. All funds are still at deposit address ${invoice.address}. Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`,
+        );
+        return;
+      }
+      const balance = await getEthBalance(invoice.address);
+      if (balance === undefined) {
+        console.warn("ETH balances unavailable; will retry:", invoiceId);
+        return;
+      }
+      if (balance < BigInt(invoice.amount)) {
+        await fail(
+          `Payout stopped: balance ${balance} wei is below the invoice amount ${invoice.amount} wei, although the invoice is confirmed. Funds still at deposit address ${invoice.address}: ${balance} wei. Check on a block explorer whether the payment was replaced or reorged.`,
+        );
+        return;
+      }
 
-      const latestNonce = await getEthNonce(depositAddress, "latest");
-      const pendingNonce = await getEthNonce(depositAddress, "pending");
+      if (!isAddress(merchantAddress)) {
+        await fail(
+          `Payout stopped: merchant payout address "${merchantAddress}" is not a valid Ethereum address. All funds are still at deposit address ${invoice.address}. Fix the merchant's ETH address, then pay out manually.`,
+        );
+        return;
+      }
 
-      if (
-        totalAmount === undefined ||
-        gasPrice === undefined ||
-        latestNonce === undefined ||
-        pendingNonce === undefined
-      ) {
+      if (getAddress(merchantAddress) === getAddress(invoice.address)) {
+        await fail(
+          `Payout stopped: merchant payout address is the deposit address itself (${invoice.address}). All funds are still there. Fix the merchant's ETH address, then pay out manually.`,
+        );
+        return;
+      }
+
+      const latestNonce = await getEthNonce(invoice.address, "latest");
+      const pendingNonce = await getEthNonce(invoice.address, "pending");
+      if (latestNonce === undefined || pendingNonce === undefined) {
         console.warn(
-          "ETH payout is waiting for balance, gas price or nonce:",
+          "Could not get deposit address nonce; will retry:",
           invoiceId,
         );
         return;
       }
 
-      // A fresh deposit address has never sent anything. A nonce above 0 means something
-      // was sent from it that the database does not know about, so stop for a manual check.
       if (latestNonce !== 0n || pendingNonce !== 0n) {
-        console.error(
-          "Deposit address has sent transactions the database does not know about:",
-          invoiceId,
+        await fail(
+          `Payout stopped: deposit address ${invoice.address} has already sent a transaction (latest nonce ${latestNonce}, pending nonce ${pendingNonce}), but this invoice has no saved payout. Funds may have moved. Check the address on a block explorer before doing anything.`,
         );
         return;
       }
-
-      if (totalAmount < BigInt(invoice.amount)) {
-        console.warn(
-          "ETH deposit balance is below the invoice amount:",
-          invoiceId,
-        );
-        return;
-      }
-      // ─── Calculate outputs ──────────────────────────────────────────────
 
       const payout = prepareEthPayout({
-        totalAmount,
-        merchantFeeRate: user.merchant_fee,
+        chainId: ETH_CHAIN_ID,
+        merchantAddress,
+        platformAddress,
+        balance,
         gasPrice,
+        feeRate,
       });
 
-      if (!payout) {
-        console.warn("ETH payout is too small after fees:", invoiceId);
+      if (payout === undefined) {
+        console.warn(
+          "Could not prepare the payout will try next round",
+          invoiceId,
+        );
         return;
       }
 
@@ -413,61 +393,65 @@ export async function transferEthToMerchant(
         openSecret("ethereum-deposit-key", invoice.private.private_key),
       );
 
-      // The key must belong to the deposit address before we sign anything with it.
-      if (wallet.address !== depositAddress)
-        return await fail("Deposit address and private key do not match");
-
-      // ─── Build & sign transaction ───────────────────────────────────────
-
-      // Sign both transfers now, but do not send them yet.
-      // Legacy (type 0) transactions charge exactly gasPrice, so the fee is known in advance.
-      const transactionHex = await wallet.signTransaction({
-        type: 0,
-        chainId: ETH_CHAIN_ID,
-        nonce: MERCHANT_NONCE,
-        to: merchantAddress,
-        value: payout.merchantAmount,
-        gasLimit: ETH_TRANSFER_GAS,
-        gasPrice,
-      });
-
-      // A transaction's hash is the keccak256 of its signed bytes.
-      const transactionId = keccak256(transactionHex);
-
-      let platformTransactionHex = "";
-      let platformTransactionId = "";
-
-      if (payout.platformFee > 0n) {
-        platformTransactionHex = await wallet.signTransaction({
-          type: 0,
-          chainId: ETH_CHAIN_ID,
-          nonce: PLATFORM_NONCE,
-          to: platformWalletAddress,
-          value: payout.platformFee,
-          gasLimit: ETH_TRANSFER_GAS,
-          gasPrice,
-        });
-
-        platformTransactionId = keccak256(platformTransactionHex);
+      if (getAddress(wallet.address) !== getAddress(invoice.address)) {
+        await fail(
+          `Payout stopped: the stored key opens ${wallet.address}, not deposit address ${invoice.address}. All funds are still at the deposit address. Do not retry; investigate the key storage.`,
+        );
+        return;
       }
 
-      // ─── Save transaction to db ───────────────────────────────────────
+      const merchantCode = await getEthCode(merchantAddress);
+      if (merchantCode === undefined) {
+        console.warn("ETH code lookup unavailable; will retry:", invoiceId);
+        return;
+      }
 
-      // Save the signed transfers and move to "processing" in one update. Only one run
-      // can win this, so a payout is never signed twice with different amounts.
+      if (merchantCode !== "0x") {
+        await fail(
+          `Payout stopped: merchant address ${merchantAddress} is a contract or delegated wallet and cannot receive a 21,000-gas transfer. All funds are still at deposit address ${invoice.address}. Ask the merchant for a normal wallet address, then pay out manually.`,
+        );
+        return;
+      }
+
+      const signedTxs = await sign(wallet, payout);
+
+      const merchantTx = signedTxs.find((t) => t.nonce === MERCHANT_NONCE);
+      if (merchantTx === undefined) {
+        throw new Error(
+          "Bug: signed txs are missing the merchant tx (nonce 0)",
+        );
+      }
+      const platformTx = signedTxs.find((t) => t.nonce === PLATFORM_NONCE);
+
+      const merchantPayout = payout.find((t) => t.nonce === MERCHANT_NONCE);
+      if (merchantPayout === undefined) {
+        throw new Error("Bug: payout is missing the merchant tx (nonce 0)");
+      }
+      const platformPayout = payout.find((t) => t.nonce === PLATFORM_NONCE);
+      let platformFee: bigint;
+      if (platformPayout === undefined) {
+        platformFee = 0n;
+      } else {
+        platformFee = platformPayout.value;
+      }
+
+      const networkFee = balance - merchantPayout.value - platformFee;
+
       invoice = await Invoice.findOneAndUpdate(
-        { invoice_id: invoiceId, status: "confirmed" },
+        { invoice_id: invoiceId, status: "confirmed", crypto: "eth" },
         {
           $set: {
             status: "processing",
             "timestamps.processing": Date.now(),
-            "tx.out": transactionId,
-            "tx.raw": transactionHex,
-            "tx.platform_out": platformTransactionId,
-            "tx.platform_raw": platformTransactionHex,
-            received_amount: payout.merchantAmount.toString(),
-            network_fee: payout.networkFee.toString(),
-            platform_fee: payout.platformFee.toString(),
+            "tx.out": merchantTx.transactionId,
+            "tx.raw": merchantTx.transactionHex,
+            ...(platformTx !== undefined && {
+              "tx.platform_out": platformTx.transactionId,
+              "tx.platform_raw": platformTx.transactionHex,
+            }),
+            received_amount: merchantPayout.value.toString(),
+            network_fee: networkFee.toString(),
+            platform_fee: platformFee.toString(),
           },
         },
         {
@@ -477,34 +461,51 @@ export async function transferEthToMerchant(
         .select("+tx.raw +tx.platform_raw")
         .exec();
 
-      if (!invoice) return undefined;
+      if (invoice === null) {
+        console.warn("Another run claimed it first", invoiceId);
+        return;
+      }
     }
 
-    // ─── Step 2: send the saved transfers and wait for them to be mined ───
-    if (!invoice.tx?.out || !invoice.tx.raw) {
+    const txId = invoice.tx?.out;
+    const hex = invoice.tx?.raw;
+
+    if (!txId || !hex) {
+      await Invoice.updateOne(
+        { invoice_id: invoiceId, status: "processing" },
+        {
+          $set: {
+            review_reason: `Invoice is processing but has no saved merchant transaction. The claim always saves it, so this is a bug or a manual DB edit. Funds may still be at deposit address ${invoice.address}; check a block explorer before resending anything.`,
+          },
+        },
+      ).exec();
       console.error(
-        "Processing invoice has no saved ETH transaction:",
+        "ETH invoice is processing but has no saved tx; needs review:",
         invoiceId,
       );
       return;
     }
 
-    // Merchant first (nonce 0), then platform (nonce 1).
-    const transactions = [
-      { name: "merchant", id: invoice.tx.out, raw: invoice.tx.raw },
-    ];
+    const txs = [{ nonce: MERCHANT_NONCE, id: txId, raw: hex }];
 
     if (BigInt(invoice.platform_fee) > 0n) {
-      if (!invoice.tx.platform_out || !invoice.tx.platform_raw) {
+      if (!invoice.tx?.platform_out || !invoice.tx?.platform_raw) {
+        await Invoice.updateOne(
+          { invoice_id: invoiceId, status: "processing" },
+          {
+            $set: {
+              review_reason: `Invoice is processing with a platform fee, but has no saved platform transaction. The claim always saves it, so this is a bug or a manual DB edit. The platform fee may still be at deposit address ${invoice.address}; check a block explorer before resending anything.`,
+            },
+          },
+        ).exec();
         console.error(
-          "Processing invoice has no saved platform transaction:",
+          "ETH invoice is processing but has no saved platform tx; needs review:",
           invoiceId,
         );
         return;
       }
-
-      transactions.push({
-        name: "platform",
+      txs.push({
+        nonce: PLATFORM_NONCE,
         id: invoice.tx.platform_out,
         raw: invoice.tx.platform_raw,
       });
@@ -512,76 +513,92 @@ export async function transferEthToMerchant(
 
     let actualNetworkFee = 0n;
 
-    for (const transaction of transactions) {
-      const receipt = await getEthTransactionReceipt(transaction.id);
-
-      // Lookup failed: try again on the next run.
-      if (receipt === undefined) return;
-
-      // ─── Broadcast ──────────────────────────────────────────────────────
-
-      // Not in a block yet. Sending the same signed transaction again is safe:
-      // it has the same nonce and hash, so it can never be paid twice.
-      if (receipt === null) {
-        const broadcastId = await broadcastEthTransaction(transaction.raw);
-
-        if (broadcastId === transaction.id) {
-          console.log(
-            "ETH payout broadcast:",
-            invoiceId,
-            transaction.name,
-            transaction.id,
-          );
-        } else {
-          console.warn(
-            "ETH broadcast is unconfirmed; keep processing:",
-            invoiceId,
-            transaction.id,
-          );
-        }
-        // Wait for a receipt before sending the next transaction.
+    for (const tx of txs) {
+      const receipt = await getEthTxReceipt(tx.id);
+      if (receipt === undefined) {
+        console.warn(
+          "ETH receipt lookup failed; will retry:",
+          invoiceId,
+          tx.id,
+        );
         return;
       }
 
+      if (receipt === null) {
+        const broadcastId = await broadcastEthTx(tx.raw);
+
+        if (broadcastId === tx.id) {
+          console.log("ETH payout broadcast:", invoiceId, tx.id);
+        } else {
+          console.warn(
+            "ETH broadcast unconfirmed; keep processing:",
+            invoiceId,
+            tx.id,
+          );
+        }
+
+        const processingAt = invoice.timestamps?.processing;
+
+        if (
+          processingAt != null &&
+          Date.now() - processingAt >= STUCK_TX_REVIEW_MS
+        ) {
+          const reason =
+            tx.nonce === PLATFORM_NONCE
+              ? `Merchant was paid, but platform transfer ${tx.id} has no receipt yet and the payout has been processing for over 24 hours. The platform fee is still at deposit address ${invoice.address}. Keep waiting; review if this continues.`
+              : `Merchant transfer ${tx.id} has no receipt after 24 hours. The merchant has not been paid yet. Funds are still at deposit address ${invoice.address}. Keep waiting; review if this continues.`;
+
+          const result = await Invoice.updateOne(
+            {
+              invoice_id: invoiceId,
+              status: "processing",
+              review_reason: { $ne: reason },
+            },
+            { $set: { review_reason: reason } },
+          ).exec();
+
+          if (result.modifiedCount === 1) {
+            console.error("ETH payout stuck; needs review:", invoiceId, tx.id);
+          }
+        }
+
+        return;
+      }
       // What this transfer really cost: gas used × price per gas.
       actualNetworkFee +=
         BigInt(receipt.gasUsed) * BigInt(receipt.effectiveGasPrice);
 
-      // "0x0" means reverted: the transfer is in a block and its gas was paid, but no ETH moved.
-      if (receipt.status !== "0x1") {
-        // The merchant was paid; only the fee transfer failed, and that ETH stays at the deposit address.
-        if (transaction.name === "platform") {
+      if (receipt.status === "0x0") {
+        if (tx.nonce === PLATFORM_NONCE) {
           await Invoice.updateOne(
             {
               invoice_id: invoiceId,
               status: "processing",
-              "tx.out": invoice.tx.out,
+              "tx.platform_out": tx.id,
             },
             {
               $set: {
                 status: "completed",
                 "timestamps.completed": Date.now(),
                 network_fee: actualNetworkFee.toString(),
-                review_reason:
-                  "Platform fee transfer reverted; funds remain at the deposit address",
+
+                review_reason: `Platform fee transfer ${tx.id} reverted: its gas was paid, but no ETH moved. The merchant was paid. The platform fee (${invoice.platform_fee} wei) is still at deposit address ${invoice.address}. Send the platform fee manually.`,
               },
             },
           ).exec();
           console.error(
             "ETH platform fee transaction reverted; merchant was paid:",
             invoiceId,
-            transaction.id,
+            tx.id,
           );
           return;
         }
 
-        // The merchant transfer failed, so the platform transfer was never sent.
-        // The ETH is still at the deposit address, minus this transfer's gas.
         await Invoice.updateOne(
           {
             invoice_id: invoiceId,
             status: "processing",
-            "tx.out": invoice.tx.out,
+            "tx.out": txId,
           },
           {
             $set: {
@@ -589,40 +606,35 @@ export async function transferEthToMerchant(
               "timestamps.failed": Date.now(),
               received_amount: "0",
               platform_fee: "0",
+              // Only this transfer was mined, so only its gas was spent.
               network_fee: actualNetworkFee.toString(),
+              review_reason: `Merchant transfer ${tx.id} reverted: its gas was paid, but no ETH moved. The platform transfer (nonce 1) was never sent. Funds are still at deposit address ${invoice.address}. Check why the merchant address rejected the transfer, then pay out manually.`,
             },
           },
         ).exec();
         console.error(
           "ETH merchant transaction reverted; manual review required:",
           invoiceId,
-          transaction.id,
+          tx.id,
         );
         return;
       }
     }
 
-    // Every transfer is in a block and succeeded.
     const update = await Invoice.updateOne(
-      {
-        invoice_id: invoiceId,
-        status: "processing",
-        "tx.out": invoice.tx.out,
-      },
+      { invoice_id: invoiceId, status: "processing", "tx.out": txId },
       {
         $set: {
           status: "completed",
           "timestamps.completed": Date.now(),
-          network_fee: actualNetworkFee.toString(),
+          review_reason: "",
         },
       },
     ).exec();
 
     if (update.modifiedCount > 0)
-      console.log("ETH payout completed:", invoiceId, invoice.tx.out);
+      console.log("ETH payout completed:", invoiceId, txId);
   } catch (error) {
-    // Leave the invoice as it is; the next run picks it up again.
-    // Log only the message, never the whole error object.
     console.error(
       "ETH payout could not finish; invoice state was preserved:",
       invoiceId,

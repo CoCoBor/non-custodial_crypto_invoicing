@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { getAddress, isAddress } from "ethers";
+
 
 const DEFAULT_PORT = 3000;
 
@@ -60,6 +62,11 @@ export const env = Object.freeze({
     process.env.PLATFORM_BTC_ADDRESS,
   ),
 
+  platformEthAddress: readEthAddress(
+    "PLATFORM_ETH_ADDRESS",
+    process.env.PLATFORM_ETH_ADDRESS
+  ),
+
   nearIntentsJwt: readRequiredString("NEAR_INTENTS", process.env.NEAR_INTENTS),
 });
 
@@ -71,6 +78,14 @@ function readRequiredString(name: string, value: string | undefined): string {
   }
 
   return normaliseValue;
+}
+
+function readEthAddress(name: string, value: string | undefined): string {
+  const address = readRequiredString(name, value);
+  if (!isAddress(address)) {
+    throw new Error(`${name} must be a valid Ethereum address`);
+  }
+  return getAddress(address);   // store it checksummed
 }
 
 function readBase64Key(name: string, value: string | undefined): Buffer {

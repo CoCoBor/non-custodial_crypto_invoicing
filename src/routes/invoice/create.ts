@@ -6,12 +6,15 @@ import * as priceFunc from "../../invoice/price.function.js";
 import cryptos from "../../storage/cryptos.json" with { type: "json" };
 import * as invoiceFunc from "../../invoice/invoice.function.js";
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
-import { generateBtcAddress } from '../../crypto/btc.js';
+import { generateBtcAddress } from "../../crypto/btc.js";
 export const createInvoiceRouter = Router();
+import { isAddress } from "ethers";
 
 const createSchema = z.object({
   amount: z.string().trim().min(1).max(100),
   lifetime: z.number().int().min(1).max(60).default(30),
+  crypto: z.string().trim().min(1).max(100),
+  to_crypto: z.string().trim().min(1).max(100),
 });
 
 createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
@@ -19,12 +22,10 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
 
   const merchant = req.merchant;
   if (!merchant)
-    return res
-      .status(401)
-      .json({
-        code: "INVALID_MERCHANT_KEY",
-        message: "merchant key is missing or invalid",
-      });
+    return res.status(401).json({
+      code: "INVALID_MERCHANT_KEY",
+      message: "merchant key is missing or invalid",
+    });
 
   const parsed = createSchema.safeParse(req.body);
 
@@ -33,18 +34,21 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
       error: { code: "INVALID_REQUEST", message: "request body is invalid" },
     });
 
-  const { amount, lifetime } = parsed.data;
+  const { amount, lifetime, to_crypto } = parsed.data;
 
-  const payoutAddress = merchant.payout_addresses?.btc;
+  const payoutAddress = merchant.payout_addresses?.[to_crypto];
 
-  if (
-    !payoutAddress ||
-    !bitcore.Address.isValid(payoutAddress, bitcore.Networks.livenet)
-  ) {
+  const validPayoutAddress =
+    payoutAddress &&
+    (to_crypto === "btc"
+      ? bitcore.Address.isValid(payoutAddress, bitcore.Networks.livenet)
+      : isAddress(payoutAddress) && BigInt(payoutAddress) > 0n);
+
+  if (!payoutAddress || !validPayoutAddress) {
     return res.status(409).json({
       error: {
         code: "PAYOUT_ADDRESS_REQUIRED",
-        message: "save a valid Bitcoin mainnet payout address first",
+        message: `save a valid ${to_crypto} payout address first`,
       },
     });
   }
@@ -82,7 +86,8 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
     fiatUnits: payment.fiatUnits,
     address: deposit.address,
     encryptedPrivateKey: deposit.encryptedPrivateKey,
-    payoutAddress,
+    crypto: payoutAddress,
+    toCrypto: to_crypto,
     lifetime,
   });
 
