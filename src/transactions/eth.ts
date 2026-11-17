@@ -144,7 +144,7 @@ function decideTransferCount(input: {
     networkCost: gasPrice * ETH_TRANSFER_GAS * transfers,
     feeRate,
   });
-  if (split === undefined || split.merchantAmount <= 0n) return undefined;
+  if (split === undefined) return undefined;
 
   return split;
 }

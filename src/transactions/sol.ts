@@ -596,7 +596,7 @@ function planTokenPayout(total: bigint, feeRate: bigint) {
   }
 
   const split = splitPayout({ received: total, networkCost: 0n, feeRate });
-  if (split === undefined || split.merchantAmount <= 0n) return undefined;
+  if (split === undefined) return undefined;
 
   return split;
 }

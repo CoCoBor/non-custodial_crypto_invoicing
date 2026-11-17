@@ -12,10 +12,19 @@ export function parseFeeRate(text: string): bigint | undefined {
 }
 
 /**
- * How a deposit is shared once the network cost paid from it is taken off:
- * the platform gets the fee rate of what is left, rounded up, and the
- * merchant gets the rest. undefined when the network cost uses up the deposit.
- * The merchant's share can be 0; each chain decides what it can still pay.
+ * How a deposit is shared (rule F1). The platform fee is the fee rate of
+ * everything received, rounded up; every network cost comes out of the
+ * merchant's share:
+ *
+ *   platformFee    = ceil(received × feeRate / FEE_RATE_SCALE)
+ *   merchantAmount = received − platformFee − networkCost
+ *
+ * so platformFee + merchantAmount + networkCost = received, always.
+ *
+ * undefined means "too small to forward": the fee plus the network cost
+ * leave the merchant 0 or less. A result always has merchantAmount ≥ 1.
+ * A chain may still refuse a positive share below its own dust or rent
+ * limit.
  */
 export function splitPayout(input: {
   received: bigint;
@@ -26,9 +35,9 @@ export function splitPayout(input: {
   if (received < 0n || networkCost < 0n || feeRate < 0n || feeRate >= FEE_RATE_SCALE) {
     throw new RangeError("invalid payout split input");
   }
-  if (received <= networkCost) return undefined;
 
-  const afterNetwork = received - networkCost;
-  const platformFee = ceilDivide(afterNetwork * feeRate, FEE_RATE_SCALE);
-  return { platformFee, merchantAmount: afterNetwork - platformFee };
+  const platformFee = ceilDivide(received * feeRate, FEE_RATE_SCALE);
+  const merchantAmount = received - platformFee - networkCost;
+  if (merchantAmount <= 0n) return undefined;
+  return { platformFee, merchantAmount };
 }

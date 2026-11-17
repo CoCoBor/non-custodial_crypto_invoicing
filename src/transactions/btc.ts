@@ -158,7 +158,7 @@ function calculateBtcPayout(
   if (feeRate === undefined) return undefined;
 
   const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
-  if (split === undefined || split.merchantAmount <= 0n) return undefined;
+  if (split === undefined) return undefined;
   const { platformFee, merchantAmount } = split;
 
   return {

@@ -353,7 +353,7 @@ function planTonPayout(total: bigint, feeRate: bigint) {
     throw new RangeError("invalid TON payout input");
   }
   const split = splitPayout({ received: total, networkCost: TON_PAYOUT_FEE, feeRate });
-  if (split === undefined || split.merchantAmount <= 0n) return undefined;
+  if (split === undefined) return undefined;
 
   return { networkFee: TON_PAYOUT_FEE, ...split };
 }

@@ -358,7 +358,7 @@ function calculateLtcPayout(
 
   const networkFee = ceilDivide(BigInt(txSize) * feePerKb, 1000n);
   const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
-  if (split === undefined || split.merchantAmount <= 0n) return undefined;
+  if (split === undefined) return undefined;
 
   return { networkFee, ...split };
 }
