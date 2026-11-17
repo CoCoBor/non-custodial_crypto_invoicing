@@ -32,8 +32,8 @@ describe("the chain registry", () => {
     });
   }
 
-  it("serves BTC and TON deposits today", () => {
-    assert.deepEqual(depositAssets(), ["btc", "ton"]);
+  it("serves BTC, LTC and TON deposits today", () => {
+    assert.deepEqual(depositAssets(), ["btc", "ltc", "ton"]);
   });
 
   it("lists only assets from the coin list", () => {

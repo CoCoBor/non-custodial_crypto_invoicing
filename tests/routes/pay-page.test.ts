@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 
+import litecore from "bitcore-lib-ltc";
 import type { Db } from "mongodb";
 
 import type { ChainAdapter } from "../../src/chains/adapter.js";
@@ -14,7 +15,9 @@ import { postJson, startTestApp } from "../helpers/http-app.js";
 
 const BTC_ADDRESS = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
 const TON_ADDRESS = "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_";
-const PRICES: Record<string, string> = { btc: "50000", ton: "5" }; // USD per coin
+const LTC_ADDRESS = new litecore.PrivateKey().toAddress().toString();
+const SOL_ADDRESS = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5" }; // USD per coin
 
 let baseUrl: string;
 let db: Db;
@@ -23,7 +26,7 @@ let priceAvailable = true;
 const userIds: string[] = [];
 
 // Cancelling asks the chain for payments; these chains show none.
-function emptyChain(asset: "btc" | "ton"): ChainAdapter {
+function emptyChain(asset: "btc" | "ltc" | "ton"): ChainAdapter {
   return {
     asset,
     requiredConfirmations: 1,
@@ -41,7 +44,7 @@ function emptyChain(asset: "btc" | "ton"): ChainAdapter {
 before(async () => {
   ({ baseUrl, db, stop } = await startTestApp({
     getPrice: async (coin) => (priceAvailable ? PRICES[coin] : undefined),
-    chains: { btc: emptyChain("btc"), ton: emptyChain("ton") },
+    chains: { btc: emptyChain("btc"), ltc: emptyChain("ltc"), ton: emptyChain("ton") },
   }));
 });
 
@@ -112,10 +115,35 @@ describe("the merchant API", () => {
     assert.equal(invoice?.fee_rate, "0.05");
   });
 
-  it("refuses a fixed-coin invoice for a deposit coin with no chain adapter, rather than make a BTC one", async () => {
-    const m = await merchant({ btc: BTC_ADDRESS, ltc: "LVfF2X4rVkYumLxWRZsK8Z6e1BULNxH5ZW" });
+  it("creates a fixed-coin LTC invoice with an LTC deposit, paid out to the merchant's LTC address", async () => {
+    const m = await merchant({ btc: BTC_ADDRESS, ltc: LTC_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { crypto: "ltc", to_crypto: "ltc" });
+
+    assert.equal(response.status, 201);
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "ltc");
+    assert.equal(invoice?.to_crypto, "ltc");
+    assert.equal(invoice?.to_address, LTC_ADDRESS);
+    assert.equal(invoice?.amount, "25000000"); // $25 at $100/LTC = 0.25 LTC
+    assert.match(invoice?.address ?? "", /^L/, "an LTC deposit is a mainnet P2PKH address");
+    assert.ok(invoice?.private?.private_key, "the deposit key is missing");
+    assert.equal(invoice?.fee_rate, "0.05");
+  });
+
+  it("refuses an LTC deposit paid out as another coin", async () => {
+    const m = await merchant({ btc: BTC_ADDRESS, ltc: LTC_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "ltc", to_crypto: "btc" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
+  });
+
+  it("refuses a fixed-coin invoice for a deposit coin with no chain adapter, rather than make a BTC one", async () => {
+    const m = await merchant({ btc: BTC_ADDRESS, sol: SOL_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "sol", to_crypto: "sol" });
 
     assert.equal(response.status, 409);
     assert.equal(response.body.error.code, "DEPOSIT_COIN_NOT_SUPPORTED");
@@ -131,8 +159,8 @@ describe("the merchant API", () => {
   });
 
   it("creates a merchant's-list invoice without a deposit, offering only coins that can be paid end to end", async () => {
-    // LTC has no watcher or payout path yet, so it is not offered.
-    const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS, ltc: "LVfF2X4rVkYumLxWRZsK8Z6e1BULNxH5ZW" });
+    // SOL has no watcher or payout path yet, so it is not offered.
+    const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS, ltc: LTC_ADDRESS, sol: SOL_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
 
@@ -142,7 +170,7 @@ describe("the merchant API", () => {
     const invoice = await invoiceInDb(invoiceId);
     assert.equal(invoice?.mode, "merchant_list");
     assert.equal(invoice?.address, "");
-    assert.deepEqual([...invoice!.offered_coins].sort(), ["btc", "ton"]);
+    assert.deepEqual([...invoice!.offered_coins].sort(), ["btc", "ltc", "ton"]);
   });
 
   it("can narrow the coins offered", async () => {
@@ -154,7 +182,7 @@ describe("the merchant API", () => {
   });
 
   it("refuses a merchant's-list invoice when no coin can be offered", async () => {
-    const m = await merchant({ ltc: "LVfF2X4rVkYumLxWRZsK8Z6e1BULNxH5ZW" });
+    const m = await merchant({ sol: SOL_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
 

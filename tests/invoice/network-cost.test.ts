@@ -39,6 +39,28 @@ describe("the payout network-cost estimate", () => {
     assert.equal(await estimatePayoutNetworkCost("btc"), undefined);
   });
 
+  it("prices an LTC payout the same way, at Blockbook's 2-block fee rate", async () => {
+    // 0.00012345 LTC/kB = 12,345 litoshi/kB. Size: 8 + 1 + 1 + 148 (one
+    // P2PKH input) + 2 × (8 + 1 + 34) = 244 bytes → 3,013 litoshi.
+    blockbookAnswers(200, { result: "0.00012345" });
+
+    assert.equal(await estimatePayoutNetworkCost("ltc"), 3_013n);
+    assert.equal(requested.length, 1);
+    assert.match(requested[0]!, /^https:\/\/ltcbook\.nownodes\.io\/api\/v2\/estimatefee\/2$/);
+  });
+
+  it("raises an LTC estimate below what nodes relay to the 1,000 litoshi/kB minimum", async () => {
+    blockbookAnswers(200, { result: "0.00000997" });
+
+    assert.equal(await estimatePayoutNetworkCost("ltc"), 244n);
+  });
+
+  it("has no LTC estimate while Blockbook fails", async () => {
+    blockbookAnswers(500, { error: "down" });
+
+    assert.equal(await estimatePayoutNetworkCost("ltc"), undefined);
+  });
+
   it("uses the fee budget every TON payout charges", async () => {
     blockbookAnswers(500, {});
 
@@ -47,7 +69,7 @@ describe("the payout network-cost estimate", () => {
   });
 
   it("has none for a coin a payer can't deposit yet", async () => {
-    for (const coin of ["ltc", "eth", "sol", "usdceth"] as const) {
+    for (const coin of ["eth", "sol", "usdceth"] as const) {
       assert.equal(await estimatePayoutNetworkCost(coin), "unsupported");
     }
   });
