@@ -8,6 +8,7 @@ import {
   beginCell,
   Cell,
   contractAddress,
+  SendMode,
   storeTransaction,
   toNano,
   type Transaction,
@@ -36,9 +37,7 @@ Object.assign(process.env, {
   NEAR_INTENTS: "fake-near-jwt",
   PLATFORM_BTC_ADDRESS: "bc1qfake",
   PLATFORM_ETH_ADDRESS: "0x000000000000000000000000000000000000dEaD",
-  PLATFORM_LTC_ADDRESS: new litecore.PrivateKey()
-    .toAddress(litecore.Networks.livenet)
-    .toString(),
+  PLATFORM_LTC_ADDRESS: new litecore.PrivateKey().toAddress().toString(),
   PLATFORM_SOL_ADDRESS: "11111111111111111111111111111111",
   PLATFORM_TON_ADDRESS: "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_",
 });
@@ -73,7 +72,7 @@ async function deployedWallet() {
     seqno: 0,
     secretKey: wallet.secretKey,
     messages: [],
-    sendMode: 3,
+    sendMode: SendMode.PAY_GAS_SEPARATELY + SendMode.IGNORE_ERRORS,
   });
   assert.equal((await chain.getContract(wallet.address)).accountState?.type, "active");
   return wallet;

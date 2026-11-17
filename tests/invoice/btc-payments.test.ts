@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
 
 import recorded from "../fixtures/blockbook/address-txs-page1.json" with { type: "json" };
@@ -16,10 +17,15 @@ function page(overrides: Record<string, unknown> = {}) {
   return { ...recorded, page: 1, totalPages: 1, ...overrides };
 }
 
+/** A real-looking 64-hex txid from a readable name (the parser rejects others). */
+function txid(name: string) {
+  return createHash("sha256").update(name).digest("hex");
+}
+
 /** A transaction shaped like the recorded ones, paying `outputs`. */
-function tx(txid: string, outputs: { value: string; to: string; isAddress?: boolean }[], confirmations = 0) {
+function tx(name: string, outputs: { value: string; to: string; isAddress?: boolean }[], confirmations = 0) {
   return {
-    txid,
+    txid: txid(name),
     confirmations,
     vout: outputs.map((o, n) => ({ n, value: o.value, isAddress: o.isAddress ?? true, addresses: [o.to] })),
   };
@@ -108,10 +114,18 @@ describe("getBtcPayments selecting outputs", () => {
 
   it("returns an empty list for an address with no history", async () => {
     // Blockbook leaves `transactions` out entirely rather than sending [].
-    const { transactions: _none, ...fresh } = page();
+    const { transactions: _none, ...fresh } = page({ txs: 0, unconfirmedTxs: 0 });
     const { fetcher } = fakeFetcher({ 1: { body: fresh } });
 
     assert.deepEqual(await getBtcPayments(ADDRESS, { fetcher }), []);
+  });
+
+  it("returns undefined when the listing counts transactions but leaves out their details", async () => {
+    // [] here would read as "nothing paid" for an address that has payments.
+    const { transactions: _none, ...detailsMissing } = page({ txs: 2 });
+    const { fetcher } = fakeFetcher({ 1: { body: detailsMissing } });
+
+    assert.equal(await getBtcPayments(ADDRESS, { fetcher }), undefined);
   });
 });
 
@@ -138,7 +152,7 @@ describe("getBtcPayments walking pages", () => {
     const payments = await getBtcPayments(ADDRESS, { fetcher });
 
     assert.equal(payments?.length, 3);
-    assert.equal(payments?.filter((p) => p.txid === "t-shared").length, 1);
+    assert.equal(payments?.filter((p) => p.txid === txid("t-shared")).length, 1);
   });
 
   it("gives up rather than return a partial listing when a later page fails", async () => {

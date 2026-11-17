@@ -9,6 +9,16 @@ export async function connectToMongoDb(): Promise<Db> {
     return database;
   }
 
+  // Tests delete data in the database they use: never let one reach a real one.
+  if (
+    env.nodeEnvironment === "test" &&
+    !env.mongodbDatabase.endsWith("_test")
+  ) {
+    throw new Error(
+      `Refusing to connect: in a test run the database name must end in "_test" (got "${env.mongodbDatabase}")`,
+    );
+  }
+
   try {
     await mongoose.connect(env.mongodbUri, {
       dbName: env.mongodbDatabase,

@@ -30,7 +30,7 @@ test("registration creates a v2 merchant that can log in without leaking stored 
     // Two separate randomUUID() calls: an api key that equals the public user
     // id would leak one from the other.
     assert.notEqual(user.merchant_key, user.user_id);
-    assert.equal(user.merchant_fee, 0.005);
+    assert.equal(user.merchant_fee, "0.005");
     assert.equal(user.totp_enabled, false);
     assert.equal(user.totp_secret, null);
     assert.deepEqual(user.invoices, []);
@@ -66,7 +66,7 @@ test("registration creates a v2 merchant that can log in without leaking stored 
       body: JSON.stringify({ accountNumber: body.data.accountNumberDisplay }),
     });
     assert.equal(login.status, 200);
-    assert.equal((await login.json()).data.requiresTwoFactor, false);
+    assert.equal((await login.json()).data.requiredTwoFactor, false);
     const cookie = login.headers.getSetCookie()[0]?.split(";")[0];
     assert.ok(cookie);
     const session = await fetch(`${url}/auth/session`, { headers: { cookie } });

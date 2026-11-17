@@ -56,8 +56,13 @@ const btcPaymentsSchema = z
     },
   );
 
+// A deposit address sees a handful of payments. A listing longer than this is
+// more likely a broken or hostile reply than a real history.
+const MAX_BTC_PAGES = 50;
+
 export async function getBtcPayments(
   address: string,
+  { fetcher = fetch }: { fetcher?: typeof fetch } = {},
 ): Promise<
   { txid: string; amount: bigint; confirmations: number }[] | undefined
 > {
@@ -76,11 +81,13 @@ export async function getBtcPayments(
         `https://btcbook.nownodes.io/api/v2/address/` +
         `${encodeURIComponent(address)}` +
         `?details=txs&page=${page}&pageSize=100`;
-      const res = await fetch(url, {
+      const res = await fetcher(url, {
         headers: {
           "api-key": env.nowNodesApiKey,
           Accept: "application/json",
         },
+        // A redirect would carry the api-key header to another host.
+        redirect: "error",
         signal: AbortSignal.timeout(10_000),
       });
 
@@ -96,6 +103,10 @@ export async function getBtcPayments(
       }
 
       const data = parsed.data;
+      if (data.totalPages > MAX_BTC_PAGES) {
+        console.error("BTC payment listing is implausibly long", data.totalPages);
+        return undefined;
+      }
       const transactions = data.transactions;
 
       for (const transaction of transactions) {

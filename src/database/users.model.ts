@@ -40,6 +40,7 @@ export const userSchema = new Schema(
     telegram_name: { type: String },
     invoices: [{ id: { type: String, default: "" } }],
     payout_addresses: {
+      btc: { type: String, default: "" },
       ltc: { type: String, default: "" },
       sol: { type: String, default: "" },
       usdtsol: { type: String, default: "" },
