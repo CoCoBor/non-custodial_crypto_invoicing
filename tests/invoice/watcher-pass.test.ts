@@ -226,6 +226,46 @@ describe("a watcher pass over a fixed-coin BTC invoice", () => {
   });
 });
 
+describe("a merchant's-list invoice where the payer never picked a coin", () => {
+  async function unchosenInvoice() {
+    const invoiceId = randomUUID();
+    invoiceIds.push(invoiceId);
+    await db.collection("invoices").insertOne({
+      invoice_id: invoiceId,
+      user_id: randomUUID(),
+      status: "waiting",
+      mode: "merchant_list",
+      offered_coins: ["btc"],
+      crypto: "",
+      amount: "0",
+      amount_fiat: "2500",
+      paid_amount: "0",
+      address: "",
+      lifetime: 30,
+      timestamps: { created: NOW - 5 * MINUTE, waiting: NOW - 5 * MINUTE },
+    });
+    return invoiceId;
+  }
+
+  it("stays open during its lifetime", async () => {
+    const invoiceId = await unchosenInvoice();
+
+    await runWatcherPass(fakePorts(new Map()).ports);
+
+    assert.equal((await invoiceNow(invoiceId))?.status, "waiting");
+  });
+
+  it("expires when its lifetime is over", async () => {
+    const invoiceId = await unchosenInvoice();
+
+    await runWatcherPass(fakePorts(new Map(), AFTER_EXPIRY).ports);
+
+    const invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.status, "expired");
+    assert.equal(invoice?.timestamps?.expired, AFTER_EXPIRY);
+  });
+});
+
 describe("the merchant's underpaid tolerance", () => {
   it("accepts a payment short by no more than the tolerance (95 of 100 at 5%)", async () => {
     const { invoiceId, address } = await btcInvoice({ underpaid: 5 });

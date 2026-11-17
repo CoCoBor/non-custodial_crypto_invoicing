@@ -55,6 +55,10 @@ Marks: ✅ verified by a run or seen in the code · 📄 cited source · ⚠️ 
   - **Retries:** after 1 min, 5 min, 30 min and 2 h; the 5th failure marks the event failed. A redirect counts as a failure and is never followed.
   - **Destinations:** https only, and every address the name resolves to must be public (no loopback, private, link-local or metadata ranges). ⚠️ The name is resolved again when the request is sent, so DNS rebinding is not covered.
   - **Secret:** `whsec_…`, shown once when the first webhook URL is set; `POST /settings/webhook-secret` with a TOTP code replaces it. It is stored sealed (`webhook-secret`), because it is needed to sign.
+- Payer's page, public and keyed by the invoice's random UUID: `GET /pay/:id`, `POST /pay/:id/choose {crypto}` (once, before expiry), and `POST /pay/:id/cancel` (only while status is `waiting` and `paid_amount` is `"0"`). It never shows the merchant's id or payout addresses. ✅ `tests/routes/pay-page.test.ts`, run 13/13, 2026-11-17.
+- `mode: "merchant_list"` invoices start with no deposit address, `amount: "0"` and `offered_coins`. Offered coins are the merchant's valid payout coins that are also in `WATCHED_COINS` (only `btc` and `ton` today), so they can be detected and paid out directly. Choosing a coin locks its price and creates the deposit; the invoice timer still runs from creation. The watcher expires invoices where no coin was picked in time. ✅ same run, plus `tests/invoice/watcher-pass.test.ts`.
+- A deposit address always comes with its key: the model requires `private.private_key` whenever `address` is set. ✅ seen in `src/database/invoices.model.ts`.
+- `createApp({ getPrice })` lets tests inject prices; production uses the exchange prices in `src/invoice/price.function.ts`. ✅ seen in `src/app.ts`.
 - `required_confirmations` is still 1 for every coin. The approved per-chain numbers wait for a check against each chain's docs. ✅ seen in `cryptos.json`.
 
 ## Pitfalls

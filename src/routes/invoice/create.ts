@@ -1,43 +1,76 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { requireMerchantKey } from "../../middleware/require-merchant-key.js";
 import { ASSET_IDS, checkPayoutAddress } from "../../assets/payout-address.js";
 import * as priceFunc from "../../invoice/price.function.js";
 import cryptos from "../../storage/cryptos.json" with { type: "json" };
-import * as invoiceFunc from "../../invoice/invoice.function.js";
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
 import { generateBtcAddress } from "../../crypto/btc.js";
 import { canPayOutFromBtcDeposit } from "../../transactions/btc.js";
 import { toleranceBasisPoints } from "../../invoice/payment-rules.js";
-export const createInvoiceRouter = Router();
+import { decimalStrToBigInt } from "../../invoice/money.function.js";
+import { WATCHED_COINS } from "../../invoice/invoice.function.js";
+import type { AppDeps } from "../../app.js";
 
-const createSchema = z.object({
+const commonFields = {
   amount: z.string().trim().min(1).max(100),
   lifetime: z.number().int().min(1).max(60).default(30),
-  crypto: z.string().trim().min(1).max(100),
-  to_crypto: z.enum(ASSET_IDS),
   underpaid: z
     .number()
     .refine((percent) => toleranceBasisPoints(percent) !== undefined)
     .default(0),
+};
+
+const fixedCoinSchema = z.object({
+  ...commonFields,
+  mode: z.literal("fixed").default("fixed"),
+  crypto: z.string().trim().min(1).max(100),
+  to_crypto: z.enum(ASSET_IDS),
 });
 
-createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
-  res.set("Cache-Control", "no-store");
+const merchantListSchema = z.object({
+  ...commonFields,
+  mode: z.literal("merchant_list"),
+  coins: z.array(z.enum(ASSET_IDS)).min(1).optional(),
+});
 
-  const merchant = req.merchant;
-  if (!merchant)
-    return res.status(401).json({
-      code: "INVALID_MERCHANT_KEY",
-      message: "merchant key is missing or invalid",
-    });
+type Merchant = NonNullable<Request["merchant"]>;
 
-  const parsed = createSchema.safeParse(req.body);
+function invalidRequest(res: Response) {
+  return res.status(400).json({
+    error: { code: "INVALID_REQUEST", message: "request body is invalid" },
+  });
+}
 
-  if (!parsed.success)
-    return res.status(400).json({
-      error: { code: "INVALID_REQUEST", message: "request body is invalid" },
-    });
+export function createInvoiceRouter(deps: AppDeps) {
+  const router = Router();
+
+  router.post("/", requireMerchantKey, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+
+    const merchant = req.merchant;
+    if (!merchant)
+      return res.status(401).json({
+        code: "INVALID_MERCHANT_KEY",
+        message: "merchant key is missing or invalid",
+      });
+
+    return req.body?.mode === "merchant_list"
+      ? await createMerchantListInvoice(req, res, merchant)
+      : await createFixedCoinInvoice(req, res, merchant, deps);
+  });
+
+  return router;
+}
+
+async function createFixedCoinInvoice(
+  req: Request,
+  res: Response,
+  merchant: Merchant,
+  deps: AppDeps,
+) {
+  const parsed = fixedCoinSchema.safeParse(req.body);
+  if (!parsed.success) return invalidRequest(res);
 
   const { amount, lifetime, to_crypto, underpaid } = parsed.data;
 
@@ -73,7 +106,7 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
     });
   }
 
-  const price = await priceFunc.getPrice("btc", "usd");
+  const price = await deps.getPrice("btc", "usd");
 
   if (price === undefined)
     return res.status(503).json({
@@ -116,4 +149,44 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
   return res.status(201).json({
     data: invoice,
   });
-});
+}
+
+// The payer picks the coin later, on the payment page. Offered: the coins
+// the merchant has a valid payout address for that can be paid end to end.
+async function createMerchantListInvoice(req: Request, res: Response, merchant: Merchant) {
+  const parsed = merchantListSchema.safeParse(req.body);
+  if (!parsed.success) return invalidRequest(res);
+  const { amount, lifetime, underpaid, coins } = parsed.data;
+
+  const fiatUnits = decimalStrToBigInt(amount, 2);
+  if (fiatUnits === undefined || fiatUnits <= 0n) {
+    return res.status(400).json({
+      error: { code: "INVALID_PAYMENT", message: "no valid payment" },
+    });
+  }
+
+  const requested: readonly string[] = coins ?? WATCHED_COINS;
+  const offeredCoins = WATCHED_COINS.filter(
+    (coin) =>
+      requested.includes(coin) &&
+      checkPayoutAddress(coin, merchant.payout_addresses?.[coin]) === "valid",
+  );
+  if (offeredCoins.length === 0) {
+    return res.status(409).json({
+      error: {
+        code: "NO_COINS_AVAILABLE",
+        message: "save a valid payout address for a coin the payer can use first",
+      },
+    });
+  }
+
+  const invoice = await invoiceRepo.createMerchantListInvoice({
+    userId: merchant.user_id,
+    fiatUnits,
+    offeredCoins,
+    lifetime,
+    underpaid,
+  });
+
+  return res.status(201).json({ data: invoice });
+}

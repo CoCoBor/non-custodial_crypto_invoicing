@@ -29,6 +29,24 @@ export async function runWatcherPass(
   ports: WatcherPorts,
   isStopped: () => boolean = () => false,
 ): Promise<void> {
+  // A merchant's-list invoice has no deposit address until the payer picks
+  // a coin, so there is nothing on chain to look at: only the clock.
+  const now = ports.now();
+  await Invoice.updateMany(
+    {
+      mode: "merchant_list",
+      crypto: "",
+      status: "waiting",
+      $expr: {
+        $lte: [
+          { $add: ["$timestamps.waiting", { $multiply: ["$lifetime", 60_000] }] },
+          now,
+        ],
+      },
+    },
+    { $set: { status: "expired", "timestamps.expired": now } },
+  ).exec();
+
   const invoices = await Invoice.find({
     crypto: { $in: ["btc", "ton"] },
     status: {

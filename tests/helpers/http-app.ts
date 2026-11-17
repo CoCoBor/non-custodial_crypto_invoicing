@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 
 import type { Db } from "mongodb";
 
-import { createApp } from "../../src/app.js";
+import { createApp, type AppDeps } from "../../src/app.js";
 import { generateTotpCode } from "../../src/auth/totp.function.js";
 import {
   connectToMongoDb,
@@ -13,13 +13,13 @@ import {
 import { signChallenge } from "./recovery-signer.js";
 
 /** The app on a random local port, against the test database. */
-export async function startTestApp(): Promise<{
+export async function startTestApp(deps?: Partial<AppDeps>): Promise<{
   baseUrl: string;
   db: Db;
   stop: () => Promise<void>;
 }> {
   const db = await connectToMongoDb();
-  const server: Server = createApp().listen(0);
+  const server: Server = createApp(deps).listen(0);
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 

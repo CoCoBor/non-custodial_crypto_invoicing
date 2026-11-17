@@ -27,6 +27,8 @@ const invoiceSchema = new Schema(
     invoice_id: { type: String, required: true },
     user_id: { type: String, required: true },
     invoiceType: { type: String, default: "" },
+    mode: { type: String, enum: ["fixed", "merchant_list"], default: "fixed" }, // fixed: merchant picked the coin; merchant_list: the payer picks one of offered_coins
+    offered_coins: { type: [String], default: [] }, // merchant_list: coins the payer may pick
     status: { type: String, enum: INVOICE_STATUSES, default: "" }, // waiting, underpaid, confirming, confirmed, processing, completed, failed, expired, cancelled
     lifetime: { type: Number, default: 0 }, // lifetime in minutes within 1-60 minutes, default: 30
     underpaid: { type: Number, default: 0 }, // Allowed underpayment percentage before invoice is considered unpaid, default: 0
@@ -84,9 +86,19 @@ const invoiceSchema = new Schema(
       completed: { type: Number, default: null },
       failed: { type: Number, default: null },
       expired: { type: Number, default: null },
+      chosen: { type: Number, default: null },
+      cancelled: { type: Number, default: null },
     }, // time in unix ms
     private: {
-      private_key: { type: encryptedKeySchema, required: true, select: false },
+      // A deposit address always comes with its key. A merchant_list invoice
+      // has neither until the payer picks a coin.
+      private_key: {
+        type: encryptedKeySchema,
+        required(this: { address?: string }) {
+          return Boolean(this.address);
+        },
+        select: false,
+      },
     },
   },
   { collection: "invoices" },

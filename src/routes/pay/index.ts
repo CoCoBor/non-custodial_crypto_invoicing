@@ -1,0 +1,180 @@
+import { Router, type Response } from "express";
+import { z } from "zod";
+
+import type { AppDeps } from "../../app.js";
+import { checkPayoutAddress } from "../../assets/payout-address.js";
+import { Invoice } from "../../database/invoices.model.js";
+import { User } from "../../database/users.model.js";
+import { generateDepositAddress } from "../../invoice/deposit.js";
+import { isWatchedCrypto } from "../../invoice/invoice.function.js";
+import {
+  cancelUnpaidInvoice,
+  recordChosenCoin,
+} from "../../invoice/invoice.repository.js";
+import { intToDecimalStr } from "../../invoice/money.function.js";
+import { getUsdToCrypto } from "../../invoice/price.function.js";
+import { publicRateLimit } from "../../middleware/public-rate-limit.js";
+import cryptos from "../../storage/cryptos.json" with { type: "json" };
+
+// The payer's page. No login: the invoice id (a random UUID) is the key, so
+// nothing here may show the merchant's details or payout addresses.
+
+const invoiceIdSchema = z.uuid();
+const chooseSchema = z.object({ crypto: z.string().max(20) });
+
+type PayerInvoice = {
+  invoice_id: string;
+  user_id: string;
+  status?: string | null;
+  mode?: string | null;
+  offered_coins?: string[] | null;
+  currency?: string | null;
+  amount_fiat: string;
+  crypto?: string | null;
+  address?: string | null;
+  amount: string;
+  paid_amount?: string | null;
+  lifetime: number;
+  timestamps?: { waiting?: number | null; created?: number | null } | null;
+};
+
+function expiresAt(invoice: PayerInvoice): number {
+  const start = invoice.timestamps?.waiting ?? invoice.timestamps?.created ?? 0;
+  return start + invoice.lifetime * 60 * 1000;
+}
+
+function payerView(invoice: PayerInvoice) {
+  const chosen = Boolean(invoice.crypto);
+  return {
+    invoiceId: invoice.invoice_id,
+    status: invoice.status,
+    mode: invoice.mode,
+    currency: invoice.currency,
+    amountFiat: invoice.amount_fiat,
+    expiresAt: new Date(expiresAt(invoice)).toISOString(),
+    coins: invoice.mode === "merchant_list" && !chosen ? invoice.offered_coins ?? [] : [],
+    payment: chosen
+      ? {
+          crypto: invoice.crypto,
+          address: invoice.address,
+          amount: invoice.amount,
+          paidAmount: invoice.paid_amount,
+        }
+      : null,
+  };
+}
+
+function conflict(res: Response, code: string, message: string) {
+  return res.status(409).json({ error: { code, message } });
+}
+
+async function findInvoice(id: string): Promise<PayerInvoice | undefined> {
+  if (!invoiceIdSchema.safeParse(id).success) return undefined;
+  return (await Invoice.findOne({ invoice_id: id }).lean().exec()) ?? undefined;
+}
+
+export function createPayRouter(deps: AppDeps) {
+  const router = Router();
+
+  router.use((_req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    next();
+  });
+  router.use(publicRateLimit);
+
+  router.get("/:invoiceId", async (req, res) => {
+    const invoice = await findInvoice(req.params.invoiceId);
+    if (!invoice) {
+      return res.status(404).json({
+        error: { code: "INVOICE_NOT_FOUND", message: "invoice was not found" },
+      });
+    }
+    return res.status(200).json({ data: payerView(invoice) });
+  });
+
+  router.post("/:invoiceId/choose", async (req, res) => {
+    const invoice = await findInvoice(req.params.invoiceId);
+    if (!invoice) {
+      return res.status(404).json({
+        error: { code: "INVOICE_NOT_FOUND", message: "invoice was not found" },
+      });
+    }
+    const parsed = chooseSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: { code: "INVALID_REQUEST", message: "request body is invalid" },
+      });
+    }
+    const coin = parsed.data.crypto;
+    const now = Date.now();
+
+    if (invoice.mode !== "merchant_list" || invoice.crypto) {
+      return conflict(res, "COIN_ALREADY_CHOSEN", "the coin for this invoice is already set");
+    }
+    if (invoice.status !== "waiting" || now >= expiresAt(invoice)) {
+      return conflict(res, "INVOICE_NOT_OPEN", "this invoice can no longer be paid");
+    }
+    if (!isWatchedCrypto(coin) || !(invoice.offered_coins ?? []).includes(coin)) {
+      return conflict(res, "COIN_NOT_OFFERED", "this coin is not offered for this invoice");
+    }
+
+    // The merchant's payout address as it is now: they may have changed it.
+    const merchant = await User.findOne({ user_id: invoice.user_id })
+      .select("payout_addresses")
+      .lean()
+      .exec();
+    const payoutAddress = merchant?.payout_addresses?.[coin];
+    if (!payoutAddress || checkPayoutAddress(coin, payoutAddress) !== "valid") {
+      return conflict(res, "COIN_NOT_OFFERED", "this coin is not offered for this invoice");
+    }
+
+    const price = await deps.getPrice(coin, "usd");
+    if (price === undefined) {
+      return res.status(503).json({
+        error: { code: "PRICE_UNAVAILABLE", message: "no valid price" },
+      });
+    }
+    const payment = getUsdToCrypto({
+      fiatAmount: intToDecimalStr(BigInt(invoice.amount_fiat), 2),
+      fiatDecimals: 2,
+      coinPrice: price,
+      coinDecimals: cryptos[coin].decimal,
+    });
+    if (payment === undefined) {
+      return res.status(400).json({
+        error: { code: "INVALID_PAYMENT", message: "no valid payment" },
+      });
+    }
+
+    const deposit = await generateDepositAddress(coin);
+    const recorded = await recordChosenCoin({
+      invoiceId: invoice.invoice_id,
+      crypto: coin,
+      amount: payment.paymentUnits,
+      address: deposit.address,
+      encryptedPrivateKey: deposit.encryptedPrivateKey,
+      payoutAddress,
+      now,
+    });
+    if (!recorded) {
+      return conflict(res, "COIN_ALREADY_CHOSEN", "the coin for this invoice is already set");
+    }
+
+    return res.status(200).json({ data: payerView((await findInvoice(invoice.invoice_id))!) });
+  });
+
+  router.post("/:invoiceId/cancel", async (req, res) => {
+    const invoice = await findInvoice(req.params.invoiceId);
+    if (!invoice) {
+      return res.status(404).json({
+        error: { code: "INVOICE_NOT_FOUND", message: "invoice was not found" },
+      });
+    }
+    if (!(await cancelUnpaidInvoice(invoice.invoice_id, Date.now()))) {
+      return conflict(res, "CANNOT_CANCEL", "a payment has already been seen for this invoice");
+    }
+    return res.status(200).json({ data: { invoiceId: invoice.invoice_id, status: "cancelled" } });
+  });
+
+  return router;
+}

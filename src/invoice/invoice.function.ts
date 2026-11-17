@@ -8,8 +8,14 @@ import { decimalStrToBigInt } from "./money.function.js";
 import { minimumAcceptedAmount, toleranceBasisPoints } from "./payment-rules.js";
 import { getTonPaymentTotals, tonMinimumPayment } from "../transactions/ton.js";
 
-// Coins whose payments the watcher checks.
-export type WatchedCrypto = "btc" | "ton";
+// Coins whose payments the watcher checks and pays out directly: the only
+// coins a payer can be offered today.
+export const WATCHED_COINS = ["btc", "ton"] as const;
+export type WatchedCrypto = (typeof WATCHED_COINS)[number];
+
+export function isWatchedCrypto(value: string): value is WatchedCrypto {
+  return (WATCHED_COINS as readonly string[]).includes(value);
+}
 
 export type PaymentTotals = { receivedAmount: bigint; confirmedAmount: bigint };
 
