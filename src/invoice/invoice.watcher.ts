@@ -4,6 +4,7 @@ import { updateSwapStatus as updateNearSwapStatus } from "../swap/near.js";
 import { transferBtcToMerchant, updateSwapStatus } from "../transactions/btc.js";
 import { transferTonToMerchant } from "../transactions/ton.js";
 import {
+  WATCHED_COINS,
   checkInvoicePayment,
   getPaymentTotals,
   type PaymentCheckPorts,
@@ -48,7 +49,7 @@ export async function runWatcherPass(
   ).exec();
 
   const invoices = await Invoice.find({
-    crypto: { $in: ["btc", "ton"] },
+    crypto: { $in: [...WATCHED_COINS] },
     status: {
       $in: ["waiting", "underpaid", "confirming", "confirmed", "processing"],
     },

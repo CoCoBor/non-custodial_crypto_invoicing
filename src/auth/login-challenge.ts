@@ -9,12 +9,16 @@ function hashChallenge(challenge: string): string {
   return createHash("sha256").update(challenge).digest("base64url");
 }
 
+/** What a signature with the key from the 12 words is allowed to do. */
+export type RecoveryAction = "login" | "reset-totp" | "new-account-number";
+
 /**
  * The bytes the merchant's browser signs with the key from the 12 words. The
- * prefix ties a signature to this use, so it can't be replayed elsewhere.
+ * action is part of them, so a signature made to log in can't be used to
+ * reset TOTP or replace the account number.
  */
-export function loginChallengeMessage(challenge: string): Buffer {
-  return Buffer.from(`merchant-v3 login:${challenge}`, "utf8");
+export function loginChallengeMessage(challenge: string, action: RecoveryAction): Buffer {
+  return Buffer.from(`merchant-v3 ${action}:${challenge}`, "utf8");
 }
 
 /**
@@ -58,6 +62,7 @@ export async function provesRecoveryKey(
   user: { user_id: string; recovery_public_key?: string | null },
   challenge: string,
   signature: string,
+  action: RecoveryAction,
 ): Promise<boolean> {
   if (!user.recovery_public_key) return false;
   const fresh = await consumeLoginChallenge(user.user_id, challenge);
@@ -65,7 +70,7 @@ export async function provesRecoveryKey(
     fresh &&
     verifyRecoverySignature(
       user.recovery_public_key,
-      loginChallengeMessage(challenge),
+      loginChallengeMessage(challenge, action),
       Buffer.from(signature, "base64url"),
     )
   );

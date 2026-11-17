@@ -4,6 +4,7 @@ import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { env } from "../config/env.js";
 import { ceilDivide } from "../money/format.js";
 import { parseFeeRate, splitPayout } from "../money/payout-split.js";
+import { acceptedPaymentAmount } from "../invoice/payment-rules.js";
 import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { openSecret } from "../security/secret-envelope.js";
@@ -475,7 +476,8 @@ export async function transferBtcToMerchant(
       }
 
       const utxosAmount = utxos.reduce((sum, u) => sum + u.amount, 0n);
-      if (utxosAmount < BigInt(invoice.amount)) {
+      // The same minimum the watcher confirmed at, tolerance included.
+      if (utxosAmount < acceptedPaymentAmount(invoice)) {
         console.warn(
           "Spendable UTXOs are below the invoice amount:",
           invoiceId,

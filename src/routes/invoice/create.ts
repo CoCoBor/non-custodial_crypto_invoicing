@@ -72,7 +72,18 @@ async function createFixedCoinInvoice(
   const parsed = fixedCoinSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
 
-  const { amount, lifetime, to_crypto, underpaid } = parsed.data;
+  const { amount, lifetime, crypto, to_crypto, underpaid } = parsed.data;
+
+  // Fixed-coin invoices can only take BTC deposits today; never quietly make
+  // a BTC invoice for a payer who was told to pay something else.
+  if (crypto !== "btc") {
+    return res.status(409).json({
+      error: {
+        code: "DEPOSIT_COIN_NOT_SUPPORTED",
+        message: `fixed-coin invoices can't take ${crypto} deposits yet`,
+      },
+    });
+  }
 
   const payoutAddress = merchant.payout_addresses?.[to_crypto];
   const addressCheck = checkPayoutAddress(to_crypto, payoutAddress);

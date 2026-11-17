@@ -112,7 +112,7 @@ loginRouter.post("/recovery", authRateLimit, async (req, res) => {
   if (!user) return refuse();
 
   const { challenge, signature } = parsed.data;
-  if (!(await provesRecoveryKey(user, challenge, signature))) return refuse();
+  if (!(await provesRecoveryKey(user, challenge, signature, "login"))) return refuse();
 
   if (user.totp_enabled) {
     return res.status(409).json({

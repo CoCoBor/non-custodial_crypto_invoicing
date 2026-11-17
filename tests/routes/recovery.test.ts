@@ -43,13 +43,13 @@ async function establishedMerchant() {
 }
 
 /** What the browser does: only the 12 words are needed, not the account number. */
-async function recover(path: string, recoveryPhrase: string) {
+async function recover(path: "reset-totp" | "new-account-number", recoveryPhrase: string) {
   const recoveryPublicKey = derivePublicKeyFromMnemonic(recoveryPhrase)!;
   const challenge = (await postJson(`${baseUrl}/auth/challenge`, { recoveryPublicKey })).body.data.challenge;
   return await postJson(`${baseUrl}/auth/recovery/${path}`, {
     recoveryPublicKey,
     challenge,
-    signature: signChallenge(recoveryPhrase, challenge),
+    signature: signChallenge(recoveryPhrase, challenge, path),
   });
 }
 
@@ -86,7 +86,7 @@ describe("resetting TOTP with the 12 words", () => {
     const reset = await postJson(`${baseUrl}/auth/recovery/reset-totp`, {
       recoveryPublicKey,
       challenge,
-      signature: signChallenge(stranger, challenge),
+      signature: signChallenge(stranger, challenge, "reset-totp"),
     });
 
     assert.equal(reset.status, 401);
@@ -144,7 +144,24 @@ describe("a new account number from the 12 words", () => {
     const response = await postJson(`${baseUrl}/auth/recovery/new-account-number`, {
       recoveryPublicKey,
       challenge,
-      signature: signChallenge(generateRecoveryCredential().mnemonic, challenge),
+      signature: signChallenge(generateRecoveryCredential().mnemonic, challenge, "new-account-number"),
+    });
+
+    assert.equal(response.status, 401);
+    assert.equal((await postJson(`${baseUrl}/auth/login`, { accountNumber: merchant.accountNumber })).status, 200);
+  });
+});
+
+describe("signatures are bound to one action", () => {
+  it("a signature made for logging in can't get a new account number", async () => {
+    const merchant = await establishedMerchant();
+    const recoveryPublicKey = derivePublicKeyFromMnemonic(merchant.recoveryPhrase)!;
+    const challenge = (await postJson(`${baseUrl}/auth/challenge`, { recoveryPublicKey })).body.data.challenge;
+
+    const response = await postJson(`${baseUrl}/auth/recovery/new-account-number`, {
+      recoveryPublicKey,
+      challenge,
+      signature: signChallenge(merchant.recoveryPhrase, challenge, "login"),
     });
 
     assert.equal(response.status, 401);

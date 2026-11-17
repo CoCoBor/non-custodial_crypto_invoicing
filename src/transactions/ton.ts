@@ -16,6 +16,7 @@ import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { ceilDivide } from "../money/format.js";
 import { parseFeeRate, splitPayout } from "../money/payout-split.js";
+import { acceptedPaymentAmount } from "../invoice/payment-rules.js";
 import { openSecret, type SealedSecret } from "../security/secret-envelope.js";
 import {
   isCryptoId,
@@ -866,7 +867,8 @@ export async function transferTonToMerchant(
         feePaidByPayer: invoice.fee_paid_by_payer,
         toCrypto: invoice.to_crypto,
         sealedDepositKey: invoice.private?.private_key,
-        minimumTotal: BigInt(invoice.amount),
+        // The same minimum the watcher confirmed at, tolerance included.
+        minimumTotal: acceptedPaymentAmount(invoice),
         lifetimeMinutes: invoice.lifetime,
       });
 

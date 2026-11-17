@@ -14,3 +14,17 @@ export function toleranceBasisPoints(percent: number): bigint | undefined {
 export function minimumAcceptedAmount(amount: bigint, toleranceBps: bigint): bigint {
   return amount - (amount * toleranceBps) / 10_000n;
 }
+
+/**
+ * The least that pays this invoice. The watcher confirms at this amount and
+ * the payout releases at it, so they can never disagree.
+ */
+export function acceptedPaymentAmount(invoice: {
+  amount: string;
+  underpaid?: number | null;
+}): bigint {
+  return minimumAcceptedAmount(
+    BigInt(invoice.amount),
+    toleranceBasisPoints(invoice.underpaid ?? 0) ?? 0n,
+  );
+}

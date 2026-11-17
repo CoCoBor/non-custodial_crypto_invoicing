@@ -1,7 +1,7 @@
 import { Router, type Response } from "express";
 import { z } from "zod";
 
-import { provesRecoveryKey } from "../../auth/login-challenge.js";
+import { provesRecoveryKey, type RecoveryAction } from "../../auth/login-challenge.js";
 import * as userFunc from "../../auth/user.function.js";
 import { rotateAccountNumber } from "../../auth/user.repository.js";
 import { env } from "../../config/env.js";
@@ -37,7 +37,7 @@ function refuse(res: Response) {
 }
 
 /** The merchant who proved the 12 words, or undefined after answering the request. */
-async function provenMerchant(body: unknown, res: Response) {
+async function provenMerchant(body: unknown, res: Response, action: RecoveryAction) {
   const parsed = recoverySchema.safeParse(body);
   if (!parsed.success) {
     res.status(400).json({
@@ -48,7 +48,7 @@ async function provenMerchant(body: unknown, res: Response) {
 
   const { recoveryPublicKey, challenge, signature } = parsed.data;
   const user = await userFunc.findUserByRecoveryPublicKey(recoveryPublicKey);
-  if (!user || !(await provesRecoveryKey(user, challenge, signature))) {
+  if (!user || !(await provesRecoveryKey(user, challenge, signature, action))) {
     refuse(res);
     return undefined;
   }
@@ -56,7 +56,7 @@ async function provenMerchant(body: unknown, res: Response) {
 }
 
 recoveryRouter.post("/reset-totp", authRateLimit, async (req, res) => {
-  const user = await provenMerchant(req.body, res);
+  const user = await provenMerchant(req.body, res, "reset-totp");
   if (!user) return;
 
   await User.updateOne(
@@ -92,7 +92,7 @@ recoveryRouter.post("/reset-totp", authRateLimit, async (req, res) => {
 });
 
 recoveryRouter.post("/new-account-number", authRateLimit, async (req, res) => {
-  const user = await provenMerchant(req.body, res);
+  const user = await provenMerchant(req.body, res, "new-account-number");
   if (!user) return;
 
   const accountNumber = await rotateAccountNumber(user.user_id);

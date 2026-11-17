@@ -77,6 +77,15 @@ describe("the merchant API", () => {
     assert.ok(invoice?.private?.private_key, "the deposit key is missing");
   });
 
+  it("refuses a fixed-coin invoice for a deposit coin it can't create yet, rather than make a BTC one", async () => {
+    const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "ton", to_crypto: "ton" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "DEPOSIT_COIN_NOT_SUPPORTED");
+  });
+
   it("creates a merchant's-list invoice without a deposit, offering only coins that can be paid end to end", async () => {
     // LTC has no watcher or payout path yet, so it is not offered.
     const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS, ltc: "LVfF2X4rVkYumLxWRZsK8Z6e1BULNxH5ZW" });

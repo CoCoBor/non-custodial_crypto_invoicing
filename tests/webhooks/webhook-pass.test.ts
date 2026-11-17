@@ -12,7 +12,7 @@ import {
   disconnectFromMongoDB,
 } from "../../src/infrastructure/database/mongodb.js";
 import { sealSecret } from "../../src/security/secret-envelope.js";
-import { runWebhookPass, type WebhookPorts } from "../../src/webhooks/webhook-pass.js";
+import { runWebhookPass, statusEventId, type WebhookPorts } from "../../src/webhooks/webhook-pass.js";
 
 // Status changes become signed POSTs to the merchant's webhook URL.
 // Needs a test database: MONGODB_URI=… MONGODB_DATABASE=merchant_test npm test
@@ -136,6 +136,45 @@ describe("turning status changes into webhooks", () => {
     await runWebhookPass(ports(NOW + MINUTE));
 
     assert.deepEqual(forInvoice(invoiceId).map((r) => JSON.parse(r.body).status), ["confirmed", "completed"]);
+  });
+
+  it("records a change once even if the last pass stopped before marking it announced", async () => {
+    const userId = await merchant();
+    const invoiceId = await invoiceOf(userId, "confirmed");
+    // A crash after recording the event but before moving notified_status.
+    await db.collection("webhook_events").insertOne({
+      eventId: statusEventId(invoiceId, "", "confirmed"),
+      userId,
+      invoiceId,
+      status: "confirmed",
+      payload: JSON.stringify({ invoiceId, status: "confirmed" }),
+      attempts: 0,
+      nextAttemptAt: new Date(NOW),
+      deliveredAt: null,
+      failedAt: null,
+    });
+
+    await runWebhookPass(ports());
+
+    assert.equal(await db.collection("webhook_events").countDocuments({ invoiceId }), 1);
+    assert.equal((await db.collection("invoices").findOne({ invoice_id: invoiceId }))?.notified_status, "confirmed");
+    assert.equal(forInvoice(invoiceId).length, 1);
+  });
+
+  it("includes the money: platform fee, network fee and the merchant's amount", async () => {
+    const userId = await merchant();
+    const invoiceId = await invoiceOf(userId, "completed");
+    await db.collection("invoices").updateOne(
+      { invoice_id: invoiceId },
+      { $set: { platform_fee: "5000", network_fee: "700", received_amount: "94300" } },
+    );
+
+    await runWebhookPass(ports());
+
+    const body = JSON.parse(forInvoice(invoiceId)[0]!.body);
+    assert.equal(body.platformFee, "5000");
+    assert.equal(body.networkFee, "700");
+    assert.equal(body.merchantAmount, "94300");
   });
 
   it("sends nothing for a merchant without a webhook URL", async () => {

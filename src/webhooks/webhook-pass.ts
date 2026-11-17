@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac } from "node:crypto";
 
 import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
@@ -21,62 +21,84 @@ export async function runWebhookPass(ports: WebhookPorts): Promise<void> {
   await deliverDueEvents(ports);
 }
 
+/** One event per status change; the same change always gets the same id. */
+export function statusEventId(invoiceId: string, from: string, to: string): string {
+  return `${invoiceId}:${from}->${to}`;
+}
+
 // An invoice's status can be changed by many parts of the code; comparing it
 // with the last status announced catches every change in one place. Two
 // changes between passes are announced once, with the latest status.
+// The event is recorded before the change is marked announced, and recording
+// it twice is a no-op, so a crash in between can't lose it.
 async function recordStatusChanges(now: number): Promise<void> {
   const changed = await Invoice.find({
     $expr: { $ne: ["$status", { $ifNull: ["$notified_status", ""] }] },
   })
     .select(
-      "invoice_id user_id status notified_status outcome crypto to_crypto amount amount_fiat paid_amount tx.in tx.out tx.platform_out -_id",
+      "invoice_id user_id status notified_status outcome crypto to_crypto amount amount_fiat paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id",
     )
     .lean()
     .exec();
 
   for (const invoice of changed) {
-    const claimed = await Invoice.updateOne(
-      {
-        invoice_id: invoice.invoice_id,
-        status: invoice.status,
-        notified_status: invoice.notified_status ?? null,
-      },
-      { $set: { notified_status: invoice.status } },
-    ).exec();
-    if (claimed.modifiedCount !== 1) continue;
+    const from = invoice.notified_status ?? "";
+    const to = invoice.status ?? "";
 
     const merchant = await User.findOne({ user_id: invoice.user_id })
       .select("webhook_url")
       .lean()
       .exec();
-    if (!merchant?.webhook_url) continue;
-
-    const eventId = randomUUID();
-    await WebhookEvent.create({
-      eventId,
-      userId: invoice.user_id,
-      invoiceId: invoice.invoice_id,
-      status: invoice.status,
-      payload: JSON.stringify({
-        event: "invoice.status_changed",
-        eventId,
-        invoiceId: invoice.invoice_id,
-        status: invoice.status,
-        outcome: invoice.outcome ?? "",
-        crypto: invoice.crypto,
-        toCrypto: invoice.to_crypto,
-        amount: invoice.amount,
-        amountFiat: invoice.amount_fiat,
-        paidAmount: invoice.paid_amount,
-        txids: {
-          in: invoice.tx?.in ?? "",
-          out: invoice.tx?.out ?? "",
-          platformOut: invoice.tx?.platform_out ?? "",
+    if (merchant?.webhook_url) {
+      const eventId = statusEventId(invoice.invoice_id, from, to);
+      await WebhookEvent.updateOne(
+        { eventId },
+        {
+          $setOnInsert: {
+            eventId,
+            userId: invoice.user_id,
+            invoiceId: invoice.invoice_id,
+            status: to,
+            payload: JSON.stringify({
+              event: "invoice.status_changed",
+              eventId,
+              invoiceId: invoice.invoice_id,
+              status: to,
+              outcome: invoice.outcome ?? "",
+              crypto: invoice.crypto,
+              toCrypto: invoice.to_crypto,
+              amount: invoice.amount,
+              amountFiat: invoice.amount_fiat,
+              paidAmount: invoice.paid_amount,
+              platformFee: invoice.platform_fee,
+              networkFee: invoice.network_fee,
+              merchantAmount: invoice.received_amount,
+              txids: {
+                in: invoice.tx?.in ?? "",
+                out: invoice.tx?.out ?? "",
+                platformOut: invoice.tx?.platform_out ?? "",
+              },
+              occurredAt: new Date(now).toISOString(),
+            }),
+            attempts: 0,
+            nextAttemptAt: new Date(now),
+            deliveredAt: null,
+            failedAt: null,
+            lastError: "",
+          },
         },
-        occurredAt: new Date(now).toISOString(),
-      }),
-      nextAttemptAt: new Date(now),
-    });
+        { upsert: true },
+      ).exec();
+    }
+
+    await Invoice.updateOne(
+      {
+        invoice_id: invoice.invoice_id,
+        status: invoice.status,
+        notified_status: invoice.notified_status ?? null,
+      },
+      { $set: { notified_status: to } },
+    ).exec();
   }
 }
 
