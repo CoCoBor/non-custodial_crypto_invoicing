@@ -1,24 +1,16 @@
 import litecore from "bitcore-lib-ltc";
 import { z } from "zod";
-import { env } from "../config/env.js";
-import { Invoice } from "../database/invoices.model.js";
-import { User } from "../database/users.model.js";
+import type { PayoutRequest, PayoutResult, Transfer } from "../chains/adapter.js";
+import type { BlockbookApi } from "../chains/blockbook.js";
 import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { ceilDivide } from "../money/format.js";
-import { parseFeeRate, splitPayout } from "../money/payout-split.js";
+import { splitPayout } from "../money/payout-split.js";
 import { openSecret } from "../security/secret-envelope.js";
-import {
-  hasSwapTimeLeft,
-  isCryptoId,
-  prepareSwap,
-  swapFieldsToSave,
-  type PreparedSwap,
-} from "../swap/near.js";
 
-// Litecoin: payment lookup and LTC -> LTC payout.
-// Chain data comes from NOWNodes Blockbook, the same API as btc.ts.
+// Litecoin: LTC -> LTC payout from a P2PKH deposit.
+// Chain data comes from a Blockbook API (NOWNodes in production), the same
+// API as btc.ts; payments are listed by getBlockbookPayments.
 
-const LTC_BLOCKBOOK_URL = "https://ltcbook.nownodes.io/api/v2";
 const LTC_NETWORK = litecore.Networks.livenet;
 
 // 1 LTC = 100,000,000 litoshi (8 decimals, like BTC satoshis).
@@ -48,115 +40,14 @@ const WITNESS_SPEND_SIZE = 67;
 const FEE_RATE_DECIMALS = 8;
 const FEE_RATE_SCALE = 10n ** BigInt(FEE_RATE_DECIMALS);
 
-const STUCK_TX_REVIEW_MS = 24 * 60 * 60 * 1000;
-
 const txIdSchema = z.string().regex(/^[0-9a-fA-F]{64}$/);
 const litoshiString = z.string().regex(/^[0-9]+$/); // digits only, so BigInt() can't throw
 
-const ltcPaymentsSchema = z
-  .object({
-    totalPages: z.number().int().nonnegative(),
-    txs: z.number().int().nonnegative(),
-    unconfirmedTxs: z.number().int().nonnegative(),
-    transactions: z
-      .array(
-        z.object({
-          txid: txIdSchema,
-          confirmations: z.number().int().nonnegative(),
-          vout: z.array(
-            z.object({
-              value: litoshiString,
-              isAddress: z.boolean().optional(),
-              addresses: z.array(z.string()).optional(),
-            }),
-          ),
-        }),
-      )
-      .default([]),
-  })
-  .refine(
-    (data) =>
-      data.transactions.length > 0 ||
-      (data.txs === 0 && data.unconfirmedTxs === 0),
-    { message: "Transaction details are missing" },
-  );
-
 // ---------- Blockbook API ----------
-
-async function get(path: string): Promise<unknown> {
-  try {
-    const res = await fetch(`${LTC_BLOCKBOOK_URL}${path}`, {
-      headers: {
-        "api-key": env.nowNodesApiKey,
-        Accept: "application/json",
-      },
-      signal: AbortSignal.timeout(10_000),
-      // A redirect would carry the api-key header to another host.
-      redirect: "error",
-    });
-
-    if (!res.ok) {
-      // e.g. 400 {"error":"..."}. Blockbook errors are safe to log.
-      console.warn(
-        "LTC Blockbook GET failed:",
-        path,
-        res.status,
-        (await res.text()).slice(0, 300),
-      );
-      return undefined;
-    }
-
-    return await res.json();
-  } catch (error) {
-    console.warn(
-      "LTC Blockbook GET failed:",
-      path,
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return undefined;
-  }
-}
-
-// Only used for /sendtx/. Never log `body`: it is the signed transaction.
-async function post(path: string, body: string): Promise<unknown> {
-  try {
-    const res = await fetch(`${LTC_BLOCKBOOK_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "api-key": env.nowNodesApiKey,
-        Accept: "application/json",
-        "Content-Type": "text/plain",
-      },
-      signal: AbortSignal.timeout(10_000),
-      redirect: "error",
-      body,
-    });
-
-    if (!res.ok) {
-      // e.g. 400 {"error":"-26: txn-mempool-conflict"}. Worth seeing, and safe to log.
-      console.warn(
-        "LTC Blockbook POST failed:",
-        path,
-        res.status,
-        (await res.text()).slice(0, 300),
-      );
-      return undefined;
-    }
-
-    return await res.json();
-  } catch (error) {
-    console.warn(
-      "LTC Blockbook POST failed:",
-      path,
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return undefined;
-  }
-}
 
 // Spendable outputs at `address`, in litoshi. Unconfirmed and immature
 // coinbase outputs are left out, because spending them can fail.
-async function getLtcUtxos(address: string) {
+async function getLtcUtxos(api: BlockbookApi, address: string) {
   const parsed = z
     .array(
       z.object({
@@ -167,7 +58,7 @@ async function getLtcUtxos(address: string) {
         coinbase: z.boolean().optional(),
       }),
     )
-    .safeParse(await get(`/utxo/${encodeURIComponent(address)}?confirmed=true`));
+    .safeParse(await api.get(`/utxo/${encodeURIComponent(address)}?confirmed=true`));
 
   if (!parsed.success) return undefined;
 
@@ -182,10 +73,10 @@ async function getLtcUtxos(address: string) {
 
 // Fee rate to pay, in litoshi per kB (1000 bytes), aiming for ~2 blocks.
 // Blockbook answers in LTC per kB, e.g. "0.00000997".
-async function getLtcFeePerKb() {
+async function getLtcFeePerKb(api: BlockbookApi) {
   const parsed = z
     .object({ result: z.string() })
-    .safeParse(await get("/estimatefee/2"));
+    .safeParse(await api.get("/estimatefee/2"));
 
   if (!parsed.success) return undefined;
 
@@ -205,7 +96,7 @@ async function getLtcFeePerKb() {
 // 0 = in the mempool, not mined yet.
 // undefined = not found OR lookup failed. Rebroadcasting the same signed tx
 // is safe either way: it has the same txid and can only be mined once.
-async function getLtcConfirmations(txId: string) {
+async function getLtcConfirmations(api: BlockbookApi, txId: string) {
   if (!txIdSchema.safeParse(txId).success) return undefined;
 
   const parsed = z
@@ -213,7 +104,7 @@ async function getLtcConfirmations(txId: string) {
       txid: txIdSchema,
       confirmations: z.number().int().nonnegative(),
     })
-    .safeParse(await get(`/tx/${txId}`));
+    .safeParse(await api.get(`/tx/${txId}`));
 
   if (!parsed.success) return undefined;
   if (parsed.data.txid.toLowerCase() !== txId.toLowerCase()) return undefined;
@@ -222,60 +113,14 @@ async function getLtcConfirmations(txId: string) {
 }
 
 // Sends a signed transaction (hex). Returns its txid in lowercase.
-async function broadcastLtcTx(hex: string) {
+async function broadcastLtcTx(api: BlockbookApi, hex: string) {
   if (!/^(?:[0-9a-fA-F]{2})+$/.test(hex)) return undefined;
 
   const parsed = z
     .object({ result: txIdSchema })
-    .safeParse(await post("/sendtx/", hex));
+    .safeParse(await api.post("/sendtx/", hex));
 
   return parsed.success ? parsed.data.result.toLowerCase() : undefined;
-}
-
-// Every transaction that paid `address`, with how much it paid (litoshi).
-// Same logic as getBtcPayments in invoice.function.ts.
-export async function getLtcPayments(address: string) {
-  const payments: { txid: string; amount: bigint; confirmations: number }[] =
-    [];
-  const seenTxids = new Set<string>();
-  let page = 1;
-
-  while (true) {
-    const parsed = ltcPaymentsSchema.safeParse(
-      await get(
-        `/address/${encodeURIComponent(address)}` +
-          `?details=txs&page=${page}&pageSize=100`,
-      ),
-    );
-    if (!parsed.success) return undefined;
-
-    for (const transaction of parsed.data.transactions) {
-      const txid = transaction.txid.toLowerCase();
-      // A new tx can push older ones onto the next page, so skip repeats.
-      if (seenTxids.has(txid)) continue;
-      seenTxids.add(txid);
-
-      let amount = 0n;
-      for (const output of transaction.vout) {
-        if (output.isAddress && output.addresses?.includes(address)) {
-          amount += BigInt(output.value);
-        }
-      }
-
-      if (amount > 0n) {
-        payments.push({
-          txid,
-          amount,
-          confirmations: transaction.confirmations,
-        });
-      }
-    }
-
-    if (page >= parsed.data.totalPages) break;
-    page += 1;
-  }
-
-  return payments;
 }
 
 // ---------- Payout math (pure: no network, no database) ----------
@@ -491,333 +336,165 @@ function signLtcTransaction(input: {
   return { txid: tx.id.toLowerCase(), hex };
 }
 
+// The widest standard output script (P2WSH; Litecoin has no P2TR outputs in
+// use). The estimate is made before the destination is known.
+const WIDEST_OUTPUT_SCRIPT_LENGTH = 34;
+
+/**
+ * Payer-pays estimate, in litoshi: a payout of one payment (one input) to
+ * two of the widest outputs, at today's fee rate. undefined if the fee rate
+ * is unavailable.
+ */
+export async function estimateLtcPayoutNetworkCost(api: BlockbookApi): Promise<bigint | undefined> {
+  const feePerKb = await getLtcFeePerKb(api);
+  if (feePerKb === undefined) return undefined;
+  const outputSize = 8 + varIntSize(WIDEST_OUTPUT_SCRIPT_LENGTH) + WIDEST_OUTPUT_SCRIPT_LENGTH;
+  const txSize = 8 + varIntSize(1) + varIntSize(2) + P2PKH_INPUT_SIZE + 2 * outputSize;
+  return ceilDivide(BigInt(txSize) * feePerKb, 1000n);
+}
+
+// What a confirmed payout transaction sent, read back from its own bytes:
+// the first output is the destination, the second (if any) the platform fee
+// (see prepareLtcPayout).
+function sentByLtcTransaction(hex: string, destinationKind: Transfer["kind"]): Transfer[] {
+  const tx = new litecore.Transaction(hex);
+  const txid = tx.id.toLowerCase();
+  return tx.outputs.map((output, index) => ({
+    kind: index === 0 ? destinationKind : "platform_fee",
+    // bitcore takes a network here; its types don't say so.
+    to: String((output.script as unknown as { toAddress(network: unknown): unknown }).toAddress(LTC_NETWORK)),
+    amount: BigInt(output.satoshis),
+    txid,
+  }));
+}
+
 // ---------- Payout flow ----------
 
-// Called every watcher round for an LTC invoice that is confirmed or processing.
-// confirmed: plan, sign, save the signed tx (status -> processing).
-// processing: broadcast until it confirms, then status -> completed.
-export async function transferLtcToMerchant(
-  invoiceId: string,
-  platformAddress: string,
-) {
-  try {
-    let invoice = await Invoice.findOne({
-      invoice_id: invoiceId,
-      crypto: "ltc",
-      status: { $in: ["confirmed", "processing"] },
-    })
-      .select("+private.private_key +tx.raw")
-      .exec();
-    if (!invoice) return;
-
-    async function fail(reason: string) {
-      const result = await Invoice.updateOne(
-        { invoice_id: invoiceId, crypto: "ltc", status: "confirmed" },
-        {
-          $set: {
-            status: "failed",
-            "timestamps.failed": Date.now(),
-            review_reason: reason,
-          },
-        },
-      ).exec();
-
-      if (result.matchedCount === 0) {
-        console.warn(
-          "LTC payout: could not mark failed, invoice is no longer confirmed:",
-          invoiceId,
-          reason,
-        );
-        return;
-      }
-      console.error("LTC payout failed:", invoiceId, reason);
-    }
-
-    if (invoice.status === "confirmed") {
-      const depositAddress = invoice.address;
-      const merchantAddress = invoice.to_address;
-
-      // Our own config, not the invoice: never fail an invoice for it.
-      if (!isValidLtcAddress(platformAddress)) {
-        throw new Error("Platform LTC address is not a valid Litecoin address");
-      }
-
-      if (invoice.fee_paid_by_payer) {
-        return await fail(
-          `Payout stopped: payer-paid fees are not supported for LTC yet. All funds are still at deposit address ${depositAddress}. Pay out manually.`,
-        );
-      }
-
-      const toCrypto = invoice.to_crypto;
-      if (!isCryptoId(toCrypto)) {
-        return await fail(
-          `Payout stopped: payout asset "${toCrypto}" is unknown. All funds are still at deposit address ${depositAddress}. Fix to_crypto, then pay out manually.`,
-        );
-      }
-      // Paid in LTC but wanted in another coin: swap through NEAR.
-      const swapTo = toCrypto === "ltc" ? undefined : toCrypto;
-
-      if (
-        !isValidLtcAddress(depositAddress) ||
-        new litecore.Address(depositAddress, LTC_NETWORK).type !== "pubkeyhash"
-      ) {
-        return await fail(
-          `Payout stopped: deposit address "${depositAddress}" is not a mainnet P2PKH (L...) address, and the fee math only fits that type. Check how this invoice was created before moving the funds.`,
-        );
-      }
-
-      // With a swap, the merchant address is on the other chain; NEAR
-      // checks it when quoting.
-      if (swapTo === undefined) {
-        if (!isValidLtcAddress(merchantAddress)) {
-          return await fail(
-            `Payout stopped: merchant payout address "${merchantAddress}" is not a valid Litecoin address (MWEB "ltcmweb1" addresses are not supported). All funds are still at deposit address ${depositAddress}. Fix the merchant's LTC address, then pay out manually.`,
-          );
-        }
-
-        if (merchantAddress === depositAddress) {
-          return await fail(
-            `Payout stopped: merchant payout address is the deposit address itself (${depositAddress}). All funds are still there. Fix the merchant's LTC address, then pay out manually.`,
-          );
-        }
-      }
-
-      const user = await User.findOne({ user_id: invoice.user_id })
-        .select("merchant_fee")
-        .exec();
-      if (!user) {
-        return await fail(
-          `Payout stopped: merchant account ${invoice.user_id} was not found. All funds are still at deposit address ${depositAddress}. Check whether the merchant was deleted, then pay out manually.`,
-        );
-      }
-
-      const feeRate = parseFeeRate(user.merchant_fee);
-      if (feeRate === undefined) {
-        return await fail(
-          `Payout stopped: merchant fee rate "${user.merchant_fee}" is not a valid rate below 100%. All funds are still at deposit address ${depositAddress}. Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`,
-        );
-      }
-
-      if (!invoice.private?.private_key) {
-        return await fail(
-          `Payout stopped: the deposit private key is missing from the database. All funds are still at deposit address ${depositAddress}. Restore the key from backup; without it the funds cannot be moved.`,
-        );
-      }
-
-      const feePerKb = await getLtcFeePerKb();
-      if (feePerKb === undefined) {
-        console.warn("LTC fee rate unavailable; will retry:", invoiceId);
-        return;
-      }
-
-      const utxos = await getLtcUtxos(depositAddress);
-      if (utxos === undefined) {
-        console.warn("LTC UTXOs unavailable; will retry:", invoiceId);
-        return;
-      }
-
-      const total = utxos.reduce((sum, u) => sum + u.amount, 0n);
-      if (total < BigInt(invoice.amount)) {
-        // Blockbook can lag behind the payment check; try again next round.
-        console.warn(
-          "Spendable LTC is below the invoice amount; will retry:",
-          invoiceId,
-        );
-        return;
-      }
-
-      // A swap is a normal payout whose receiver is NEAR's deposit address.
-      let receiver = merchantAddress;
-      let swap: PreparedSwap | undefined;
-      if (swapTo !== undefined) {
-        swap = await prepareSwap(
-          {
-            crypto: "ltc",
-            isValidAddress: isValidLtcAddress,
-            amountArrivingAt: async (address) =>
-              prepareLtcPayout({
-                platformAddress,
-                merchantAddress: address,
-                feePerKb,
-                feeRate,
-                utxos,
-              })?.merchantAmount,
-            refundAddress: depositAddress,
-            platformAddress,
-          },
-          swapTo,
-          merchantAddress,
-        );
-        if (swap === undefined) {
-          console.warn("LTC swap quote not ready; will retry:", invoiceId);
-          return;
-        }
-        receiver = swap.depositAddress;
-      }
-
-      const payout = prepareLtcPayout({
-        platformAddress,
-        merchantAddress: receiver,
-        feePerKb,
-        feeRate,
-        utxos,
-      });
-      if (payout === undefined) {
-        console.warn("LTC payout is too small after fees; will retry:", invoiceId);
-        return;
-      }
-
-      // NEAR refunds everything if less than amountIn arrives.
-      if (swap !== undefined && payout.merchantAmount !== swap.amount) {
-        console.warn("LTC payout no longer matches the swap quote; will retry:", invoiceId);
-        return;
-      }
-
-      let signed: { txid: string; hex: string };
-      try {
-        signed = signLtcTransaction({
-          depositAddress,
-          wif: openSecret("litecoin-deposit-key", invoice.private.private_key),
-          utxos,
-          outputs: payout.outputs,
-          networkFee: payout.networkFee,
-          feePerKb,
-          estimatedSize: payout.txSize,
-        });
-      } catch (error) {
-        return await fail(
-          `Payout stopped: signing failed (${error instanceof Error ? error.message : "unknown error"}). Nothing was sent; all funds are still at deposit address ${depositAddress}. Investigate before retrying.`,
-        );
-      }
-
-      // Save the signed tx before broadcasting it, so a crash can't lose it.
-      invoice = await Invoice.findOneAndUpdate(
-        { invoice_id: invoiceId, crypto: "ltc", status: "confirmed" },
-        {
-          $set: {
-            status: "processing",
-            "timestamps.processing": Date.now(),
-            "tx.out": signed.txid,
-            "tx.raw": signed.hex,
-            // Swap: what the merchant gets is known only when NEAR finishes
-            // (updateSwapStatus sets it).
-            received_amount: swap ? "0" : payout.merchantAmount.toString(),
-            network_fee: payout.networkFee.toString(),
-            platform_fee: payout.platformFee.toString(),
-            ...(swap ? swapFieldsToSave(swap) : {}),
-          },
-        },
-        { returnDocument: "after" },
-      )
-        .select("+tx.raw")
-        .exec();
-
-      if (invoice === null) {
-        console.warn("Another run claimed it first", invoiceId);
-        return;
-      }
-    }
-
-    const txId = invoice.tx?.out;
-    const hex = invoice.tx?.raw;
-
-    if (!txId || !hex) {
-      await Invoice.updateOne(
-        { invoice_id: invoiceId, crypto: "ltc", status: "processing" },
-        {
-          $set: {
-            review_reason: `Invoice is processing but has no saved LTC transaction. The claim always saves it, so this is a bug or a manual DB edit. Funds may still be at deposit address ${invoice.address}; check a block explorer before resending anything.`,
-          },
-        },
-      ).exec();
-      console.error(
-        "LTC invoice is processing but has no saved tx; needs review:",
-        invoiceId,
-      );
-      return;
-    }
-
-    const confirmations = await getLtcConfirmations(txId);
-    const isSwap = invoice.to_crypto !== "ltc";
-
-    if (confirmations === undefined) {
-      // The network doesn't know this tx. Too close to NEAR's deadline, a
-      // deposit would arrive late and be refunded, so don't send it.
-      if (isSwap && !hasSwapTimeLeft(invoice.swap?.deadline)) {
-        const result = await Invoice.updateOne(
-          { invoice_id: invoiceId, crypto: "ltc", status: "processing", "tx.out": txId },
-          {
-            $set: {
-              status: "failed",
-              "timestamps.failed": Date.now(),
-              review_reason: `Swap payout ${txId} was never seen by the network, and NEAR's deadline (${invoice.swap?.deadline || "missing"}) is too close, so it was not sent again. The LTC should still be at deposit address ${invoice.address}. Set the status back to "confirmed" to get a new quote, or pay out manually. A new payout spends the same coins, so the old tx and a new one can never both confirm.`,
-            },
-          },
-        ).exec();
-        if (result.modifiedCount > 0) {
-          console.error("LTC swap payout stopped near the NEAR deadline:", invoiceId, txId);
-        }
-        return;
-      }
-
-      const sent = await broadcastLtcTx(hex);
-      if (sent === txId) {
-        console.log("LTC payout broadcast:", invoiceId, txId);
-      } else if (sent !== undefined) {
-        // The txid is a hash of the hex, so this can't happen unless something is broken.
-        console.error("LTC broadcast returned another txid:", invoiceId, txId, sent);
-      }
-      // post() already logs why a broadcast failed.
-    }
-
-    if (confirmations === undefined || confirmations === 0) {
-      const processingAt = invoice.timestamps?.processing;
-      if (
-        processingAt != null &&
-        Date.now() - processingAt >= STUCK_TX_REVIEW_MS
-      ) {
-        const reason = `LTC payout ${txId} is not confirmed after 24 hours. Funds are still at deposit address ${invoice.address} until it confirms. It is rebroadcast every round; check the logs for the broadcast error. This signed tx can still confirm, so do not pay the merchant from another wallet: a replacement must spend the same deposit UTXOs, so only one can ever confirm.`;
-
-        const result = await Invoice.updateOne(
-          {
-            invoice_id: invoiceId,
-            crypto: "ltc",
-            status: "processing",
-            review_reason: { $ne: reason },
-          },
-          { $set: { review_reason: reason } },
-        ).exec();
-
-        if (result.modifiedCount === 1) {
-          console.error("LTC payout stuck; needs review:", invoiceId, txId);
-        }
-      }
-      return;
-    }
-
-    // Swap: the LTC reached NEAR. NEAR's status completes the invoice
-    // (updateSwapStatus in swap/near.ts).
-    if (isSwap) return;
-
-    const result = await Invoice.updateOne(
-      { invoice_id: invoiceId, crypto: "ltc", status: "processing", "tx.out": txId },
-      {
-        $set: {
-          status: "completed",
-          "timestamps.completed": Date.now(),
-          review_reason: "",
-        },
-      },
-    ).exec();
-
-    if (result.modifiedCount > 0) {
-      console.log("LTC payout completed:", invoiceId, txId);
-    }
-  } catch (error) {
-    console.error(
-      "LTC payout could not finish; invoice state was preserved:",
-      invoiceId,
-      error instanceof Error ? error.message : "unknown error",
-    );
+/**
+ * The LTC side of ChainAdapter.payout (src/chains/adapter.ts): pays
+ * request.destination from the deposit, or follows the transaction saved in
+ * request.checkpoint (its raw hex). Never touches the database.
+ */
+export async function payOutLtc(
+  request: PayoutRequest,
+  deps: { platformAddress: string; api: BlockbookApi },
+): Promise<PayoutResult> {
+  const { platformAddress, api } = deps;
+  // Our own config, not the invoice: never fail an invoice for it.
+  if (!isValidLtcAddress(platformAddress)) {
+    throw new Error("Platform LTC address is not a valid Litecoin address");
   }
+
+  const { depositAddress, destination, destinationKind } = request;
+  const pending = (reason: string): PayoutResult => ({ status: "pending", reason });
+  const fail = (reason: string): PayoutResult => ({
+    status: "failed",
+    message: `LTC payout stopped: ${reason}. Nothing was sent: all funds are still at deposit address ${depositAddress}. Fix the cause, then set the invoice back to "confirmed" to retry, or move the funds by hand with the deposit key.`,
+    transfers: [],
+  });
+
+  let hex: string;
+
+  if (request.checkpoint === undefined) {
+    if (request.receiveAsset !== "ltc") {
+      return fail(`an LTC deposit can't be paid out as ${request.receiveAsset}`);
+    }
+    if (
+      !isValidLtcAddress(depositAddress) ||
+      new litecore.Address(depositAddress, LTC_NETWORK).type !== "pubkeyhash"
+    ) {
+      return fail("the deposit is not a mainnet P2PKH (L...) address, and the fee math only fits that type");
+    }
+    if (!isValidLtcAddress(destination)) {
+      return fail(`destination "${destination}" is not a valid Litecoin address (MWEB "ltcmweb1" addresses are not supported)`);
+    }
+    if (destination === depositAddress) {
+      return fail("the destination is the deposit address itself");
+    }
+    if (request.depositKey.kind !== "sealed_key") return fail("the deposit private key is missing");
+
+    const feePerKb = await getLtcFeePerKb(api);
+    if (feePerKb === undefined) return pending("LTC fee rate unavailable");
+
+    const utxos = await getLtcUtxos(api, depositAddress);
+    if (utxos === undefined) return pending("LTC UTXOs unavailable");
+
+    const total = utxos.reduce((sum, u) => sum + u.amount, 0n);
+    // Blockbook can lag behind the payment check; try again next round.
+    if (total < request.minimumAmount) return pending("spendable LTC is below the payout minimum");
+
+    const payout = prepareLtcPayout({
+      platformAddress,
+      merchantAddress: destination,
+      feePerKb,
+      feeRate: request.feeRate,
+      utxos,
+    });
+    if (payout === undefined) return { status: "too_small", reason: "LTC payout is too small after fees" };
+
+    let signed: { txid: string; hex: string };
+    try {
+      signed = signLtcTransaction({
+        depositAddress,
+        wif: openSecret("litecoin-deposit-key", request.depositKey.sealed),
+        utxos,
+        outputs: payout.outputs,
+        networkFee: payout.networkFee,
+        feePerKb,
+        estimatedSize: payout.txSize,
+      });
+    } catch (error) {
+      return fail(`signing failed (${error instanceof Error ? error.message : "unknown error"})`);
+    }
+
+    // Save the signed tx before broadcasting it, so a crash can't lose it.
+    const saved = await request.saveCheckpoint({
+      state: signed.hex,
+      plan: {
+        transfers: payout.outputs.map((output, index) => ({
+          kind: index === 0 ? destinationKind : "platform_fee",
+          to: output.address,
+          amount: output.amount,
+          txid: signed.txid,
+        })),
+        platformFee: payout.platformFee,
+        networkCost: payout.networkFee,
+      },
+    });
+    if (!saved) return pending("another run saved this payout first");
+
+    hex = signed.hex;
+  } else {
+    hex = request.checkpoint.state;
+  }
+
+  let txId: string;
+  try {
+    txId = new litecore.Transaction(hex).id.toLowerCase();
+  } catch {
+    return {
+      status: "pending",
+      reason: "unreadable saved LTC transaction",
+      review: `The saved LTC payout transaction is unreadable. Funds may still be at deposit address ${depositAddress}; check a block explorer before sending anything.`,
+    };
+  }
+
+  const confirmations = await getLtcConfirmations(api, txId);
+
+  // Unknown to the network (or the lookup failed): send the same signed tx
+  // again. It has the same txid and can only be mined once.
+  if (confirmations === undefined) {
+    const sent = await broadcastLtcTx(api, hex);
+    if (sent === txId) {
+      console.log("LTC payout broadcast:", depositAddress, txId);
+    } else if (sent !== undefined) {
+      // The txid is a hash of the hex, so this can't happen unless something is broken.
+      console.error("LTC broadcast returned another txid:", depositAddress, txId, sent);
+    }
+    // api.post() already logs why a broadcast failed.
+    return pending("broadcast; check its confirmations on the next round");
+  }
+
+  if (confirmations === 0) return pending("waiting for the first confirmation");
+  return { status: "paid", transfers: sentByLtcTransaction(hex, destinationKind) };
 }
