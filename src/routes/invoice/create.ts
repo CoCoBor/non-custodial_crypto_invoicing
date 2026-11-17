@@ -10,6 +10,7 @@ import { canPayOutFromBtcDeposit } from "../../transactions/btc.js";
 import { toleranceBasisPoints } from "../../invoice/payment-rules.js";
 import { decimalStrToBigInt } from "../../invoice/money.function.js";
 import { WATCHED_COINS } from "../../invoice/invoice.function.js";
+import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import type { AppDeps } from "../../app.js";
 
 const commonFields = {
@@ -19,6 +20,7 @@ const commonFields = {
     .number()
     .refine((percent) => toleranceBasisPoints(percent) !== undefined)
     .default(0),
+  fee_paid_by_payer: z.boolean().default(false),
 };
 
 const fixedCoinSchema = z.object({
@@ -72,7 +74,7 @@ async function createFixedCoinInvoice(
   const parsed = fixedCoinSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
 
-  const { amount, lifetime, crypto, to_crypto, underpaid } = parsed.data;
+  const { amount, lifetime, crypto, to_crypto, underpaid, fee_paid_by_payer } = parsed.data;
 
   // Fixed-coin invoices can only take BTC deposits today; never quietly make
   // a BTC invoice for a payer who was told to pay something else.
@@ -142,11 +144,22 @@ async function createFixedCoinInvoice(
       },
     });
 
+  const askedAmount = await askedAmountFor({
+    coin: "btc",
+    invoiceAmount: payment.paymentUnits,
+    feePaidByPayer: fee_paid_by_payer,
+    merchantFee: merchant.merchant_fee,
+    estimateNetworkCost: deps.estimateNetworkCost,
+  });
+  if (typeof askedAmount !== "bigint") return refuseWithoutEstimate(res, "btc", askedAmount);
+
   const deposit = generateBtcAddress();
 
   const invoice = await invoiceRepo.createInvoice({
     userId: merchant.user_id,
     paymentUnits: payment.paymentUnits,
+    askedAmount,
+    feePaidByPayer: fee_paid_by_payer,
     fiatUnits: payment.fiatUnits,
     address: deposit.address,
     encryptedPrivateKey: deposit.encryptedPrivateKey,
@@ -167,7 +180,7 @@ async function createFixedCoinInvoice(
 async function createMerchantListInvoice(req: Request, res: Response, merchant: Merchant) {
   const parsed = merchantListSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
-  const { amount, lifetime, underpaid, coins } = parsed.data;
+  const { amount, lifetime, underpaid, coins, fee_paid_by_payer } = parsed.data;
 
   const fiatUnits = decimalStrToBigInt(amount, 2);
   if (fiatUnits === undefined || fiatUnits <= 0n) {
@@ -197,6 +210,7 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
     offeredCoins,
     lifetime,
     underpaid,
+    feePaidByPayer: fee_paid_by_payer,
   });
 
   return res.status(201).json({ data: invoice });

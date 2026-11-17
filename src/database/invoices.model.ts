@@ -35,6 +35,7 @@ const invoiceSchema = new Schema(
     fee_paid_by_payer: { type: Boolean, default: false }, // false = merchant covers transaction + platform fees, true = payer covers transaction + platform fees, default = false
     currency: { type: String, default: "usd" }, // invoice currency
     amount: { type: String, required: true }, // invoice amount
+    asked_amount: { type: String, default: "" }, // what the payer is asked to send: amount, plus the fees in payer-pays mode; see askedAmount()
     amount_fiat: { type: String, required: true }, // invoice amount in the invoice currency
     paid_amount: { type: String, default: "0" }, // amount payer paid
     paid_amount_fiat: { type: Number, default: 0 }, // amount payer paid in the invoice currency

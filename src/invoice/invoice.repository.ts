@@ -6,6 +6,8 @@ import cryptos from "../storage/cryptos.json" with { type: "json" };
 export async function createInvoice(input: {
   userId: string;
   paymentUnits: bigint;
+  askedAmount: bigint;
+  feePaidByPayer: boolean;
   fiatUnits: bigint;
   address: string;
   encryptedPrivateKey: SealedSecret;
@@ -25,6 +27,7 @@ export async function createInvoice(input: {
     currency: "usd",
     crypto: input.crypto,
     amount: input.paymentUnits.toString(),
+    asked_amount: input.askedAmount.toString(),
     amount_fiat: input.fiatUnits.toString(),
     paid_amount: "0",
     address: input.address,
@@ -34,7 +37,7 @@ export async function createInvoice(input: {
     underpaid: input.underpaid,
     mode: "fixed",
     link: `/pay/${invoiceId}`,
-    fee_paid_by_payer: false,
+    fee_paid_by_payer: input.feePaidByPayer,
     timestamps: { created: now, waiting: now },
     private: { private_key: input.encryptedPrivateKey },
   });
@@ -57,6 +60,8 @@ export async function createInvoice(input: {
     currency,
     crypto,
     amount,
+    askedAmount: result.asked_amount,
+    feePaidByPayer: result.fee_paid_by_payer,
     amountFiat: amount_fiat,
     address,
     lifetime,
@@ -74,6 +79,7 @@ export async function createMerchantListInvoice(input: {
   offeredCoins: string[];
   lifetime: number;
   underpaid: number;
+  feePaidByPayer: boolean;
 }) {
   const invoiceId = randomUUID();
   const now = Date.now();
@@ -86,11 +92,12 @@ export async function createMerchantListInvoice(input: {
     offered_coins: input.offeredCoins,
     currency: "usd",
     amount: "0",
+    asked_amount: "0",
     amount_fiat: input.fiatUnits.toString(),
     paid_amount: "0",
     lifetime: input.lifetime,
     underpaid: input.underpaid,
-    fee_paid_by_payer: false,
+    fee_paid_by_payer: input.feePaidByPayer,
     link: `/pay/${invoiceId}`,
     timestamps: { created: now, waiting: now },
   });
@@ -102,6 +109,7 @@ export async function createMerchantListInvoice(input: {
     currency: result.currency,
     amountFiat: result.amount_fiat,
     offeredCoins: result.offered_coins,
+    feePaidByPayer: result.fee_paid_by_payer,
     lifetime: result.lifetime,
     createdAt: now,
     link: result.link,
@@ -113,6 +121,7 @@ export async function recordChosenCoin(input: {
   invoiceId: string;
   crypto: string;
   amount: bigint;
+  askedAmount: bigint;
   address: string;
   encryptedPrivateKey: SealedSecret;
   payoutAddress: string;
@@ -125,6 +134,7 @@ export async function recordChosenCoin(input: {
         crypto: input.crypto,
         to_crypto: input.crypto,
         amount: input.amount.toString(),
+        asked_amount: input.askedAmount.toString(),
         address: input.address,
         to_address: input.payoutAddress,
         "private.private_key": input.encryptedPrivateKey,

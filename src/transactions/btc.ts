@@ -153,7 +153,7 @@ function calculateBtcPayout(
     throw new RangeError("total must not be negative");
   }
 
-  const networkFee = ceilDivide(BigInt(txSize) * networkFeeRate, 1000n);
+  const networkFee = btcNetworkFee(txSize, networkFeeRate);
   const feeRate = parseFeeRate(merchantFeeRate);
   if (feeRate === undefined) return undefined;
 
@@ -178,17 +178,45 @@ function estimateBtcTxSize(
   if (outputAddresses.length === 0) {
     throw new RangeError("A transaction needs at least one output");
   }
-  const inputSize = 10 + 148 * inputCount;
-
-  let outputSize = 0;
+  const scriptLengths: number[] = [];
   for (const output of outputAddresses) {
     const isAddValid = validateAdd(output);
     if (!isAddValid) return undefined;
     const addScript = bitcore.Script.fromAddress(output);
 
-    outputSize += addScript.toBuffer().length + 9;
+    scriptLengths.push(addScript.toBuffer().length);
   }
-  return inputSize + outputSize;
+  return btcTxSize(inputCount, scriptLengths);
+}
+
+// P2PKH inputs (every deposit address is P2PKH); each output is its script
+// plus 8 bytes of value and 1 of script length.
+function btcTxSize(inputCount: number, outputScriptLengths: number[]): number {
+  return (
+    10 +
+    148 * inputCount +
+    outputScriptLengths.reduce((size, length) => size + length + 9, 0)
+  );
+}
+
+function btcNetworkFee(txSize: number, networkFeeRate: bigint): bigint {
+  return ceilDivide(BigInt(txSize) * networkFeeRate, 1000n);
+}
+
+// The widest standard output script (P2WSH, P2TR). A payout's outputs are not
+// all known in advance: a swap pays NEAR's deposit address.
+const WIDEST_OUTPUT_SCRIPT_LENGTH = 34;
+
+/**
+ * Payer-pays estimate, in satoshi: a payout of one payment (one input) to
+ * two of the widest outputs, at today's fee rate. undefined if the fee rate
+ * is unavailable.
+ */
+export async function estimateBtcPayoutNetworkCost(): Promise<bigint | undefined> {
+  const networkFeeRate = await getBtcNetworkFee();
+  if (networkFeeRate === undefined) return undefined;
+  const txSize = btcTxSize(1, [WIDEST_OUTPUT_SCRIPT_LENGTH, WIDEST_OUTPUT_SCRIPT_LENGTH]);
+  return btcNetworkFee(txSize, networkFeeRate);
 }
 
 function getBtcDustLimit(address: string): bigint | undefined {
@@ -380,21 +408,17 @@ async function broadcast(hex: string) {
 }
 
 function findPermanentPayoutProblem(input: {
-  feePaidByPayer: boolean;
   toCrypto: string;
   depositAddress: string;
   merchantAddress: string;
   merchantFeeRate: string;
 }): string | undefined {
   const {
-    feePaidByPayer,
     toCrypto,
     depositAddress,
     merchantAddress,
     merchantFeeRate,
   } = input;
-
-  if (feePaidByPayer) return "Only merchant-paid fees are supported";
 
   if (!Object.hasOwn(cryptos, toCrypto)) return "Swap payout are not supported";
 
@@ -453,7 +477,6 @@ export async function transferBtcToMerchant(
       }
 
       const problem = findPermanentPayoutProblem({
-        feePaidByPayer: invoice.fee_paid_by_payer,
         toCrypto: invoice.to_crypto,
         depositAddress: invoice.address,
         merchantAddress: invoice.to_address,

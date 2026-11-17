@@ -177,6 +177,27 @@ describe("turning status changes into webhooks", () => {
     assert.equal(body.merchantAmount, "94300");
   });
 
+  it("includes what the payer was asked for, which is more than the amount in payer-pays mode", async () => {
+    const userId = await merchant();
+    const payerPays = await invoiceOf(userId, "confirmed");
+    const merchantPays = await invoiceOf(userId, "confirmed");
+    await db.collection("invoices").updateOne(
+      { invoice_id: payerPays },
+      { $set: { fee_paid_by_payer: true, asked_amount: "107832" } },
+    );
+
+    await runWebhookPass(ports());
+
+    const payerPaysBody = JSON.parse(forInvoice(payerPays)[0]!.body);
+    assert.equal(payerPaysBody.amount, "100000");
+    assert.equal(payerPaysBody.askedAmount, "107832");
+    assert.equal(payerPaysBody.feePaidByPayer, true);
+    // Made before the asked amount was stored: it asked for the amount.
+    const merchantPaysBody = JSON.parse(forInvoice(merchantPays)[0]!.body);
+    assert.equal(merchantPaysBody.askedAmount, "100000");
+    assert.equal(merchantPaysBody.feePaidByPayer, false);
+  });
+
   it("sends nothing for a merchant without a webhook URL", async () => {
     const invoiceId = await invoiceOf(await merchant(""), "confirmed");
 

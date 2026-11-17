@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 
 import { Invoice } from "../database/invoices.model.js";
+import { askedAmount } from "../invoice/payment-rules.js";
 import { User } from "../database/users.model.js";
 import { WebhookEvent } from "../database/webhook-event.model.js";
 import { openSecret } from "../security/secret-envelope.js";
@@ -36,7 +37,7 @@ async function recordStatusChanges(now: number): Promise<void> {
     $expr: { $ne: ["$status", { $ifNull: ["$notified_status", ""] }] },
   })
     .select(
-      "invoice_id user_id status notified_status outcome crypto to_crypto amount amount_fiat paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id",
+      "invoice_id user_id status notified_status outcome crypto to_crypto amount asked_amount fee_paid_by_payer amount_fiat paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id",
     )
     .lean()
     .exec();
@@ -68,6 +69,8 @@ async function recordStatusChanges(now: number): Promise<void> {
               crypto: invoice.crypto,
               toCrypto: invoice.to_crypto,
               amount: invoice.amount,
+              askedAmount: askedAmount(invoice).toString(),
+              feePaidByPayer: invoice.fee_paid_by_payer ?? false,
               amountFiat: invoice.amount_fiat,
               paidAmount: invoice.paid_amount,
               platformFee: invoice.platform_fee,

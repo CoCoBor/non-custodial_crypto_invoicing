@@ -9,6 +9,7 @@ import {
   disconnectFromMongoDB,
 } from "../../src/infrastructure/database/mongodb.js";
 import { runWatcherPass, type WatcherPorts } from "../../src/invoice/invoice.watcher.js";
+import { parseFeeRate, payerPaysAskedAmount, splitPayout } from "../../src/money/payout-split.js";
 
 // One watcher pass, with the clock, the chain and the payout faked.
 // Needs a test database: MONGODB_URI=… MONGODB_DATABASE=merchant_test npm test
@@ -310,5 +311,139 @@ describe("the merchant's underpaid tolerance", () => {
     await runWatcherPass(ports);
 
     assert.equal((await invoiceNow(invoiceId))?.status, "underpaid");
+  });
+});
+
+describe("a payer-pays invoice", () => {
+  // The merchant wants 100,000 sat; the network cost was estimated at 2,440
+  // sat when the invoice was made; the fee rate is 5%.
+  // asked = ceil((100,000 + 2,440) / 0.95) = ceil(107,831.58) = 107,832
+  const BASE = 100_000n;
+  const ESTIMATE = 2_440n;
+  const FEE_RATE = parseFeeRate("0.05")!;
+  const ASKED = 107_832n;
+
+  async function payerPaysInvoice(fields: Record<string, unknown> = {}) {
+    return await btcInvoice({
+      fee_paid_by_payer: true,
+      amount: BASE.toString(),
+      asked_amount: ASKED.toString(),
+      ...fields,
+    });
+  }
+
+  /**
+   * A payout port standing in for a chain adapter whose transaction really
+   * costs `realNetworkCost`: it splits whatever the deposit holds by F1, as
+   * every chain's payout does.
+   */
+  function settlingPorts(chain: Map<string, Totals>, realNetworkCost: bigint) {
+    const addresses = new Map<string, string>();
+    const merchantGot = new Map<string, bigint>();
+    const { ports } = fakePorts(chain);
+    return {
+      merchantGot,
+      track: (invoiceId: string, address: string) => addresses.set(invoiceId, address),
+      ports: {
+        ...ports,
+        payOut: async (invoice) => {
+          const held = chain.get(addresses.get(invoice.invoice_id)!);
+          if (held === undefined || held === "lookup fails") return;
+          const split = splitPayout({ received: held.confirmed, networkCost: realNetworkCost, feeRate: FEE_RATE });
+          if (split !== undefined) merchantGot.set(invoice.invoice_id, split.merchantAmount);
+        },
+      } satisfies WatcherPorts,
+    };
+  }
+
+  it("asks for an amount that pays the merchant the invoice amount at the estimated cost", () => {
+    assert.equal(payerPaysAskedAmount({ invoiceAmount: BASE, estimatedNetworkCost: ESTIMATE, feeRate: FEE_RATE }), ASKED);
+  });
+
+  it("is paid by exactly the asked amount, and the merchant gets the invoice amount when the cost is as estimated", async () => {
+    const { invoiceId, address } = await payerPaysInvoice();
+    const s = settlingPorts(new Map([[address, { received: ASKED, confirmed: ASKED }]]), ESTIMATE);
+    s.track(invoiceId, address);
+
+    await runWatcherPass(s.ports);
+    assert.equal((await invoiceNow(invoiceId))?.status, "confirmed");
+    await runWatcherPass(s.ports);
+
+    // fee = ceil(5,391.6) = 5,392; 107,832 − 5,392 − 2,440 = 100,000
+    assert.equal(s.merchantGot.get(invoiceId), BASE);
+  });
+
+  it("is not paid by the invoice amount alone", async () => {
+    const { invoiceId, address } = await payerPaysInvoice();
+    const { ports } = fakePorts(new Map([[address, { received: BASE, confirmed: BASE }]]));
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(invoiceId))?.status, "underpaid");
+  });
+
+  it("applies the tolerance to the asked amount", async () => {
+    // 1% of 107,832 is 1,078.32: at least 107,832 − 1,078 = 106,754
+    const enough = await payerPaysInvoice({ underpaid: 1 });
+    const short = await payerPaysInvoice({ underpaid: 1 });
+    const chain = new Map<string, Totals>([
+      [enough.address, { received: 106_754n, confirmed: 106_754n }],
+      [short.address, { received: 106_753n, confirmed: 106_753n }],
+    ]);
+    const s = settlingPorts(chain, ESTIMATE);
+    s.track(enough.invoiceId, enough.address);
+
+    await runWatcherPass(s.ports);
+    assert.equal((await invoiceNow(enough.invoiceId))?.status, "confirmed");
+    assert.equal((await invoiceNow(short.invoiceId))?.status, "underpaid");
+    await runWatcherPass(s.ports);
+
+    // The tolerance is the merchant's: fee = ceil(5,337.7) = 5,338;
+    // 106,754 − 5,338 − 2,440 = 98,976
+    assert.equal(s.merchantGot.get(enough.invoiceId), 98_976n);
+  });
+
+  it("leaves the merchant the cost of a network fee above the estimate", async () => {
+    const { invoiceId, address } = await payerPaysInvoice();
+    const s = settlingPorts(new Map([[address, { received: ASKED, confirmed: ASKED }]]), ESTIMATE + 1_000n);
+    s.track(invoiceId, address);
+
+    await runWatcherPass(s.ports);
+    await runWatcherPass(s.ports);
+
+    // 107,832 − 5,392 − 3,440 = 99,000
+    assert.equal(s.merchantGot.get(invoiceId), BASE - 1_000n);
+  });
+
+  it("gives the merchant the saving of a network fee below the estimate", async () => {
+    const { invoiceId, address } = await payerPaysInvoice();
+    const s = settlingPorts(new Map([[address, { received: ASKED, confirmed: ASKED }]]), ESTIMATE - 1_000n);
+    s.track(invoiceId, address);
+
+    await runWatcherPass(s.ports);
+    await runWatcherPass(s.ports);
+
+    // 107,832 − 5,392 − 1,440 = 101,000
+    assert.equal(s.merchantGot.get(invoiceId), BASE + 1_000n);
+  });
+
+  it("checks a TON payment against the asked amount, less only the storage-fee allowance", async () => {
+    // 5 TON invoice, 0.005 TON fee budget, 5%: asked 5,268,421,053 nanoton.
+    // A 30-minute TON invoice allows ceil(30 × 75 / 60) = 38 nanoton short.
+    const asked = 5_268_421_053n;
+    const ton = { crypto: "ton", to_crypto: "ton", amount: "5000000000", asked_amount: asked.toString() };
+    const paid = await payerPaysInvoice(ton);
+    const baseOnly = await payerPaysInvoice(ton);
+    const { ports } = fakePorts(
+      new Map([
+        [paid.address, { received: asked - 38n, confirmed: asked - 38n }],
+        [baseOnly.address, { received: 5_000_000_000n, confirmed: 5_000_000_000n }],
+      ]),
+    );
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(paid.invoiceId))?.status, "confirmed");
+    assert.equal((await invoiceNow(baseOnly.invoiceId))?.status, "underpaid");
   });
 });

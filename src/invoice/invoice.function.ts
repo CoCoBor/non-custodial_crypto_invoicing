@@ -5,7 +5,7 @@ import { env } from "../config/env.js";
 import { z } from "zod";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import { decimalStrToBigInt } from "./money.function.js";
-import { acceptedPaymentAmount } from "./payment-rules.js";
+import { acceptedPaymentAmount, askedAmount } from "./payment-rules.js";
 import { getTonPaymentTotals, tonMinimumPayment } from "../transactions/ton.js";
 
 // Coins whose payments the watcher checks and pays out directly: the only
@@ -268,9 +268,8 @@ export async function checkInvoicePayment(
     const totals = await ports.getPaymentTotals(crypto, invoice.address);
     if (totals === undefined) return undefined;
 
-    const invoiceAmount = BigInt(invoice.amount);
     const acceptedAmount = acceptedPaymentAmount(invoice);
-    const tonMinimum = tonMinimumPayment(invoiceAmount, invoice.lifetime);
+    const tonMinimum = tonMinimumPayment(askedAmount(invoice), invoice.lifetime);
     const paymentStatus = getPaymentStatus({
       // TON: a payment in two parts can end a few nanoton short (storage
       // fee), so accept the same small shortfall the payout accepts. It

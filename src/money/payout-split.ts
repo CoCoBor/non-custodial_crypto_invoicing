@@ -41,3 +41,25 @@ export function splitPayout(input: {
   if (merchantAmount <= 0n) return undefined;
   return { platformFee, merchantAmount };
 }
+
+/**
+ * Payer-pays mode: the least a payer must send so that, split by F1 with the
+ * estimated network cost, the merchant gets the invoice amount:
+ *
+ *   asked = ceil((invoiceAmount + estimatedNetworkCost) × SCALE / (SCALE − feeRate))
+ *
+ * Paying exactly this leaves the merchant exactly invoiceAmount; one unit
+ * less leaves them less. The real network cost is only known at payout, and
+ * any difference from the estimate is the merchant's.
+ */
+export function payerPaysAskedAmount(input: {
+  invoiceAmount: bigint;
+  estimatedNetworkCost: bigint;
+  feeRate: bigint;
+}): bigint {
+  const { invoiceAmount, estimatedNetworkCost, feeRate } = input;
+  if (invoiceAmount <= 0n || estimatedNetworkCost < 0n || feeRate < 0n || feeRate >= FEE_RATE_SCALE) {
+    throw new RangeError("invalid payer-pays input");
+  }
+  return ceilDivide((invoiceAmount + estimatedNetworkCost) * FEE_RATE_SCALE, FEE_RATE_SCALE - feeRate);
+}

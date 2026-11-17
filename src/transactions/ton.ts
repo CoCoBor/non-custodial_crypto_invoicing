@@ -58,7 +58,7 @@ const TON_API_URL = "https://ton.nownodes.io/api/v2";
 // a wallet that is already deployed. The merchant is charged this budget as
 // the network fee; whatever the chain does not use goes to the platform in
 // message 2.
-const TON_PAYOUT_FEE = 5_000_000n;
+export const TON_PAYOUT_FEE = 5_000_000n;
 
 // An account with no code (a deposit address before its payout) pays a
 // storage fee each time a payment arrives: a few nanoton for the time since
@@ -451,7 +451,6 @@ async function prepareTonPayout(input: {
   merchantAddress: string;
   platformAddress: string;
   userId: string;
-  feePaidByPayer: boolean;
   toCrypto: string;
   sealedDepositKey: SealedSecret | null | undefined;
   // The deposit must hold at least this much (the invoice amount).
@@ -468,10 +467,6 @@ async function prepareTonPayout(input: {
   }
   function stop(reason: string): PreparedPayout {
     return { kind: "stop", reason: `Payout stopped: ${reason}` };
-  }
-
-  if (input.feePaidByPayer) {
-    return stop(`payer-paid fees are not supported for TON yet. ${fundsAt} Pay out manually.`);
   }
 
   const toCrypto = input.toCrypto;
@@ -864,7 +859,6 @@ export async function transferTonToMerchant(
         merchantAddress: invoice.to_address,
         platformAddress,
         userId: invoice.user_id,
-        feePaidByPayer: invoice.fee_paid_by_payer,
         toCrypto: invoice.to_crypto,
         sealedDepositKey: invoice.private?.private_key,
         // The same minimum the watcher confirmed at, tolerance included.

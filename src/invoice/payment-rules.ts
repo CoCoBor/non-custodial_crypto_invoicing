@@ -16,15 +16,28 @@ export function minimumAcceptedAmount(amount: bigint, toleranceBps: bigint): big
 }
 
 /**
- * The least that pays this invoice. The watcher confirms at this amount and
- * the payout releases at it, so they can never disagree.
+ * What the payer is asked to send: more than `amount` in payer-pays mode.
+ * Invoices made before asked_amount was stored asked for `amount`.
+ */
+export function askedAmount(invoice: {
+  amount: string;
+  asked_amount?: string | null;
+}): bigint {
+  return BigInt(invoice.asked_amount || invoice.amount);
+}
+
+/**
+ * The least that pays this invoice: the asked amount less the tolerance.
+ * The watcher confirms at this amount and the payout releases at it, so they
+ * can never disagree.
  */
 export function acceptedPaymentAmount(invoice: {
   amount: string;
+  asked_amount?: string | null;
   underpaid?: number | null;
 }): bigint {
   return minimumAcceptedAmount(
-    BigInt(invoice.amount),
+    askedAmount(invoice),
     toleranceBasisPoints(invoice.underpaid ?? 0) ?? 0n,
   );
 }

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { FEE_RATE_SCALE, parseFeeRate, splitPayout } from "../../src/money/payout-split.js";
+import {
+  FEE_RATE_SCALE,
+  parseFeeRate,
+  payerPaysAskedAmount,
+  splitPayout,
+} from "../../src/money/payout-split.js";
 
 // The one rule every chain's payout uses to split a deposit between the
 // platform and the merchant. Amounts are in the coin's smallest unit.
@@ -81,6 +86,66 @@ describe("splitPayout", () => {
     assert.throws(() => splitPayout({ received: 1n, networkCost: -1n, feeRate: 0n }), RangeError);
     assert.throws(() => splitPayout({ received: 1n, networkCost: 0n, feeRate: 100_000_000n }), RangeError);
     assert.throws(() => splitPayout({ received: 1n, networkCost: 0n, feeRate: -1n }), RangeError);
+  });
+});
+
+describe("payerPaysAskedAmount", () => {
+  // asked = ceil((invoice + estimate) / (1 − rate)): the least that, split by
+  // F1 with the estimated network cost, leaves the merchant the invoice amount.
+  const cases: {
+    name: string;
+    invoiceAmount: bigint;
+    estimatedNetworkCost: bigint;
+    feeRate: bigint;
+    asked: bigint;
+  }[] = [
+    // 100,000 + 1,000
+    { name: "0%: the invoice plus the estimate", invoiceAmount: 100_000n, estimatedNetworkCost: 1_000n, feeRate: 0n, asked: 101_000n },
+    // 101,000 / 0.95 = 106,315.79 → 106,316; fee = ceil(5,315.8) = 5,316; 106,316 − 5,316 − 1,000 = 100,000
+    { name: "5%, rounded up", invoiceAmount: 100_000n, estimatedNetworkCost: 1_000n, feeRate: FIVE_PERCENT, asked: 106_316n },
+    // 95,000 / 0.95 = 100,000 exactly; fee = 5,000; 100,000 − 5,000 − 1,000 = 94,000
+    { name: "5%, dividing exactly", invoiceAmount: 94_000n, estimatedNetworkCost: 1_000n, feeRate: FIVE_PERCENT, asked: 100_000n },
+    // 20 / 0.95 = 21.05 → 22, not 21: at 21 the fee is ceil(1.05) = 2, leaving 19
+    { name: "5%, where the rounded-up fee costs one more unit", invoiceAmount: 20n, estimatedNetworkCost: 0n, feeRate: FIVE_PERCENT, asked: 22n },
+    // 1 / 0.995 = 1.005 → 2; fee = ceil(0.01) = 1; 2 − 1 = 1
+    { name: "0.5% on the smallest amount", invoiceAmount: 1n, estimatedNetworkCost: 0n, feeRate: parseFeeRate("0.005")!, asked: 2n },
+    // 5.005 TON / 0.95 = 5.268421052… TON → 5,268,421,053 nanoton
+    { name: "5% on a TON invoice with the TON fee budget", invoiceAmount: 5_000_000_000n, estimatedNetworkCost: 5_000_000n, feeRate: FIVE_PERCENT, asked: 5_268_421_053n },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: ${c.asked}`, () => {
+      const asked = payerPaysAskedAmount(c);
+      assert.equal(asked, c.asked);
+
+      const paidInFull = splitPayout({ received: asked, networkCost: c.estimatedNetworkCost, feeRate: c.feeRate });
+      assert.equal(paidInFull?.merchantAmount, c.invoiceAmount, "paying the asked amount leaves the merchant the invoice amount");
+      const oneShort = splitPayout({ received: asked - 1n, networkCost: c.estimatedNetworkCost, feeRate: c.feeRate });
+      assert.ok(oneShort === undefined || oneShort.merchantAmount < c.invoiceAmount, "the asked amount is not the least");
+    });
+  }
+
+  it("always leaves the merchant exactly the invoice amount, and one unit less would not", () => {
+    for (let i = 0; i < 2_000; i++) {
+      const invoiceAmount = 1n + BigInt(Math.floor(Math.random() * 1e15));
+      const estimatedNetworkCost = BigInt(Math.floor(Math.random() * 1e7));
+      const feeRate = i % 10 === 0 ? 0n : BigInt(Math.floor(Math.random() * 99_999_999));
+      const asked = payerPaysAskedAmount({ invoiceAmount, estimatedNetworkCost, feeRate });
+
+      assert.equal(
+        splitPayout({ received: asked, networkCost: estimatedNetworkCost, feeRate })?.merchantAmount,
+        invoiceAmount,
+      );
+      const oneShort = splitPayout({ received: asked - 1n, networkCost: estimatedNetworkCost, feeRate });
+      assert.ok(oneShort === undefined || oneShort.merchantAmount < invoiceAmount);
+    }
+  });
+
+  it("refuses impossible input as a programming error", () => {
+    assert.throws(() => payerPaysAskedAmount({ invoiceAmount: 0n, estimatedNetworkCost: 0n, feeRate: 0n }), RangeError);
+    assert.throws(() => payerPaysAskedAmount({ invoiceAmount: 1n, estimatedNetworkCost: -1n, feeRate: 0n }), RangeError);
+    assert.throws(() => payerPaysAskedAmount({ invoiceAmount: 1n, estimatedNetworkCost: 0n, feeRate: -1n }), RangeError);
+    assert.throws(() => payerPaysAskedAmount({ invoiceAmount: 1n, estimatedNetworkCost: 0n, feeRate: FEE_RATE_SCALE }), RangeError);
   });
 });
 

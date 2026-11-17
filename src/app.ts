@@ -9,16 +9,24 @@ import { createInvoiceRouters } from "./routes/invoice/index.js";
 import { createPayRouter } from "./routes/pay/index.js";
 import type { AssetId } from "./assets/payout-address.js";
 import * as priceFunc from "./invoice/price.function.js";
+import { estimatePayoutNetworkCost } from "./invoice/network-cost.js";
 import { settingsRouter } from "./routes/settings/index.js";
 // import { settlementRouter } from "./routes/settlement/index.js";
 
 /** The outside world the routes depend on, so a test can replace it. */
 export type AppDeps = {
   getPrice: (coin: AssetId, currency: "usd") => Promise<string | undefined>;
+  /**
+   * What paying out one deposit of `coin` is expected to cost in network
+   * fees, in its smallest unit, for payer-pays invoices. "unsupported": no
+   * estimate for this coin. undefined: not available right now.
+   */
+  estimateNetworkCost: (coin: AssetId) => Promise<bigint | "unsupported" | undefined>;
 };
 
 const realDeps: AppDeps = {
   getPrice: (coin, currency) => priceFunc.getPrice(coin, currency),
+  estimateNetworkCost: estimatePayoutNetworkCost,
 };
 
 export function createApp(overrides: Partial<AppDeps> = {}) {

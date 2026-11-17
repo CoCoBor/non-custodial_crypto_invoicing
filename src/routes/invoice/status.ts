@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireMerchantKey } from "../../middleware/require-merchant-key.js";
 import { findInvoiceById } from "../../invoice/invoice.function.js";
+import { askedAmount } from "../../invoice/payment-rules.js";
 
 export const invoiceStatusRouter = Router();
 
@@ -58,6 +59,8 @@ invoiceStatusRouter.get("/:id", requireMerchantKey, async (req, res) => {
       currency: invoice.currency,
       crypto: invoice.crypto,
       amount: invoice.amount,
+      askedAmount: askedAmount(invoice).toString(),
+      feePaidByPayer: invoice.fee_paid_by_payer ?? false,
       amountFiat: invoice.amount_fiat,
       paidAmount: invoice.paid_amount,
       address: invoice.address,

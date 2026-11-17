@@ -12,6 +12,8 @@ import {
   recordChosenCoin,
 } from "../../invoice/invoice.repository.js";
 import { intToDecimalStr } from "../../invoice/money.function.js";
+import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
+import { askedAmount } from "../../invoice/payment-rules.js";
 import { getUsdToCrypto } from "../../invoice/price.function.js";
 import { publicRateLimit } from "../../middleware/public-rate-limit.js";
 import cryptos from "../../storage/cryptos.json" with { type: "json" };
@@ -33,6 +35,8 @@ type PayerInvoice = {
   crypto?: string | null;
   address?: string | null;
   amount: string;
+  asked_amount?: string | null;
+  fee_paid_by_payer?: boolean | null;
   paid_amount?: string | null;
   lifetime: number;
   timestamps?: { waiting?: number | null; created?: number | null } | null;
@@ -57,7 +61,7 @@ function payerView(invoice: PayerInvoice) {
       ? {
           crypto: invoice.crypto,
           address: invoice.address,
-          amount: invoice.amount,
+          amount: askedAmount(invoice).toString(),
           paidAmount: invoice.paid_amount,
         }
       : null,
@@ -120,11 +124,11 @@ export function createPayRouter(deps: AppDeps) {
 
     // The merchant's payout address as it is now: they may have changed it.
     const merchant = await User.findOne({ user_id: invoice.user_id })
-      .select("payout_addresses")
+      .select("payout_addresses merchant_fee")
       .lean()
       .exec();
     const payoutAddress = merchant?.payout_addresses?.[coin];
-    if (!payoutAddress || checkPayoutAddress(coin, payoutAddress) !== "valid") {
+    if (!merchant || !payoutAddress || checkPayoutAddress(coin, payoutAddress) !== "valid") {
       return conflict(res, "COIN_NOT_OFFERED", "this coin is not offered for this invoice");
     }
 
@@ -146,11 +150,21 @@ export function createPayRouter(deps: AppDeps) {
       });
     }
 
+    const asked = await askedAmountFor({
+      coin,
+      invoiceAmount: payment.paymentUnits,
+      feePaidByPayer: invoice.fee_paid_by_payer === true,
+      merchantFee: merchant.merchant_fee,
+      estimateNetworkCost: deps.estimateNetworkCost,
+    });
+    if (typeof asked !== "bigint") return refuseWithoutEstimate(res, coin, asked);
+
     const deposit = await generateDepositAddress(coin);
     const recorded = await recordChosenCoin({
       invoiceId: invoice.invoice_id,
       crypto: coin,
       amount: payment.paymentUnits,
+      askedAmount: asked,
       address: deposit.address,
       encryptedPrivateKey: deposit.encryptedPrivateKey,
       payoutAddress,
