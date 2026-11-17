@@ -1,12 +1,12 @@
 import bitcore from "bitcore-lib";
 import { z } from "zod";
 import { decimalStrToBigInt } from "../invoice/money.function.js";
-import { env } from "../config/env.js";
 import { ceilDivide } from "../money/format.js";
 import { splitPayout } from "../money/payout-split.js";
 import { Invoice } from "../database/invoices.model.js";
 import { openSecret } from "../security/secret-envelope.js";
 import type { PayoutRequest, PayoutResult, Transfer } from "../chains/adapter.js";
+import type { BlockbookApi } from "../chains/blockbook.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import {
   findSwapToken,
@@ -20,76 +20,12 @@ import { isAddress } from "ethers";
 const BTC_DECIMALS = 8;
 const MIN_SWAP_TIME_LEFT_MS = 4 * 60 * 60 * 1000;
 
-const BLOCKBOOK_URL = "https://btcbook.nownodes.io/api/v2";
-
-async function get(path: string): Promise<unknown> {
-  try {
-    const res = await fetch(`${BLOCKBOOK_URL}${path}`, {
-      headers: {
-        "api-key": env.nowNodesApiKey,
-        Accept: "application/json",
-      },
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!res.ok) {
-      // e.g. 400 {"error":"-26: txn-mempool-conflict"}. Worth seeing, and safe to log.
-      console.warn("Blockbook GET failed:", path, res.status, await res.text());
-      return undefined;
-    }
-
-    return await res.json();
-  } catch (error) {
-    console.warn(
-      "Blockbook GET failed:",
-      path,
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return undefined;
-  }
-}
-
-async function post(path: string, body: string): Promise<unknown> {
-  try {
-    const res = await fetch(`${BLOCKBOOK_URL}${path}`, {
-      method: "POST",
-      headers: {
-        "api-key": env.nowNodesApiKey,
-        Accept: "application/json",
-        "Content-Type": "text/plain",
-      },
-      signal: AbortSignal.timeout(10_000),
-      body,
-    });
-
-    if (!res.ok) {
-      // e.g. 400 {"error":"-26: txn-mempool-conflict"}. Worth seeing, and safe to log.
-      console.warn(
-        "Blockbook POST failed:",
-        path,
-        res.status,
-        await res.text(),
-      );
-      return undefined;
-    }
-
-    return await res.json();
-  } catch (error) {
-    console.warn(
-      "Blockbook POST failed:",
-      path,
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return undefined;
-  }
-}
-
-async function getBtcUtxos(address: string) {
+async function getBtcUtxos(api: BlockbookApi, address: string) {
   if (!validateAdd(address)) {
     console.error("Invalid Address input", address);
     return undefined;
   }
-  const res = await get(`/utxo/${address}?confirmed=true`);
+  const res = await api.get(`/utxo/${encodeURIComponent(address)}?confirmed=true`);
 
   const parsed = z
     .array(
@@ -116,8 +52,8 @@ async function getBtcUtxos(address: string) {
     }));
 }
 
-async function getBtcNetworkFee() {
-  const res = await get("/estimatefee/2");
+async function getBtcNetworkFee(api: BlockbookApi) {
+  const res = await api.get("/estimatefee/2");
 
   const parsed = z.object({ result: z.string() }).safeParse(await res);
   if (!parsed.success) {
@@ -209,8 +145,8 @@ const WIDEST_OUTPUT_SCRIPT_LENGTH = 34;
  * two of the widest outputs, at today's fee rate. undefined if the fee rate
  * is unavailable.
  */
-export async function estimateBtcPayoutNetworkCost(): Promise<bigint | undefined> {
-  const networkFeeRate = await getBtcNetworkFee();
+export async function estimateBtcPayoutNetworkCost(api: BlockbookApi): Promise<bigint | undefined> {
+  const networkFeeRate = await getBtcNetworkFee(api);
   if (networkFeeRate === undefined) return undefined;
   const txSize = btcTxSize(1, [WIDEST_OUTPUT_SCRIPT_LENGTH, WIDEST_OUTPUT_SCRIPT_LENGTH]);
   return btcNetworkFee(txSize, networkFeeRate);
@@ -380,8 +316,8 @@ export function canPayOutFromBtcDeposit(toCrypto: string): boolean {
   return payoutAddressCheckers.has(toCrypto);
 }
 
-async function getBtcConfirmations(txId: string): Promise<number | undefined> {
-  const res = await get(`/tx/${txId}`);
+async function getBtcConfirmations(api: BlockbookApi, txId: string): Promise<number | undefined> {
+  const res = await api.get(`/tx/${txId}`);
   const parsed = z
     .object({
       txid: z.string().regex(/^[0-9a-fA-F]{64}$/),
@@ -392,8 +328,8 @@ async function getBtcConfirmations(txId: string): Promise<number | undefined> {
   return parsed.success ? parsed.data.confirmations : undefined;
 }
 
-async function broadcast(hex: string) {
-  const res = await post("/sendtx/", hex);
+async function broadcast(api: BlockbookApi, hex: string) {
+  const res = await api.post("/sendtx/", hex);
   const parsed = z
     .object({ result: z.string().regex(/^[0-9a-fA-F]{64}$/) })
     .safeParse(res);
@@ -453,9 +389,9 @@ function sentByBtcTransaction(hex: string, destinationKind: Transfer["kind"]): T
  */
 export async function payOutBtc(
   request: PayoutRequest,
-  deps: { platformAddress: string },
+  deps: { platformAddress: string; api: BlockbookApi },
 ): Promise<PayoutResult> {
-  const { platformAddress } = deps;
+  const { platformAddress, api } = deps;
   if (!validateAdd(platformAddress)) {
     throw new Error("Platform BTC address is not a valid mainnet Bitcoin address");
   }
@@ -482,9 +418,9 @@ export async function payOutBtc(
 
     if (problem !== undefined) return fail(problem);
 
-    const networkFeeRate = await getBtcNetworkFee();
+    const networkFeeRate = await getBtcNetworkFee(api);
     if (networkFeeRate === undefined) return pending("BTC fee rate unavailable");
-    const utxos = await getBtcUtxos(depositAddress);
+    const utxos = await getBtcUtxos(api, depositAddress);
     if (utxos === undefined) return pending("BTC UTXOs unavailable");
 
     const utxosAmount = utxos.reduce((sum, u) => sum + u.amount, 0n);
@@ -578,7 +514,7 @@ export async function payOutBtc(
     };
   }
 
-  const confirmations = await getBtcConfirmations(txId);
+  const confirmations = await getBtcConfirmations(api, txId);
 
   if (confirmations === undefined) {
     if (needSwap) {
@@ -601,9 +537,9 @@ export async function payOutBtc(
       }
     }
 
-    const sent = await broadcast(hex);
+    const sent = await broadcast(api, hex);
     if (sent) console.log("BTC payout broadcast:", depositAddress, sent);
-    // post() already logs the reason when it fails.
+    // api.post() already logs the reason when it fails.
     return pending("broadcast; check its confirmations on the next round");
   }
 

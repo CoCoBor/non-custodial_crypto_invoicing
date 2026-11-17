@@ -1,6 +1,5 @@
 import { checkPayoutAddress } from "../assets/payout-address.js";
 import { generateBtcAddress } from "../crypto/btc.js";
-import { getBtcPayments } from "../invoice/invoice.function.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import {
   canPayOutFromBtcDeposit,
@@ -8,9 +7,11 @@ import {
   payOutBtc,
 } from "../transactions/btc.js";
 import type { ChainAdapter } from "./adapter.js";
+import { getBlockbookPayments, nowNodesBtcBlockbook, type BlockbookApi } from "./blockbook.js";
 
 /** Native BTC, deposits on P2PKH addresses. */
-export function createBtcAdapter(deps: { platformAddress: string }): ChainAdapter {
+export function createBtcAdapter(deps: { platformAddress: string; api?: BlockbookApi }): ChainAdapter {
+  const api = deps.api ?? nowNodesBtcBlockbook;
   return {
     asset: "btc",
     requiredConfirmations: cryptos.btc.required_confirmations,
@@ -21,8 +22,8 @@ export function createBtcAdapter(deps: { platformAddress: string }): ChainAdapte
       const { address, encryptedPrivateKey } = generateBtcAddress();
       return { address, key: { kind: "sealed_key", sealed: encryptedPrivateKey } };
     },
-    getPayments: (address) => getBtcPayments(address),
-    estimateNetworkCost: estimateBtcPayoutNetworkCost,
-    payout: (request) => payOutBtc(request, deps),
+    getPayments: (address) => getBlockbookPayments(api, address),
+    estimateNetworkCost: () => estimateBtcPayoutNetworkCost(api),
+    payout: (request) => payOutBtc(request, { platformAddress: deps.platformAddress, api }),
   };
 }
