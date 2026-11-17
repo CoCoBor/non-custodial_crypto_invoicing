@@ -5,6 +5,7 @@ import type { Db } from "mongodb";
 
 import { computeBlindIndex } from "../../src/security/blind-index.js";
 import { logIn, postJson, registerMerchant, startTestApp } from "../helpers/http-app.js";
+import { freshTotpCode } from "../helpers/totp.js";
 
 // Needs a test database: MONGODB_URI=… MONGODB_DATABASE=merchant_test npm test
 
@@ -28,12 +29,14 @@ after(async () => {
 async function loggedInMerchant() {
   const merchant = await registerMerchant(baseUrl);
   userIds.push(merchant.userId);
-  const { cookie } = await logIn(baseUrl, merchant);
-  return { ...merchant, cookie };
+  const { cookie, totpSecret } = await logIn(baseUrl, merchant);
+  return { ...merchant, cookie, totpSecret };
 }
 
-async function makeApiKey(cookie: string) {
-  return await postJson(`${baseUrl}/auth/api-key`, {}, { cookie });
+/** Making a key needs a fresh TOTP code from the merchant's authenticator. */
+async function makeApiKey(merchant: { cookie: string; userId: string; totpSecret: string }) {
+  const totpCode = await freshTotpCode(db, merchant.userId, merchant.totpSecret);
+  return await postJson(`${baseUrl}/auth/api-key`, { totpCode }, { cookie: merchant.cookie });
 }
 
 async function createInvoiceWith(apiKey: string) {
@@ -57,7 +60,7 @@ describe("API keys", () => {
   it("making a key shows it once and stores only its keyed hash", async () => {
     const merchant = await loggedInMerchant();
 
-    const response = await makeApiKey(merchant.cookie);
+    const response = await makeApiKey(merchant);
 
     assert.equal(response.status, 201);
     assert.match(response.headers.get("cache-control") ?? "", /no-store/);
@@ -74,7 +77,7 @@ describe("API keys", () => {
 
   it("the key lets the shop create invoices", async () => {
     const merchant = await loggedInMerchant();
-    const apiKey = (await makeApiKey(merchant.cookie)).body.data.apiKey;
+    const apiKey = (await makeApiKey(merchant)).body.data.apiKey;
 
     const response = await createInvoiceWith(apiKey);
 
@@ -85,8 +88,8 @@ describe("API keys", () => {
 
   it("making a new key stops the old one at once", async () => {
     const merchant = await loggedInMerchant();
-    const oldKey = (await makeApiKey(merchant.cookie)).body.data.apiKey;
-    const newKey = (await makeApiKey(merchant.cookie)).body.data.apiKey;
+    const oldKey = (await makeApiKey(merchant)).body.data.apiKey;
+    const newKey = (await makeApiKey(merchant)).body.data.apiKey;
 
     assert.notEqual(oldKey, newKey);
     assert.equal((await createInvoiceWith(oldKey)).status, 401);
@@ -98,12 +101,12 @@ describe("API keys", () => {
   });
 
   it("needs a logged-in merchant to make a key", async () => {
-    assert.equal((await makeApiKey("session=not-a-real-session")).status, 401);
+    assert.equal((await postJson(`${baseUrl}/auth/api-key`, {}, { cookie: "session=not-a-real-session" })).status, 401);
   });
 
   it("a key cannot open the dashboard", async () => {
     const merchant = await loggedInMerchant();
-    const apiKey = (await makeApiKey(merchant.cookie)).body.data.apiKey;
+    const apiKey = (await makeApiKey(merchant)).body.data.apiKey;
 
     const session = await fetch(`${baseUrl}/auth/session`, { headers: { merchant_key: apiKey } });
     const newKey = await postJson(`${baseUrl}/auth/api-key`, {}, { merchant_key: apiKey });

@@ -12,6 +12,30 @@ const sealedSecretSchema = new Schema(
   { _id: false },
 );
 
+// One address per listed coin (keys must match src/storage/cryptos.json;
+// tests/assets/coin-list.test.ts checks it). Used for payout and refund addresses.
+function addressPerAsset() {
+  return {
+    btc: { type: String, default: "" },
+    ltc: { type: String, default: "" },
+    sol: { type: String, default: "" },
+    usdtsol: { type: String, default: "" },
+    usdcsol: { type: String, default: "" },
+    eth: { type: String, default: "" },
+    usdteth: { type: String, default: "" },
+    usdceth: { type: String, default: "" },
+    daieth: { type: String, default: "" },
+    bsc: { type: String, default: "" },
+    usdtbsc: { type: String, default: "" },
+    usdcbsc: { type: String, default: "" },
+    daibsc: { type: String, default: "" },
+    xmr: { type: String, default: "" },
+    ton: { type: String, default: "" },
+    usdtton: { type: String, default: "" },
+    usdttrx: { type: String, default: "" },
+  };
+}
+
 export const userSchema = new Schema(
   {
     user_id: { type: String, default: "" },
@@ -40,25 +64,10 @@ export const userSchema = new Schema(
     telegram_id: { type: Number },
     telegram_name: { type: String },
     invoices: [{ id: { type: String, default: "" } }],
-    payout_addresses: {
-      btc: { type: String, default: "" },
-      ltc: { type: String, default: "" },
-      sol: { type: String, default: "" },
-      usdtsol: { type: String, default: "" },
-      usdcsol: { type: String, default: "" },
-      eth: { type: String, default: "" },
-      usdteth: { type: String, default: "" },
-      usdceth: { type: String, default: "" },
-      daieth: { type: String, default: "" },
-      bsc: { type: String, default: "" },
-      usdtbsc: { type: String, default: "" },
-      usdcbsc: { type: String, default: "" },
-      daibsc: { type: String, default: "" },
-      xmr: { type: String, default: "" },
-      ton: { type: String, default: "" },
-      usdtton: { type: String, default: "" },
-      usdttrx: { type: String, default: "" },
-    },
+    payout_addresses: addressPerAsset(),
+    refund_addresses: addressPerAsset(),
+    swap_max_loss_bps: { type: Number, default: 50 }, // 0.5%; merchant may set 50-500
+    webhook_url: { type: String, default: "" },
   },
   { collection: USERS_COLLECTION, autoCreate: false, autoIndex: false },
 );

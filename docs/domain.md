@@ -44,6 +44,11 @@ Marks: ✅ verified by a run or seen in the code · 📄 cited source · ⚠️ 
   ✅ `tests/routes/recovery.test.ts`, run 6/6, 2026-11-17.
 - Before 2026-11-17, `verifyUserTptp` filtered on `totp_enabled: false`, so no merchant with TOTP on could finish logging in. Fixed. ✅ same test run.
 - The login rate limit is 5 requests per minute per address, shared by `/auth/challenge`, `/auth/login` and `/auth/login/recovery`, and 1,000 when `NODE_ENV=test`. ⚠️ the 5-per-minute limit itself has no test.
+- Settings: `GET /settings`, and `PATCH /settings/{payout-addresses,refund-addresses,swap-max-loss,webhook-url}`. The fee rate is read-only: no route changes it. ✅ `tests/routes/settings.test.ts`, run 27/27, 2026-11-17.
+  - These changes need a fresh code from the authenticator (`totpCode`, single use): payout or refund addresses, webhook URL, `POST /auth/api-key`, and replacing the device (`/auth/2fa/replace/start` with the current code, then `/replace/confirm` with the new device's code).
+  - Swap max loss is 0.5–5% (stored as `swap_max_loss_bps`, 50–500) and needs no code.
+  - The webhook URL must be https with no credentials in it. ⚠️ The same URL can still point at an internal address (SSRF); the delivery code must block private addresses.
+- `payout_addresses` and `refund_addresses` share one per-coin field list, and a test keeps it equal to the keys of `cryptos.json`. ✅ `tests/assets/coin-list.test.ts`.
 - `required_confirmations` is still 1 for every coin. The approved per-chain numbers wait for a check against each chain's docs. ✅ seen in `cryptos.json`.
 
 ## Pitfalls

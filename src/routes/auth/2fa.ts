@@ -5,8 +5,10 @@ import * as totpRepo from "../../auth/totp.repository.js";
 import { buildTotpUri } from "../../auth/totp.function.js";
 import {
   requirePendingTotpSession,
+  requireSession,
   requireTotpSetupSession,
 } from "../../middleware/require-session.js";
+import { confirmTotpCode } from "../../auth/totp-step-up.js";
 import { z } from "zod";
 import {
   createSession,
@@ -175,3 +177,47 @@ twoFactorRouter.post("/verify", requirePendingTotpSession, async (req, res) => {
 
   res.status(200).json({ data: { requiresTwoFactor: false } });
 });
+
+// Replacing the authenticator: prove the current device, then confirm a code
+// from the new one. Until then the old device keeps working.
+twoFactorRouter.post("/replace/start", requireSession, async (req, res) => {
+  const userId = req.session!.userId;
+  if (!(await confirmTotpCode(userId, req.body?.totpCode, res))) return;
+
+  const user = await userFunc.findUserByUserId(userId);
+  const secret = await totpRepo.prepareUserTotp(userId);
+  if (!user || secret === undefined) {
+    return res.status(409).json({
+      error: {
+        code: "TOTP_SETUP_UNAVAILABLE",
+        message: "two-factor setup is no longer available",
+      },
+    });
+  }
+
+  res.status(200).json({
+    data: { secret, uri: buildTotpUri("merchant", user.user_id, secret) },
+  });
+});
+
+twoFactorRouter.post("/replace/confirm", requireSession, async (req, res) => {
+  const parsed = totpCodeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({
+      error: { code: "INVALID_REQUEST", message: "request body is invalid" },
+    });
+  }
+
+  const replaced = await totpRepo.replaceUserTotp(req.session!.userId, parsed.data.code);
+  if (!replaced) {
+    return res.status(409).json({
+      error: {
+        code: "TOTP_REPLACE_FAILED",
+        message: "start the replacement first, or the code is not valid",
+      },
+    });
+  }
+
+  res.status(200).json({ data: { twoFactorEnabled: true } });
+});
+

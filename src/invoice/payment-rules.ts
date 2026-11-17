@@ -1,3 +1,5 @@
+import { percentToBasisPoints } from "../money/percent.js";
+
 export const MAX_UNDERPAID_PERCENT = 5;
 
 /**
@@ -5,12 +7,7 @@ export const MAX_UNDERPAID_PERCENT = 5;
  * 0 to 5) as basis points, or undefined if it is not one.
  */
 export function toleranceBasisPoints(percent: number): bigint | undefined {
-  if (!Number.isFinite(percent) || percent < 0 || percent > MAX_UNDERPAID_PERCENT) {
-    return undefined;
-  }
-  const basisPoints = Math.round(percent * 100);
-  if (Math.abs(basisPoints - percent * 100) > 1e-9) return undefined;
-  return BigInt(basisPoints);
+  return percentToBasisPoints(percent, 0, MAX_UNDERPAID_PERCENT);
 }
 
 /** The least a payer may send: the amount less the tolerance, rounded up. */
