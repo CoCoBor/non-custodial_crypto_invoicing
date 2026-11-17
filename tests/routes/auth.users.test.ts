@@ -7,6 +7,8 @@ import { connectToMongoDb, disconnectFromMongoDB } from "../../src/infrastructur
 import { computeBlindIndex } from "../../src/security/blind-index.js";
 import { openSecret } from "../../src/security/secret-envelope.js";
 import { derivePublicKeyFromMnemonic } from "../../src/security/recovery-credential.js";
+import { generateTotpCode } from "../../src/auth/totp.function.js";
+import { signChallenge } from "../helpers/recovery-signer.js";
 
 test("registration creates a v2 merchant that can log in without leaking stored credentials", async () => {
   const db = await connectToMongoDb();
@@ -57,19 +59,48 @@ test("registration creates a v2 merchant that can log in without leaking stored 
     assert.equal(recoveredAccountNumber, body.data.accountNumber);
     assert.deepEqual(Object.keys(body.data).sort(), ["accountNumber", "accountNumberDisplay", "recoveryPhrase", "userId"]);
     assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+    // The account number alone no longer logs in a merchant without TOTP.
     const login = await fetch(`${url}/auth/login`, {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ accountNumber: body.data.accountNumberDisplay }),
     });
-    assert.equal(login.status, 200);
-    assert.equal((await login.json()).data.requiredTwoFactor, false);
-    const cookie = login.headers.getSetCookie()[0]?.split(";")[0];
+    assert.equal(login.status, 409);
+    assert.equal((await login.json()).error.code, "RECOVERY_PHRASE_REQUIRED");
+    const challenge = (await (await fetch(`${url}/auth/challenge`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ accountNumber: body.data.accountNumberDisplay }),
+    })).json()).data.challenge;
+    const firstLogin = await fetch(`${url}/auth/login/recovery`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        accountNumber: body.data.accountNumberDisplay,
+        challenge,
+        signature: signChallenge(body.data.recoveryPhrase, challenge),
+      }),
+    });
+    assert.equal(firstLogin.status, 200);
+    const setupCookie = firstLogin.headers.getSetCookie()[0]?.split(";")[0];
+    assert.ok(setupCookie);
+    const setup = await fetch(`${url}/auth/2fa/setup`, { method: "POST", headers: { cookie: setupCookie } });
+    assert.equal(setup.status, 200);
+    const setupBody = await setup.json();
+    // A freshly registered merchant can start enrolment straight away, and the
+    // otpauth uri is keyed to the public uuid rather than the internal _id.
+    assert.match(setupBody.data.secret, /^[A-Z2-7]+=*$/);
+    assert.ok(String(setupBody.data.uri).startsWith("otpauth://totp/"));
+    assert.ok(String(setupBody.data.uri).includes(user.user_id));
+    const enable = await fetch(`${url}/auth/2fa/enable`, {
+      method: "POST", headers: { "content-type": "application/json", cookie: setupCookie },
+      body: JSON.stringify({ code: generateTotpCode(setupBody.data.secret) }),
+    });
+    assert.equal(enable.status, 200);
+    const cookie = enable.headers.getSetCookie()[0]?.split(";")[0];
     assert.ok(cookie);
     const session = await fetch(`${url}/auth/session`, { headers: { cookie } });
     assert.equal(session.status, 200);
     const sessionBody = await session.json();
     assert.equal(sessionBody.data.userId, user.user_id);
-    assert.equal(sessionBody.data.twoFactorEnabled, false);
+    assert.equal(sessionBody.data.twoFactorEnabled, true);
     assert.equal(sessionBody.data.accountNumber, undefined);
     assert.equal(sessionBody.data.account_hash, undefined);
     assert.equal(sessionBody.data.totp_secret, undefined);
@@ -79,14 +110,6 @@ test("registration creates a v2 merchant that can log in without leaking stored 
     assert.equal(sessionBody.data.recovery_public_key, undefined);
     assert.equal(sessionBody.data.account_number_cipher, undefined);
     assert.equal(sessionBody.data.merchant_key, undefined);
-    const setup = await fetch(`${url}/auth/2fa/setup`, { method: "POST", headers: { cookie } });
-    assert.equal(setup.status, 200);
-    const setupBody = await setup.json();
-    // A freshly registered merchant can start enrolment straight away, and the
-    // otpauth uri is keyed to the public uuid rather than the internal _id.
-    assert.match(setupBody.data.secret, /^[A-Z2-7]+=*$/);
-    assert.ok(String(setupBody.data.uri).startsWith("otpauth://totp/"));
-    assert.ok(String(setupBody.data.uri).includes(user.user_id));
     const logout = await fetch(`${url}/auth/logout`, { method: "POST", headers: { cookie } });
     assert.equal(logout.status, 200);
     const expired = await fetch(`${url}/auth/session`, { headers: { cookie } });

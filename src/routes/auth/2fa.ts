@@ -5,7 +5,7 @@ import * as totpRepo from "../../auth/totp.repository.js";
 import { buildTotpUri } from "../../auth/totp.function.js";
 import {
   requirePendingTotpSession,
-  requireSession,
+  requireTotpSetupSession,
 } from "../../middleware/require-session.js";
 import { z } from "zod";
 import {
@@ -25,7 +25,7 @@ const totpCodeSchema = z.object({
   code: z.string().length(6),
 });
 
-twoFactorRouter.post("/setup", requireSession, async (req, res) => {
+twoFactorRouter.post("/setup", requireTotpSetupSession, async (req, res) => {
   const userId = req.session!.userId;
 
   const user = await userFunc.findUserByUserId(userId);
@@ -63,7 +63,7 @@ twoFactorRouter.post("/setup", requireSession, async (req, res) => {
   });
 });
 
-twoFactorRouter.post("/enable", requireSession, async (req, res) => {
+twoFactorRouter.post("/enable", requireTotpSetupSession, async (req, res) => {
   const parsed = totpCodeSchema.safeParse(req.body);
 
   if (!parsed.success) {
@@ -104,6 +104,25 @@ twoFactorRouter.post("/enable", requireSession, async (req, res) => {
       },
     });
   }
+
+  // TOTP is on: swap the setup-only session for a full one.
+  const oldToken = req.cookies?.session;
+  if (oldToken) await deleteSession(oldToken);
+
+  const { token } = await createSession({
+    userId,
+    status: "active",
+    ipAddress: req.ip ?? null,
+    userAgent: req.get("user-agent") ?? null,
+  });
+
+  res.cookie("session", token, {
+    httpOnly: true,
+    secure: env.nodeEnvironment === "production",
+    sameSite: "strict",
+    path: "/",
+    maxAge: 10 * 60 * 60 * 1000,
+  });
 
   res.status(200).json({
     data: {

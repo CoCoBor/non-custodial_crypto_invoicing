@@ -28,7 +28,7 @@ async function resolveSession(
   return session;
 }
 
-function requireStatus(status: "active" | "pending_totp"): RequestHandler {
+function requireStatus(status: "active" | "pending_totp" | "totp_setup"): RequestHandler {
   return async (req: Request, res: Response, next: NextFunction) => {
     const session = await resolveSession(req, res);
 
@@ -46,7 +46,9 @@ function requireStatus(status: "active" | "pending_totp"): RequestHandler {
 
     const user = await findUserByUserId(userId);
 
-    if (!user) {
+    // A full session needs TOTP on, so one made before TOTP was required
+    // can't skip setting it up.
+    if (!user || (status === "active" && !user.totp_enabled)) {
       return res.status(401).json({
         error: {
           code: "UNAUTHENTICATED",
@@ -69,3 +71,4 @@ function requireStatus(status: "active" | "pending_totp"): RequestHandler {
 
 export const requireSession = requireStatus("active");
 export const requirePendingTotpSession = requireStatus("pending_totp");
+export const requireTotpSetupSession = requireStatus("totp_setup");

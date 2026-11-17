@@ -28,7 +28,7 @@ after(async () => {
 async function loggedInMerchant() {
   const merchant = await registerMerchant(baseUrl);
   userIds.push(merchant.userId);
-  const cookie = await logIn(baseUrl, merchant.accountNumber);
+  const { cookie } = await logIn(baseUrl, merchant);
   return { ...merchant, cookie };
 }
 

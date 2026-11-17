@@ -86,7 +86,7 @@ export async function verifyUserTptp(
   const result = await User.updateOne(
     {
       user_id,
-      totp_enabled: false,
+      totp_enabled: true,
       "totp_secret.initialisationVector": sealed.initialisationVector,
       "totp_secret.ciphertext": sealed.ciphertext,
       $or: [

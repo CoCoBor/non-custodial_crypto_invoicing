@@ -31,6 +31,14 @@ Marks: ✅ verified by a run or seen in the code · 📄 cited source · ⚠️ 
 - API keys: only the keyed hash (blind index, purpose `api-key`) is stored, in `users.api_key_hash`. A logged-in merchant makes or replaces the key with `POST /auth/api-key`, and it is shown once. A key can only create invoices and read their status: it never opens `/auth/*`. ✅ `tests/routes/api-key.test.ts`, run 7/7, 2026-11-17.
 - Keys issued before that change sit in plain text in `users.merchant_key` until `npx tsx src/scripts/hash-merchant-keys.ts` is run once on the real database. Until then those merchants get 401. ✅ `tests/scripts/hash-merchant-keys.test.ts` (test database only).
 - The API key travels in a header named `merchant_key`. Some proxies (nginx by default) drop headers that contain underscores. ⚠️ unverified for your hosting.
+- Login flow. ✅ `tests/routes/login-flow.test.ts`, run 13/13, 2026-11-17.
+  - First login: `POST /auth/challenge {accountNumber}`, then the browser signs `"merchant-v3 login:" + challenge` (UTF-8 bytes) with Ed25519. The key is the first 32 bytes of the BIP-39 seed of the 12 words. Then `POST /auth/login/recovery {accountNumber, challenge, signature(base64url)}` returns a `totp_setup` session.
+  - A `totp_setup` session can only call `/auth/2fa/setup` and `/auth/2fa/enable`. Enabling TOTP with one valid code swaps it for an `active` session.
+  - Later logins: `POST /auth/login` (account number) gives a `pending_totp` session, then `/auth/2fa/verify` gives `active`. Without TOTP, `/auth/login` answers `409 RECOVERY_PHRASE_REQUIRED`.
+  - An `active` session only works while the merchant's TOTP is on.
+  - Challenges are single-use, last 5 minutes, and are stored only as SHA-256 hashes. An unknown account still gets a challenge, so accounts can't be probed.
+- Before 2026-11-17, `verifyUserTptp` filtered on `totp_enabled: false`, so no merchant with TOTP on could finish logging in. Fixed. ✅ same test run.
+- The login rate limit is 5 requests per minute per address, shared by `/auth/challenge`, `/auth/login` and `/auth/login/recovery`, and 1,000 when `NODE_ENV=test`. ⚠️ the 5-per-minute limit itself has no test.
 - `required_confirmations` is still 1 for every coin. The approved per-chain numbers wait for a check against each chain's docs. ✅ seen in `cryptos.json`.
 
 ## Pitfalls

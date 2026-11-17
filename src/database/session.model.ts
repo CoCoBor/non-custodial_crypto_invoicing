@@ -7,7 +7,8 @@ import {
 
 export const SESSIONS_COLLECTION = "sessions";
 
-export const SESSION_STATUSES = ["pending_totp", "active"] as const;
+// totp_setup: first login done with the 12 words; may only set up TOTP.
+export const SESSION_STATUSES = ["totp_setup", "pending_totp", "active"] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
 export const sessionSchema = new Schema(

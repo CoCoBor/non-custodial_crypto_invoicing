@@ -5,10 +5,12 @@ import type { AddressInfo } from "node:net";
 import type { Db } from "mongodb";
 
 import { createApp } from "../../src/app.js";
+import { generateTotpCode } from "../../src/auth/totp.function.js";
 import {
   connectToMongoDb,
   disconnectFromMongoDB,
 } from "../../src/infrastructure/database/mongodb.js";
+import { signChallenge } from "./recovery-signer.js";
 
 /** The app on a random local port, against the test database. */
 export async function startTestApp(): Promise<{
@@ -63,10 +65,35 @@ export async function registerMerchant(baseUrl: string) {
   };
 }
 
-/** Logs in with the account number alone (no TOTP set) and returns the session cookie. */
-export async function logIn(baseUrl: string, accountNumber: string): Promise<string> {
-  const response = await postJson(`${baseUrl}/auth/login`, { accountNumber });
-  const cookie = response.headers.getSetCookie()[0]?.split(";")[0];
-  if (response.status !== 200 || !cookie) throw new Error(`login failed: ${response.status}`);
-  return cookie;
+/**
+ * A merchant's first login, done the only way it now works: sign a challenge
+ * with the 12 words, set up TOTP with one code, get the full session.
+ */
+export async function logIn(
+  baseUrl: string,
+  merchant: { accountNumber: string; recoveryPhrase: string },
+): Promise<{ cookie: string; totpSecret: string }> {
+  const cookieOf = (headers: Headers) => headers.getSetCookie()[0]?.split(";")[0];
+
+  const challenge = (await postJson(`${baseUrl}/auth/challenge`, {
+    accountNumber: merchant.accountNumber,
+  })).body.data.challenge;
+  const first = await postJson(`${baseUrl}/auth/login/recovery`, {
+    accountNumber: merchant.accountNumber,
+    challenge,
+    signature: signChallenge(merchant.recoveryPhrase, challenge),
+  });
+  const setupCookie = cookieOf(first.headers);
+  if (first.status !== 200 || !setupCookie) throw new Error(`first login failed: ${first.status}`);
+
+  const totpSecret: string = (await postJson(`${baseUrl}/auth/2fa/setup`, {}, { cookie: setupCookie })).body.data.secret;
+  const enable = await postJson(
+    `${baseUrl}/auth/2fa/enable`,
+    { code: generateTotpCode(totpSecret) },
+    { cookie: setupCookie },
+  );
+  const cookie = cookieOf(enable.headers);
+  if (enable.status !== 200 || !cookie) throw new Error(`TOTP setup failed: ${enable.status}`);
+
+  return { cookie, totpSecret };
 }
