@@ -5,8 +5,7 @@ import * as userFunc from "../../auth/user.function.js";
 import * as sessionRepo from "../../sessions/session.repository.js";
 import { env } from "../../config/env.js";
 import { authRateLimit } from "../../middleware/auth-rate-limit.js";
-import { consumeLoginChallenge, loginChallengeMessage } from "../../auth/login-challenge.js";
-import { verifyRecoverySignature } from "../../security/recovery-credential.js";
+import { provesRecoveryKey } from "../../auth/login-challenge.js";
 
 export const loginRouter = Router();
 
@@ -110,20 +109,10 @@ loginRouter.post("/recovery", authRateLimit, async (req, res) => {
   if (!accountNumber) return refuse();
 
   const user = await userFunc.findUserByNumber(accountNumber);
-  if (!user?.recovery_public_key) return refuse();
+  if (!user) return refuse();
 
   const { challenge, signature } = parsed.data;
-  const fresh = await consumeLoginChallenge(user.user_id, challenge);
-  if (
-    !fresh ||
-    !verifyRecoverySignature(
-      user.recovery_public_key,
-      loginChallengeMessage(challenge),
-      Buffer.from(signature, "base64url"),
-    )
-  ) {
-    return refuse();
-  }
+  if (!(await provesRecoveryKey(user, challenge, signature))) return refuse();
 
   if (user.totp_enabled) {
     return res.status(409).json({

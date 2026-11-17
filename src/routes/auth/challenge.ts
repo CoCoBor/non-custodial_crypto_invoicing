@@ -7,7 +7,12 @@ import { authRateLimit } from "../../middleware/auth-rate-limit.js";
 
 export const challengeRouter = Router();
 
-const challengeSchema = z.object({ accountNumber: z.string().max(64) });
+// The merchant names themselves by account number (first login), or by the
+// public key from their 12 words (recovery, when the number may be lost).
+const challengeSchema = z.union([
+  z.object({ accountNumber: z.string().max(64) }),
+  z.object({ recoveryPublicKey: z.string().min(1).max(100) }),
+]);
 
 challengeRouter.post("/", authRateLimit, async (req, res) => {
   res.set("Cache-Control", "no-store");
@@ -18,8 +23,13 @@ challengeRouter.post("/", authRateLimit, async (req, res) => {
     });
   }
 
-  const accountNumber = userFunc.normaliseAccountNumber(parsed.data.accountNumber);
-  const user = accountNumber ? await userFunc.findUserByNumber(accountNumber) : null;
+  let user;
+  if ("accountNumber" in parsed.data) {
+    const accountNumber = userFunc.normaliseAccountNumber(parsed.data.accountNumber);
+    user = accountNumber ? await userFunc.findUserByNumber(accountNumber) : null;
+  } else {
+    user = await userFunc.findUserByRecoveryPublicKey(parsed.data.recoveryPublicKey);
+  }
   const challenge = await issueLoginChallenge(user?.user_id ?? undefined);
 
   return res.status(200).json({ data: { challenge } });

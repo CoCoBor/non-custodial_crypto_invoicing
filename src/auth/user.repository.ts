@@ -51,3 +51,27 @@ export async function createMerchantAccount(): Promise<CreateMerchantAccount> {
     "Merchant account could not be allocated after three attempts",
   );
 }
+
+/** A new account number for the merchant; the old one stops working. Shown once. */
+export async function rotateAccountNumber(userId: string): Promise<string | undefined> {
+  for (let i = 0; i < 3; i++) {
+    const accountNumber = generateAccountNumber();
+    try {
+      const result = await User.updateOne(
+        { user_id: userId },
+        {
+          $set: {
+            account_hash: computeBlindIndex("account-number", accountNumber),
+            account_number_cipher: sealSecret("account-number", accountNumber),
+          },
+        },
+      );
+      return result.matchedCount === 1 ? accountNumber : undefined;
+    } catch (error) {
+      if (hasMongoErrorCode(error, 11000)) continue;
+      // Mongoose errors may include the document or credential values.
+      throw new Error("Account number could not be replaced");
+    }
+  }
+  throw new Error("A new account number could not be allocated after three attempts");
+}

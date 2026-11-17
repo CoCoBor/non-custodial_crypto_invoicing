@@ -37,6 +37,11 @@ Marks: ✅ verified by a run or seen in the code · 📄 cited source · ⚠️ 
   - Later logins: `POST /auth/login` (account number) gives a `pending_totp` session, then `/auth/2fa/verify` gives `active`. Without TOTP, `/auth/login` answers `409 RECOVERY_PHRASE_REQUIRED`.
   - An `active` session only works while the merchant's TOTP is on.
   - Challenges are single-use, last 5 minutes, and are stored only as SHA-256 hashes. An unknown account still gets a challenge, so accounts can't be probed.
+- Recovery with the 12 words. The browser sends the recovery public key (it derives the key from the words), never the words. `POST /auth/challenge {recoveryPublicKey}`, then:
+  - `POST /auth/recovery/reset-totp` switches TOTP off, ends every session, and returns a `totp_setup` session.
+  - `POST /auth/recovery/new-account-number` returns a new number once; the old number and every session stop working.
+
+  ✅ `tests/routes/recovery.test.ts`, run 6/6, 2026-11-17.
 - Before 2026-11-17, `verifyUserTptp` filtered on `totp_enabled: false`, so no merchant with TOTP on could finish logging in. Fixed. ✅ same test run.
 - The login rate limit is 5 requests per minute per address, shared by `/auth/challenge`, `/auth/login` and `/auth/login/recovery`, and 1,000 when `NODE_ENV=test`. ⚠️ the 5-per-minute limit itself has no test.
 - `required_confirmations` is still 1 for every coin. The approved per-chain numbers wait for a check against each chain's docs. ✅ seen in `cryptos.json`.

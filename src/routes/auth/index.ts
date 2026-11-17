@@ -7,6 +7,7 @@ import { sessionRouter } from "./session.js";
 import { twoFactorRouter } from "./2fa.js";
 import { apiKeyRouter } from "./api-key.js";
 import { challengeRouter } from "./challenge.js";
+import { recoveryRouter } from "./recovery.js";
 
 export const authRouter = Router();
 
@@ -18,3 +19,4 @@ authRouter.use("/session", sessionRouter);
 authRouter.use("/2fa", twoFactorRouter);
 authRouter.use("/api-key", apiKeyRouter);
 authRouter.use("/challenge", challengeRouter);
+authRouter.use("/recovery", recoveryRouter);

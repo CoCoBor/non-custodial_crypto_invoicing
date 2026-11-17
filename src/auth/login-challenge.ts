@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
 import { LoginChallenge } from "../database/login-challenge.model.js";
+import { verifyRecoverySignature } from "../security/recovery-credential.js";
 
 const CHALLENGE_LIFETIME_MS = 5 * 60 * 1000;
 
@@ -47,4 +48,25 @@ export async function consumeLoginChallenge(
     expiresAt: { $gt: new Date(now) },
   }).exec();
   return used !== null;
+}
+
+/**
+ * True when the signature over a fresh challenge issued to this merchant was
+ * made with the key from their 12 words. Uses the challenge up either way.
+ */
+export async function provesRecoveryKey(
+  user: { user_id: string; recovery_public_key?: string | null },
+  challenge: string,
+  signature: string,
+): Promise<boolean> {
+  if (!user.recovery_public_key) return false;
+  const fresh = await consumeLoginChallenge(user.user_id, challenge);
+  return (
+    fresh &&
+    verifyRecoverySignature(
+      user.recovery_public_key,
+      loginChallengeMessage(challenge),
+      Buffer.from(signature, "base64url"),
+    )
+  );
 }

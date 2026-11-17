@@ -22,6 +22,10 @@ export function formatAccountNumberForDisplay(accountNumber: string): string {
   return result;
 }
 
+export async function findUserByRecoveryPublicKey(recoveryPublicKey: string) {
+  return await User.findOne({ recovery_public_key: recoveryPublicKey }).exec();
+}
+
 export async function findUserByNumber(accountNumber: string) {
   return await User.findOne({
     account_hash: computeBlindIndex("account-number", accountNumber),

@@ -93,3 +93,8 @@ export async function deleteSession(token: string): Promise<void> {
 
   return;
 }
+
+/** Ends every session of a merchant, e.g. after a recovery. */
+export async function deleteAllSessions(userId: string): Promise<void> {
+  await Session.deleteMany({ userId });
+}
