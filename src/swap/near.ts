@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { Invoice } from "../database/invoices.model.js";
+import { watchUntil } from "../invoice/watch-window.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 
 const API_URL = "https://1click.chaindefuser.com";
@@ -479,12 +480,14 @@ export async function updateSwapStatus(
         break;
       }
 
+      const completedAt = Date.now();
       changes = {
         "swap.status": swapStatus.status,
         status: "completed",
         received_amount: amountOut,
         "swap.destination_txids": destinationChainTxHashes.map((tx) => tx.hash),
-        "timestamps.completed": Date.now(),
+        "timestamps.completed": completedAt,
+        watch_until: watchUntil(completedAt),
         review_reason: note(""),
       };
       break;

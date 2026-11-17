@@ -387,6 +387,53 @@ describe("a TON payout through the adapter", () => {
     assert.equal(await balanceOf(d.deposit), FUNDED);
   });
 
+  it("pays a refund route from a deposit that already paid out: its own checkpoint, any minimum, the exact amount", async () => {
+    const merchant = await deployedWallet();
+    const refund = await deployedWallet();
+    const d = await fundedDeposit(FUNDED, merchant.address);
+    await ton.payout(d.request());
+    assert.equal((await ton.payout(d.request(d.saved[0]))).status, "paid");
+    // Late money after the merchant payout. The deposit wallet is deployed
+    // now, so receiving runs its code, and the compute fee comes out of the
+    // balance: it holds less than the 1 TON credited, far more than 75
+    // nanoton less. A refund route asks for any amount, so it still pays.
+    await pay(d.deposit, toNano("1"));
+    const held = await balanceOf(d.deposit);
+    assert.ok(held < toNano("1") - 75n, `held ${held}`);
+    const listed = await ton.getPayments(d.depositText);
+    assert.ok(listed?.some((p) => p.amount === toNano("1")), "the payment is listed at what was credited");
+    // F1 on what the deposit holds: fee = ceil(held × 5%), network cost 0.005 TON.
+    const refundAmount = held - (held * 5n + 99n) / 100n - NETWORK_COST;
+    const routeSaved: Checkpoint[] = [];
+    const route = (checkpoint?: Checkpoint): Request => ({
+      ...d.request(checkpoint),
+      destination: text(refund.address),
+      destinationKind: "refund_route",
+      minimumAmount: 1n,
+      saveCheckpoint: async (next) => {
+        routeSaved.push(next);
+        return true;
+      },
+    });
+
+    assert.equal((await ton.payout(route())).status, "pending");
+    const result = await ton.payout(route(routeSaved[0]));
+
+    assert.equal(result.status, "paid");
+    if (result.status !== "paid") return;
+    assert.deepEqual(
+      result.transfers.map((t) => [t.kind, t.to]),
+      [["refund_route", text(refund.address)], ["platform_fee", text(platform.address)]],
+    );
+    assert.equal(result.transfers[0]!.amount, refundAmount);
+    const [credit] = creditsFrom(d.deposit, refund.address);
+    assert.ok(credit && credit.inMessage?.info.type === "internal");
+    assert.equal(credit.inMessage.info.value.coins, refundAmount);
+    assert.equal(credit.inMessage.info.bounce, false);
+    assert.equal(creditsFrom(d.deposit, merchant.address).length, 1, "the merchant was paid again");
+    assert.equal(await balanceOf(d.deposit), 0n);
+  });
+
   it("stops when the saved key does not control the deposit", async () => {
     const merchant = await deployedWallet();
     const d = await fundedDeposit(FUNDED, merchant.address);

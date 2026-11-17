@@ -6,8 +6,11 @@ import { notFoundHandler } from "./middleware/not-found.js";
 import { authRouter } from "./routes/auth/index.js";
 import { healthRouter } from "./routes/health/index.js";
 import { createInvoiceRouters } from "./routes/invoice/index.js";
+import { createDashboardRouter } from "./routes/dashboard/index.js";
 import { createPayRouter } from "./routes/pay/index.js";
 import type { AssetId } from "./assets/payout-address.js";
+import type { ChainRegistry } from "./chains/adapter.js";
+import { chainAdapters } from "./chains/registry.js";
 import * as priceFunc from "./invoice/price.function.js";
 import { estimatePayoutNetworkCost } from "./invoice/network-cost.js";
 import { settingsRouter } from "./routes/settings/index.js";
@@ -22,11 +25,14 @@ export type AppDeps = {
    * estimate for this coin. undefined: not available right now.
    */
   estimateNetworkCost: (coin: AssetId) => Promise<bigint | "unsupported" | undefined>;
+  /** The chain adapters a cancel asks for payments. */
+  chains: ChainRegistry;
 };
 
 const realDeps: AppDeps = {
   getPrice: (coin, currency) => priceFunc.getPrice(coin, currency),
   estimateNetworkCost: estimatePayoutNetworkCost,
+  chains: chainAdapters,
 };
 
 export function createApp(overrides: Partial<AppDeps> = {}) {
@@ -43,6 +49,7 @@ export function createApp(overrides: Partial<AppDeps> = {}) {
   app.use("/invoices", createInvoiceRouters(deps));
   app.use("/pay", createPayRouter(deps));
   app.use("/settings", settingsRouter);
+  app.use("/dashboard", createDashboardRouter(deps));
 
   app.use(notFoundHandler);
   app.use(errorHandler);

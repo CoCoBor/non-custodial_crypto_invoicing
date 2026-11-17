@@ -351,7 +351,7 @@ describe("the on-time rule at expiry", () => {
 
     const invoice = await invoiceNow(invoiceId);
     assert.equal(invoice?.status, "expired");
-    assert.ok(!invoice?.outcome);
+    assert.notEqual(invoice?.outcome, "partially_paid");
     assert.equal(invoice?.paid_amount, "0");
     assert.equal(invoice?.payments?.[0]?.on_time, false);
     assert.equal(invoice?.payments?.[0]?.first_seen_at, AFTER_EXPIRY);

@@ -4,6 +4,7 @@ import { after, before, describe, it } from "node:test";
 
 import type { Db } from "mongodb";
 
+import type { ChainAdapter } from "../../src/chains/adapter.js";
 import { computeBlindIndex } from "../../src/security/blind-index.js";
 import { postJson, startTestApp } from "../helpers/http-app.js";
 
@@ -21,9 +22,26 @@ let stop: () => Promise<void>;
 let priceAvailable = true;
 const userIds: string[] = [];
 
+// Cancelling asks the chain for payments; these chains show none.
+function emptyChain(asset: "btc" | "ton"): ChainAdapter {
+  return {
+    asset,
+    requiredConfirmations: 1,
+    isValidAddress: () => true,
+    canPayOutAs: (receive) => receive === asset,
+    newDeposit: async () => {
+      throw new Error("deposits come from the real registry here");
+    },
+    getPayments: async () => [],
+    estimateNetworkCost: async () => 0n,
+    payout: async () => ({ status: "pending", reason: "not used here" }),
+  };
+}
+
 before(async () => {
   ({ baseUrl, db, stop } = await startTestApp({
     getPrice: async (coin) => (priceAvailable ? PRICES[coin] : undefined),
+    chains: { btc: emptyChain("btc"), ton: emptyChain("ton") },
   }));
 });
 

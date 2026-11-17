@@ -31,6 +31,9 @@ const paymentSchema = new Schema(
     first_seen_at: { type: Number, required: true }, // unix ms
     confirmations: { type: Number, required: true },
     on_time: { type: Boolean, required: true },
+    // Which payout of this deposit carried it: 0 = the merchant payout, n =
+    // refund route n. Absent while it is still at the deposit.
+    payout: { type: Number },
   },
   { _id: false },
 );
@@ -46,6 +49,29 @@ const transferSchema = new Schema(
     amount: { type: String, required: true },
     txid: { type: String, required: true },
     status: { type: String, enum: ["pending", "confirmed", "failed"], required: true },
+    // Which payout made it: n = refund route n; absent = the merchant payout.
+    payout: { type: Number },
+  },
+  { _id: false },
+);
+
+// One payout of money that reached the deposit outside the merchant payout:
+// partial money at expiry, or money after a cancel, expiry or completion (see
+// "Refund routing" in docs/domain.md). Routes are numbered from 1, run one at
+// a time, and each keeps its own checkpoint.
+const refundRouteSchema = new Schema(
+  {
+    n: { type: Number, required: true },
+    destination: { type: String, required: true },
+    source: { type: String, enum: ["refund_address", "payout_address"], required: true },
+    state: { type: String, enum: ["processing", "paid", "failed"], required: true },
+    raw: { type: String, default: "", select: false }, // the adapter's saved checkpoint (PayoutCheckpoint.state)
+    swept: { type: String, default: "0" }, // what left the deposit: destination + platform fee + network cost
+    platform_fee: { type: String, default: "0" },
+    network_fee: { type: String, default: "0" },
+    started_at: { type: Number, required: true },
+    settled_at: { type: Number, default: null },
+    notified: { type: Boolean, default: false }, // announced by webhook; see src/webhooks/webhook-pass.ts
   },
   { _id: false },
 );
@@ -77,7 +103,18 @@ const invoiceSchema = new Schema(
     swap_fee: { type: Number, default: 0 }, // if to_crypto is another crypto and NEAR Intents is used, fee = amount transferred - network fees - near estimated receive quote
     review_reason: { type: String, default: "" },
     notified_status: { type: String, default: "" }, // last status announced by webhook; see src/webhooks/webhook-pass.ts
-    outcome: { type: String, enum: ["", "partially_paid"], default: "" }, // what is left to handle after the status, e.g. money from a partly paid, expired invoice
+    outcome: {
+      type: String,
+      enum: ["", "partially_paid", "too_small_to_forward", "held_for_manual_handling"],
+      default: "",
+    }, // what is left to handle after the status, e.g. money from a partly paid, expired invoice
+    outcome_version: { type: Number, default: 0 }, // counts outcome changes made without a status change; each is one webhook
+    notified_outcome_version: { type: Number, default: 0 },
+    watch_until: { type: Number, default: null }, // unix ms: closed (expired, cancelled, completed) + 7 days; null for invoices closed before the watch existed
+    watch_checked_at: { type: Number, default: null },
+    watch_done: { type: Boolean, default: false },
+    watch_version: { type: Number, default: 0 }, // compare-and-set token for the closed-invoice watch
+    refund_routes: { type: [refundRouteSchema], default: [] },
     crypto: { type: String, default: "" }, // cryptocurrency ticker
     address: { type: String, default: "" }, // invoice payment address
     to_crypto: { type: String, default: "" }, // cryptocurrency ticker to convert to

@@ -6,15 +6,14 @@ import { checkPayoutAddress } from "../../assets/payout-address.js";
 import { Invoice } from "../../database/invoices.model.js";
 import { User } from "../../database/users.model.js";
 import { adapterFor } from "../../chains/registry.js";
-import {
-  cancelUnpaidInvoice,
-  recordChosenCoin,
-} from "../../invoice/invoice.repository.js";
+import { cancelIfUnpaid } from "../../invoice/cancel.js";
+import { recordChosenCoin } from "../../invoice/invoice.repository.js";
 import { intToDecimalStr } from "../../invoice/money.function.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
 import { getUsdToCrypto } from "../../invoice/price.function.js";
 import { publicRateLimit } from "../../middleware/public-rate-limit.js";
+import { answerCancel } from "../cancel-response.js";
 import cryptos from "../../storage/cryptos.json" with { type: "json" };
 
 // The payer's page. No login: the invoice id (a random UUID) is the key, so
@@ -184,10 +183,7 @@ export function createPayRouter(deps: AppDeps) {
         error: { code: "INVOICE_NOT_FOUND", message: "invoice was not found" },
       });
     }
-    if (!(await cancelUnpaidInvoice(invoice.invoice_id, Date.now()))) {
-      return conflict(res, "CANNOT_CANCEL", "a payment has already been seen for this invoice");
-    }
-    return res.status(200).json({ data: { invoiceId: invoice.invoice_id, status: "cancelled" } });
+    return answerCancel(res, invoice.invoice_id, await cancelIfUnpaid(invoice, deps.chains, Date.now()));
   });
 
   return router;

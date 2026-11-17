@@ -16,15 +16,116 @@ export type WebhookPorts = {
 const RETRY_DELAYS_MS = [1, 5, 30, 120].map((minutes) => minutes * 60_000);
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 
-/** Records new invoice statuses as events, then sends the events that are due. */
+/**
+ * Records new invoice statuses, outcome changes and paid refund routes as
+ * events, then sends the events that are due.
+ */
 export async function runWebhookPass(ports: WebhookPorts): Promise<void> {
-  await recordStatusChanges(ports.now());
+  const now = ports.now();
+  await recordStatusChanges(now);
+  await recordOutcomeChanges(now);
+  await recordRefundRoutes(now);
   await deliverDueEvents(ports);
 }
 
 /** One event per status change; the same change always gets the same id. */
 export function statusEventId(invoiceId: string, from: string, to: string): string {
   return `${invoiceId}:${from}->${to}`;
+}
+
+/**
+ * One event per outcome change made without a status change. An outcome can
+ * come back (too small, forwarded, too small again), so its id is the
+ * invoice's outcome_version, which counts every such change.
+ */
+export function outcomeEventId(invoiceId: string, outcomeVersion: number): string {
+  return `${invoiceId}:outcome:${outcomeVersion}`;
+}
+
+/** One event per refund route, once it is paid. */
+export function refundRouteEventId(invoiceId: string, route: number): string {
+  return `${invoiceId}:refund_route:${route}`;
+}
+
+const INVOICE_FIELDS =
+  "invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer amount_fiat paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id";
+
+type InvoiceSummary = {
+  invoice_id: string;
+  status?: string | null;
+  outcome?: string | null;
+  crypto?: string | null;
+  to_crypto?: string | null;
+  amount: string;
+  asked_amount?: string | null;
+  fee_paid_by_payer?: boolean | null;
+  amount_fiat: string;
+  paid_amount?: string | null;
+  platform_fee?: string | null;
+  network_fee?: string | null;
+  received_amount?: string | null;
+  tx?: { in?: string | null; out?: string | null; platform_out?: string | null } | null;
+};
+
+function invoiceBody(invoice: InvoiceSummary) {
+  return {
+    invoiceId: invoice.invoice_id,
+    status: invoice.status ?? "",
+    outcome: invoice.outcome ?? "",
+    crypto: invoice.crypto,
+    toCrypto: invoice.to_crypto,
+    amount: invoice.amount,
+    askedAmount: askedAmount(invoice).toString(),
+    feePaidByPayer: invoice.fee_paid_by_payer ?? false,
+    amountFiat: invoice.amount_fiat,
+    paidAmount: invoice.paid_amount,
+    platformFee: invoice.platform_fee,
+    networkFee: invoice.network_fee,
+    merchantAmount: invoice.received_amount,
+    txids: {
+      in: invoice.tx?.in ?? "",
+      out: invoice.tx?.out ?? "",
+      platformOut: invoice.tx?.platform_out ?? "",
+    },
+  };
+}
+
+async function hasWebhook(userId: string): Promise<boolean> {
+  const merchant = await User.findOne({ user_id: userId }).select("webhook_url").lean().exec();
+  return Boolean(merchant?.webhook_url);
+}
+
+// Recording the same event id twice is a no-op, so a crash between recording
+// an event and marking it announced can't lose or duplicate it.
+async function recordEvent(event: {
+  eventId: string;
+  userId: string;
+  invoiceId: string;
+  status: string;
+  payload: Record<string, unknown>;
+  now: number;
+}): Promise<void> {
+  await WebhookEvent.updateOne(
+    { eventId: event.eventId },
+    {
+      $setOnInsert: {
+        eventId: event.eventId,
+        userId: event.userId,
+        invoiceId: event.invoiceId,
+        status: event.status,
+        payload: JSON.stringify({
+          ...event.payload,
+          occurredAt: new Date(event.now).toISOString(),
+        }),
+        attempts: 0,
+        nextAttemptAt: new Date(event.now),
+        deliveredAt: null,
+        failedAt: null,
+        lastError: "",
+      },
+    },
+    { upsert: true },
+  ).exec();
 }
 
 // An invoice's status can be changed by many parts of the code; comparing it
@@ -36,9 +137,7 @@ async function recordStatusChanges(now: number): Promise<void> {
   const changed = await Invoice.find({
     $expr: { $ne: ["$status", { $ifNull: ["$notified_status", ""] }] },
   })
-    .select(
-      "invoice_id user_id status notified_status outcome crypto to_crypto amount asked_amount fee_paid_by_payer amount_fiat paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id",
-    )
+    .select(INVOICE_FIELDS)
     .lean()
     .exec();
 
@@ -46,52 +145,16 @@ async function recordStatusChanges(now: number): Promise<void> {
     const from = invoice.notified_status ?? "";
     const to = invoice.status ?? "";
 
-    const merchant = await User.findOne({ user_id: invoice.user_id })
-      .select("webhook_url")
-      .lean()
-      .exec();
-    if (merchant?.webhook_url) {
+    if (await hasWebhook(invoice.user_id)) {
       const eventId = statusEventId(invoice.invoice_id, from, to);
-      await WebhookEvent.updateOne(
-        { eventId },
-        {
-          $setOnInsert: {
-            eventId,
-            userId: invoice.user_id,
-            invoiceId: invoice.invoice_id,
-            status: to,
-            payload: JSON.stringify({
-              event: "invoice.status_changed",
-              eventId,
-              invoiceId: invoice.invoice_id,
-              status: to,
-              outcome: invoice.outcome ?? "",
-              crypto: invoice.crypto,
-              toCrypto: invoice.to_crypto,
-              amount: invoice.amount,
-              askedAmount: askedAmount(invoice).toString(),
-              feePaidByPayer: invoice.fee_paid_by_payer ?? false,
-              amountFiat: invoice.amount_fiat,
-              paidAmount: invoice.paid_amount,
-              platformFee: invoice.platform_fee,
-              networkFee: invoice.network_fee,
-              merchantAmount: invoice.received_amount,
-              txids: {
-                in: invoice.tx?.in ?? "",
-                out: invoice.tx?.out ?? "",
-                platformOut: invoice.tx?.platform_out ?? "",
-              },
-              occurredAt: new Date(now).toISOString(),
-            }),
-            attempts: 0,
-            nextAttemptAt: new Date(now),
-            deliveredAt: null,
-            failedAt: null,
-            lastError: "",
-          },
-        },
-        { upsert: true },
-      ).exec();
+      await recordEvent({
+        eventId,
+        userId: invoice.user_id,
+        invoiceId: invoice.invoice_id,
+        status: to,
+        payload: { event: "invoice.status_changed", eventId, ...invoiceBody(invoice) },
+        now,
+      });
     }
 
     await Invoice.updateOne(
@@ -102,6 +165,92 @@ async function recordStatusChanges(now: number): Promise<void> {
       },
       { $set: { notified_status: to } },
     ).exec();
+  }
+}
+
+// Outcomes that change with the status (expired, partially paid) ride on the
+// status event; the watcher bumps outcome_version only for the others.
+async function recordOutcomeChanges(now: number): Promise<void> {
+  const changed = await Invoice.find({
+    $expr: {
+      $gt: [{ $ifNull: ["$outcome_version", 0] }, { $ifNull: ["$notified_outcome_version", 0] }],
+    },
+  })
+    .select(INVOICE_FIELDS)
+    .lean()
+    .exec();
+
+  for (const invoice of changed) {
+    const version = invoice.outcome_version ?? 0;
+    if (await hasWebhook(invoice.user_id)) {
+      const eventId = outcomeEventId(invoice.invoice_id, version);
+      await recordEvent({
+        eventId,
+        userId: invoice.user_id,
+        invoiceId: invoice.invoice_id,
+        status: invoice.status ?? "",
+        payload: { event: "invoice.outcome_changed", eventId, ...invoiceBody(invoice) },
+        now,
+      });
+    }
+    await Invoice.updateOne(
+      { invoice_id: invoice.invoice_id },
+      { $max: { notified_outcome_version: version } },
+    ).exec();
+  }
+}
+
+async function recordRefundRoutes(now: number): Promise<void> {
+  const invoices = await Invoice.find({
+    refund_routes: { $elemMatch: { state: "paid", notified: { $ne: true } } },
+  })
+    .select("invoice_id user_id status outcome crypto refund_routes transfers payments -_id")
+    .lean()
+    .exec();
+
+  for (const invoice of invoices) {
+    const webhook = await hasWebhook(invoice.user_id);
+    for (const route of invoice.refund_routes ?? []) {
+      if (route.state !== "paid" || route.notified) continue;
+      const transfers = (invoice.transfers ?? []).filter((t) => t.payout === route.n);
+      if (webhook) {
+        const eventId = refundRouteEventId(invoice.invoice_id, route.n);
+        await recordEvent({
+          eventId,
+          userId: invoice.user_id,
+          invoiceId: invoice.invoice_id,
+          status: invoice.status ?? "",
+          payload: {
+            event: "invoice.refund_routed",
+            eventId,
+            invoiceId: invoice.invoice_id,
+            status: invoice.status ?? "",
+            outcome: invoice.outcome ?? "",
+            crypto: invoice.crypto,
+            refundRoute: {
+              number: route.n,
+              destination: route.destination,
+              destinationSource: route.source,
+              amount: transfers
+                .filter((t) => t.kind === "refund_route")
+                .reduce((sum, t) => sum + BigInt(t.amount), 0n)
+                .toString(),
+              platformFee: route.platform_fee,
+              networkFee: route.network_fee,
+              txids: [...new Set(transfers.map((t) => t.txid))],
+              payments: (invoice.payments ?? [])
+                .filter((p) => p.payout === route.n)
+                .map((p) => ({ txid: p.txid, amount: p.amount, onTime: p.on_time })),
+            },
+          },
+          now,
+        });
+      }
+      await Invoice.updateOne(
+        { invoice_id: invoice.invoice_id, refund_routes: { $elemMatch: { n: route.n, notified: { $ne: true } } } },
+        { $set: { "refund_routes.$.notified": true } },
+      ).exec();
+    }
   }
 }
 

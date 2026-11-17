@@ -12,7 +12,13 @@ import {
   disconnectFromMongoDB,
 } from "../../src/infrastructure/database/mongodb.js";
 import { sealSecret } from "../../src/security/secret-envelope.js";
-import { runWebhookPass, statusEventId, type WebhookPorts } from "../../src/webhooks/webhook-pass.js";
+import {
+  outcomeEventId,
+  refundRouteEventId,
+  runWebhookPass,
+  statusEventId,
+  type WebhookPorts,
+} from "../../src/webhooks/webhook-pass.js";
 
 // Status changes become signed POSTs to the merchant's webhook URL.
 // Needs a test database: MONGODB_URI=… MONGODB_DATABASE=merchant_test npm test
@@ -259,5 +265,130 @@ describe("retrying a failed delivery", () => {
     const event = await db.collection("webhook_events").findOne({ invoiceId });
     assert.equal(event?.attempts, 1);
     assert.match(event?.lastError ?? "", /not allowed/);
+  });
+});
+
+describe("announcing what happens to money after an invoice closed", () => {
+  /** A cancelled invoice whose cancel was already announced. */
+  async function cancelledInvoice(userId: string, fields: Record<string, unknown> = {}) {
+    const invoiceId = await invoiceOf(userId, "cancelled");
+    await db.collection("invoices").updateOne(
+      { invoice_id: invoiceId },
+      { $set: { notified_status: "cancelled", paid_amount: "0", ...fields } },
+    );
+    return invoiceId;
+  }
+
+  const ROUTED = {
+    payments: [
+      { txid: "tx-late", amount: "50000", first_seen_at: NOW, confirmations: 1, on_time: false, payout: 1 },
+    ],
+    transfers: [
+      { kind: "refund_route", to: "refund-address", amount: "46500", txid: "route-tx", status: "confirmed", payout: 1 },
+      { kind: "platform_fee", to: "platform", amount: "2500", txid: "route-tx", status: "confirmed", payout: 1 },
+    ],
+    refund_routes: [
+      {
+        n: 1,
+        destination: "refund-address",
+        source: "refund_address",
+        state: "paid",
+        swept: "50000",
+        platform_fee: "2500",
+        network_fee: "1000",
+        started_at: NOW - MINUTE,
+        settled_at: NOW,
+        notified: false,
+      },
+    ],
+  };
+
+  it("sends an outcome change that came without a status change, once", async () => {
+    const invoiceId = await cancelledInvoice(await merchant(), {
+      outcome: "too_small_to_forward",
+      outcome_version: 1,
+    });
+
+    await runWebhookPass(ports());
+    await runWebhookPass(ports(NOW + MINUTE));
+
+    const requests = forInvoice(invoiceId);
+    assert.equal(requests.length, 1);
+    assert.ok(signatureIsValid(requests[0]!), "bad signature");
+    const body = JSON.parse(requests[0]!.body);
+    assert.equal(body.event, "invoice.outcome_changed");
+    assert.equal(body.eventId, outcomeEventId(invoiceId, 1));
+    assert.equal(body.status, "cancelled");
+    assert.equal(body.outcome, "too_small_to_forward");
+  });
+
+  it("sends each later outcome change under a new id, even back to an earlier outcome", async () => {
+    const invoiceId = await cancelledInvoice(await merchant(), { outcome: "too_small_to_forward", outcome_version: 1 });
+    await runWebhookPass(ports());
+    await db.collection("invoices").updateOne({ invoice_id: invoiceId }, { $set: { outcome: "", outcome_version: 2 } });
+    await runWebhookPass(ports(NOW + MINUTE));
+    await db.collection("invoices").updateOne(
+      { invoice_id: invoiceId },
+      { $set: { outcome: "too_small_to_forward", outcome_version: 3 } },
+    );
+
+    await runWebhookPass(ports(NOW + 2 * MINUTE));
+
+    const bodies = forInvoice(invoiceId).map((r) => JSON.parse(r.body));
+    assert.deepEqual(bodies.map((b) => [b.eventId, b.outcome]), [
+      [outcomeEventId(invoiceId, 1), "too_small_to_forward"],
+      [outcomeEventId(invoiceId, 2), ""],
+      [outcomeEventId(invoiceId, 3), "too_small_to_forward"],
+    ]);
+  });
+
+  it("sends a paid refund route once, with where the money went and which payments it carried", async () => {
+    const invoiceId = await cancelledInvoice(await merchant(), ROUTED);
+
+    await runWebhookPass(ports());
+    await runWebhookPass(ports(NOW + MINUTE));
+
+    const requests = forInvoice(invoiceId);
+    assert.equal(requests.length, 1);
+    assert.ok(signatureIsValid(requests[0]!), "bad signature");
+    const body = JSON.parse(requests[0]!.body);
+    assert.equal(body.event, "invoice.refund_routed");
+    assert.equal(body.eventId, refundRouteEventId(invoiceId, 1));
+    assert.equal(body.status, "cancelled");
+    assert.deepEqual(body.refundRoute, {
+      number: 1,
+      destination: "refund-address",
+      destinationSource: "refund_address",
+      amount: "46500",
+      platformFee: "2500",
+      networkFee: "1000",
+      txids: ["route-tx"],
+      payments: [{ txid: "tx-late", amount: "50000", onTime: false }],
+    });
+    const stored = await db.collection("invoices").findOne({ invoice_id: invoiceId });
+    assert.equal(stored?.refund_routes?.[0]?.notified, true);
+  });
+
+  it("says nothing about a refund route until it is paid", async () => {
+    const invoiceId = await cancelledInvoice(await merchant(), {
+      ...ROUTED,
+      refund_routes: [{ ...ROUTED.refund_routes[0], state: "processing" }],
+    });
+
+    await runWebhookPass(ports());
+
+    assert.equal(forInvoice(invoiceId).length, 0);
+  });
+
+  it("records nothing for a merchant without a webhook URL, and does not replay it later", async () => {
+    const userId = await merchant("");
+    const invoiceId = await cancelledInvoice(userId, { ...ROUTED, outcome: "held_for_manual_handling", outcome_version: 1 });
+
+    await runWebhookPass(ports());
+
+    assert.equal(await db.collection("webhook_events").countDocuments({ invoiceId }), 0);
+    const stored = await db.collection("invoices").findOne({ invoice_id: invoiceId });
+    assert.equal(stored?.notified_outcome_version, 1);
+    assert.equal(stored?.refund_routes?.[0]?.notified, true);
   });
 });

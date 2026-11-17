@@ -3,7 +3,6 @@ import type {
   ChainAdapter,
   ChainPayment,
   ChainRegistry,
-  DepositKey,
   PayoutCheckpoint,
   PayoutRequest,
   PayoutResult,
@@ -11,9 +10,16 @@ import type {
 } from "../chains/adapter.js";
 import { chainAdapters, depositAssets } from "../chains/registry.js";
 import { Invoice } from "../database/invoices.model.js";
-import { User } from "../database/users.model.js";
-import { parseFeeRate } from "../money/payout-split.js";
 import { updateSwapStatus } from "../swap/near.js";
+import { closedInvoicesToWatch, watchClosedInvoice, watchUntil } from "./closed-watch.js";
+import {
+  depositKeyOf,
+  destinationAmount,
+  DESTINATION_KINDS,
+  feeRateOf,
+  storeTransfers,
+  STUCK_PAYOUT_MS,
+} from "./deposit-payout.js";
 import { getPaymentStatus } from "./invoice.function.js";
 import { acceptedPaymentAmount } from "./payment-rules.js";
 
@@ -25,11 +31,7 @@ export type WatcherPorts = {
   followSwap: (invoiceId: string) => Promise<void>;
 };
 
-const STUCK_PAYOUT_MS = 24 * 60 * 60 * 1000;
-
-const DESTINATION_KINDS = new Set<Transfer["kind"]>(["merchant_payout", "refund_route", "swap_deposit"]);
-
-/** One look at every open invoice. */
+/** One look at every open invoice, then at every closed one still watched. */
 export async function runWatcherPass(
   ports: WatcherPorts,
   isStopped: () => boolean = () => false,
@@ -49,8 +51,12 @@ export async function runWatcherPass(
         ],
       },
     },
-    { $set: { status: "expired", "timestamps.expired": now } },
+    { $set: { status: "expired", "timestamps.expired": now, watch_until: watchUntil(now) } },
   ).exec();
+
+  // Listed first, so an invoice that closes in this pass is watched from the
+  // next one: its deposit was just looked at.
+  const closed = await closedInvoicesToWatch(now, depositAssets(ports.chains));
 
   const invoices = await Invoice.find({
     crypto: { $in: depositAssets(ports.chains) },
@@ -76,6 +82,17 @@ export async function runWatcherPass(
       }
     } catch (error) {
       console.error("Invoice watcher failed on", invoice.invoice_id, error);
+    }
+  }
+
+  for (const invoice of closed) {
+    if (isStopped()) break;
+    const adapter = isAssetId(invoice.crypto) ? ports.chains[invoice.crypto] : undefined;
+    if (adapter === undefined) continue;
+    try {
+      await watchClosedInvoice(invoice.invoice_id, adapter, ports.now());
+    } catch (error) {
+      console.error("Closed-invoice watch failed on", invoice.invoice_id, error);
     }
   }
 }
@@ -184,6 +201,7 @@ async function checkPayments(invoiceId: string, adapter: ChainAdapter, ports: Wa
   ) {
     changes[`timestamps.${newStatus}`] = now;
   }
+  if (newStatus === "expired") changes.watch_until = watchUntil(now);
 
   const result = await Invoice.updateOne(
     { invoice_id: invoiceId, crypto: invoice.crypto, status: currentStatus },
@@ -195,24 +213,6 @@ async function checkPayments(invoiceId: string, adapter: ChainAdapter, ports: Wa
 }
 
 // ---------- Payout ----------
-
-type StoredTransfer = {
-  kind: Transfer["kind"];
-  to: string;
-  amount: string;
-  txid: string;
-  status: "pending" | "confirmed" | "failed";
-};
-
-function storeTransfers(transfers: Transfer[], status: StoredTransfer["status"]): StoredTransfer[] {
-  return transfers.map((t) => ({ kind: t.kind, to: t.to, amount: t.amount.toString(), txid: t.txid, status }));
-}
-
-function destinationAmount(transfers: Transfer[]): bigint {
-  return transfers
-    .filter((t) => t.kind === "merchant_payout" || t.kind === "refund_route")
-    .reduce((sum, t) => sum + t.amount, 0n);
-}
 
 /** What the invoice records when a checkpoint is saved; the old fields too, for the webhook and old readers. */
 function checkpointFields(next: PayoutCheckpoint, isSwap: boolean): Record<string, unknown> {
@@ -266,32 +266,6 @@ function savedCheckpoint(invoice: PayoutInvoice): PayoutCheckpoint | undefined {
         : {}),
     },
   };
-}
-
-function depositKeyOf(invoice: PayoutInvoice): DepositKey | undefined {
-  if (invoice.subaddress_index != null) return { kind: "subaddress", index: invoice.subaddress_index };
-  const stored = invoice.private?.private_key;
-  if (!stored) return undefined;
-  return {
-    kind: "sealed_key",
-    sealed: {
-      keyVersion: stored.keyVersion,
-      initialisationVector: Buffer.from(stored.initialisationVector),
-      authenticationTag: Buffer.from(stored.authenticationTag),
-      ciphertext: Buffer.from(stored.ciphertext),
-    },
-  };
-}
-
-/** The invoice's fee rate, or the merchant's current one for invoices made before rates were copied. */
-async function feeRateOf(invoice: PayoutInvoice): Promise<bigint | string> {
-  let text = invoice.fee_rate;
-  if (!text) {
-    const merchant = await User.findOne({ user_id: invoice.user_id }).select("merchant_fee").lean().exec();
-    if (!merchant) return `merchant account ${invoice.user_id} was not found, and the invoice has no fee rate of its own`;
-    text = merchant.merchant_fee;
-  }
-  return parseFeeRate(text) ?? `fee rate "${text}" is not a valid rate below 100%`;
 }
 
 function isValidDestination(adapter: ChainAdapter, receiveAsset: string, destination: string): boolean {
@@ -402,6 +376,14 @@ async function recordPayoutResult(
   switch (result.status) {
     case "pending":
     case "too_small": {
+      // Nothing was sent: the money stays at the deposit, marked, and the
+      // payout is tried again each pass (more money may arrive).
+      if (result.status === "too_small") {
+        await Invoice.updateOne(
+          { ...open, outcome: { $ne: "too_small_to_forward" } },
+          { $set: { outcome: "too_small_to_forward" }, $inc: { outcome_version: 1 } },
+        ).exec();
+      }
       const processingAt = invoice.status === "processing" ? invoice.timestamps?.processing : null;
       const review =
         result.status === "pending" && result.review
@@ -430,6 +412,8 @@ async function recordPayoutResult(
         changes.received_amount = destinationAmount(result.transfers).toString();
         changes.status = "completed";
         changes["timestamps.completed"] = now;
+        changes.watch_until = watchUntil(now);
+        if (invoice.outcome === "too_small_to_forward") changes.outcome = "";
       }
       const updated = await Invoice.updateOne(open, { $set: changes }).exec();
       if (updated.matchedCount === 1) {

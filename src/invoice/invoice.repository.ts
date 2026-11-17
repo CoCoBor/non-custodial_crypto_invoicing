@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { NewDeposit } from "../chains/adapter.js";
 import { Invoice } from "../database/invoices.model.js";
+import { watchUntil } from "./watch-window.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 
 // How the backend controls the deposit: its sealed key, or (XMR) the
@@ -157,11 +158,15 @@ export async function recordChosenCoin(input: {
   return result.modifiedCount === 1;
 }
 
-/** Cancels an invoice nobody has paid yet. False once a payment was seen. */
-export async function cancelUnpaidInvoice(invoiceId: string, now: number): Promise<boolean> {
+/**
+ * Cancels an invoice nobody has paid yet, whose deposit is still `address`
+ * (the one the chain was asked about). False once a payment was recorded or
+ * a coin was picked meanwhile.
+ */
+export async function cancelUnpaidInvoice(invoiceId: string, address: string, now: number): Promise<boolean> {
   const result = await Invoice.updateOne(
-    { invoice_id: invoiceId, status: "waiting", paid_amount: "0" },
-    { $set: { status: "cancelled", "timestamps.cancelled": now } },
+    { invoice_id: invoiceId, status: "waiting", paid_amount: "0", address },
+    { $set: { status: "cancelled", "timestamps.cancelled": now, watch_until: watchUntil(now) } },
   ).exec();
   return result.modifiedCount === 1;
 }
