@@ -75,11 +75,17 @@ async function createInvoice(merchantKey: string, toCrypto: string) {
   return { status: response.status, code: body.error?.code ?? body.code };
 }
 
-const VALID: [asset: string, address: string, label: string][] = [
+// Every deposit this route creates is BTC, and the BTC payout can only pay
+// out as btc or usdceth.
+const VALID_AND_PAYABLE: [asset: string, address: string, label: string][] = [
   ["btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "legacy"],
   ["btc", "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy", "P2SH"],
   ["btc", "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", "bech32"],
   ["btc", "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr", "taproot"],
+  ["usdceth", "0x000000000000000000000000000000000000dEaD", "EVM"],
+];
+
+const VALID_NOT_PAYABLE_YET: [asset: string, address: string, label: string][] = [
   ["ltc", new litecore.PrivateKey().toAddress().toString(), "legacy"],
   ["eth", "0x000000000000000000000000000000000000dEaD", "checksummed"],
   ["usdteth", "0x000000000000000000000000000000000000dead", "lower case"],
@@ -102,13 +108,25 @@ const WRONG_CHAIN: [asset: string, address: string, label: string][] = [
 ];
 
 describe("creating an invoice checks the payout address for the coin's own chain", () => {
-  for (const [asset, address, label] of VALID) {
+  for (const [asset, address, label] of VALID_AND_PAYABLE) {
     it(`accepts a ${label} ${asset} address`, async () => {
       const merchantKey = await merchantWithPayoutAddress(asset, address);
       const result = await createInvoice(merchantKey, asset);
 
       assert.equal(result.status, 503, `refused with ${result.code}`);
       assert.equal(result.code, "PRICE_UNAVAILABLE");
+    });
+  }
+
+  // The address passes its chain's check, but a BTC deposit can't be paid out
+  // as this coin yet: creating the invoice would strand the payer's BTC.
+  for (const [asset, address, label] of VALID_NOT_PAYABLE_YET) {
+    it(`accepts a ${label} ${asset} address but refuses the invoice: no payout from BTC yet`, async () => {
+      const merchantKey = await merchantWithPayoutAddress(asset, address);
+      const result = await createInvoice(merchantKey, asset);
+
+      assert.equal(result.status, 409);
+      assert.equal(result.code, "PAYOUT_NOT_SUPPORTED");
     });
   }
 

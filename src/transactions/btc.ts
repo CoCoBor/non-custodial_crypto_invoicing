@@ -17,7 +17,7 @@ import {
 } from "../swap/near.js";
 import { isAddress } from "ethers";
 
-const FEE_RATE_SCALE = 8;
+const BTC_DECIMALS = 8;
 const MIN_SWAP_TIME_LEFT_MS = 4 * 60 * 60 * 1000;
 
 const BLOCKBOOK_URL = "https://btcbook.nownodes.io/api/v2";
@@ -125,7 +125,7 @@ async function getBtcNetworkFee() {
     return undefined;
   }
 
-  const result = decimalStrToBigInt(parsed.data.result, FEE_RATE_SCALE);
+  const result = decimalStrToBigInt(parsed.data.result, BTC_DECIMALS);
   if (result === undefined || result <= 0n) return undefined;
   return result;
 }
@@ -348,6 +348,11 @@ const payoutAddressCheckers = new Map<string, (address: string) => boolean>([
   ["btc", validateAdd],
   ["usdceth", (address) => isAddress(address)],
 ]);
+
+/** The coins a BTC deposit can be paid out as (directly, or by swap). */
+export function canPayOutFromBtcDeposit(toCrypto: string): boolean {
+  return payoutAddressCheckers.has(toCrypto);
+}
 
 function isCryptoId(value: string): value is keyof typeof cryptos {
   return Object.hasOwn(cryptos, value);

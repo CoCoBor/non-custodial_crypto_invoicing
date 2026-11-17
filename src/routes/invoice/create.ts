@@ -7,6 +7,7 @@ import cryptos from "../../storage/cryptos.json" with { type: "json" };
 import * as invoiceFunc from "../../invoice/invoice.function.js";
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
 import { generateBtcAddress } from "../../crypto/btc.js";
+import { canPayOutFromBtcDeposit } from "../../transactions/btc.js";
 export const createInvoiceRouter = Router();
 
 const createSchema = z.object({
@@ -52,6 +53,17 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
       error: {
         code: "PAYOUT_ADDRESS_REQUIRED",
         message: `save a valid ${to_crypto} payout address first`,
+      },
+    });
+  }
+
+  // The deposit below is BTC: an invoice whose payout coin a BTC deposit
+  // can't be paid out as would leave the payer's BTC stuck at the deposit.
+  if (!canPayOutFromBtcDeposit(to_crypto)) {
+    return res.status(409).json({
+      error: {
+        code: "PAYOUT_NOT_SUPPORTED",
+        message: `${to_crypto} payouts are not supported yet`,
       },
     });
   }

@@ -19,7 +19,8 @@ Marks: ✅ verified by a run or seen in the code · 📄 cited source · ⚠️ 
 - Frozen accounts and non-wallet contracts are refused before sending. ⚠️ (from an agent report; check in code)
 - TON has never run live: `PLATFORM_TON_ADDRESS` is not set and the NOWNodes key returns 401. ⚠️ (as of 2026-11-15)
 - `src/storage/cryptos.json` is the list of supported coins. Its keys are also the `payout_addresses` keys. The key `bsc` means native BNB. ✅ seen in code.
-- A payout address is checked by its coin's chain (BTC, LTC, EVM for ETH/BSC, SOL, TON) in `src/assets/payout-address.ts`. Tron and Monero answer "not supported yet". ✅ `tests/routes/invoice-create-addresses.test.ts`.
+- A payout address is checked by its coin's chain (BTC, LTC, EVM for ETH/BSC, SOL, TON) in `src/assets/payout-address.ts`. Tron and Monero answer "not supported yet". ✅ `tests/routes/invoice-create-addresses.test.ts`, run 25/25 on a throwaway `merchant_test` database, 2026-11-17.
+- Invoice creation always makes a BTC deposit, and a BTC deposit can only be paid out as `btc` or `usdceth` (`canPayOutFromBtcDeposit` in `src/transactions/btc.ts`). Every other payout coin gets `409 PAYOUT_NOT_SUPPORTED` at creation, so no payer's BTC can be stranded. ✅ same test run.
 - USDT on TON: jetton master `EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs`, 6 decimals. 📄 docs.ton.org (WalletKit jettons).
 - USDT on Tron: contract `TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`, 6 decimals. 📄 tron.network/usdt.
 - DAI on BSC: contract `0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3` reports name "Dai Token", symbol DAI, 18 decimals. ✅ read from the chain with `eth_call`, 2026-11-17. ⚠️ An impostor could copy name and symbol: confirm BscScan labels it Binance-Peg DAI before any DAI-on-BSC payout code uses it.
