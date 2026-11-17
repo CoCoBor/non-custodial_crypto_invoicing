@@ -5,6 +5,7 @@ import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { ceilDivide } from "../money/format.js";
+import { parseFeeRate, splitPayout } from "../money/payout-split.js";
 import { openSecret } from "../security/secret-envelope.js";
 import {
   hasSwapTimeLeft,
@@ -356,13 +357,10 @@ function calculateLtcPayout(
   }
 
   const networkFee = ceilDivide(BigInt(txSize) * feePerKb, 1000n);
-  if (total <= networkFee) return undefined;
+  const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
+  if (split === undefined || split.merchantAmount <= 0n) return undefined;
 
-  const platformFee = ceilDivide((total - networkFee) * feeRate, FEE_RATE_SCALE);
-  const merchantAmount = total - networkFee - platformFee;
-  if (merchantAmount <= 0n) return undefined;
-
-  return { networkFee, platformFee, merchantAmount };
+  return { networkFee, ...split };
 }
 
 // One tx: merchant output, plus a platform output when the fee isn't dust.
@@ -593,8 +591,8 @@ export async function transferLtcToMerchant(
         );
       }
 
-      const feeRate = decimalStrToBigInt(user.merchant_fee, FEE_RATE_DECIMALS);
-      if (feeRate === undefined || feeRate >= FEE_RATE_SCALE) {
+      const feeRate = parseFeeRate(user.merchant_fee);
+      if (feeRate === undefined) {
         return await fail(
           `Payout stopped: merchant fee rate "${user.merchant_fee}" is not a valid rate below 100%. All funds are still at deposit address ${depositAddress}. Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`,
         );

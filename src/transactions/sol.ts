@@ -36,8 +36,8 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
-import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { ceilDivide } from "../money/format.js";
+import { parseFeeRate, splitPayout } from "../money/payout-split.js";
 import { openSecret, type SealedSecret } from "../security/secret-envelope.js";
 import {
   isCryptoId,
@@ -572,15 +572,15 @@ function planSolPayout(input: {
   }
 
   const networkFee = getSolNetworkFee(1n, SOL_PAYOUT_COMPUTE_UNITS, priorityFee);
-  if (total <= networkFee) return undefined;
+  const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
+  if (split === undefined) return undefined;
 
-  const afterFee = total - networkFee;
-  let platformFee = ceilDivide(afterFee * feeRate, FEE_RATE_SCALE);
+  let { platformFee, merchantAmount } = split;
   if (platformFee > 0n && platformLamports + platformFee < rentMinimum) {
+    merchantAmount += platformFee;
     platformFee = 0n;
   }
 
-  const merchantAmount = afterFee - platformFee;
   if (merchantAmount === 0n || merchantLamports + merchantAmount < rentMinimum) {
     return undefined;
   }
@@ -595,11 +595,10 @@ function planTokenPayout(total: bigint, feeRate: bigint) {
     throw new RangeError("invalid token payout input");
   }
 
-  const platformFee = ceilDivide(total * feeRate, FEE_RATE_SCALE);
-  const merchantAmount = total - platformFee;
-  if (merchantAmount <= 0n) return undefined;
+  const split = splitPayout({ received: total, networkCost: 0n, feeRate });
+  if (split === undefined || split.merchantAmount <= 0n) return undefined;
 
-  return { platformFee, merchantAmount };
+  return split;
 }
 
 // ---------- Building and signing ----------
@@ -850,8 +849,8 @@ async function prepareSolanaPayout(input: {
     return stop(`merchant account ${input.userId} was not found. ${fundsAt} Check whether the merchant was deleted, then pay out manually.`);
   }
 
-  const feeRate = decimalStrToBigInt(user.merchant_fee, FEE_RATE_DECIMALS);
-  if (feeRate === undefined || feeRate >= FEE_RATE_SCALE) {
+  const feeRate = parseFeeRate(user.merchant_fee);
+  if (feeRate === undefined) {
     return stop(`merchant fee rate "${user.merchant_fee}" is not a valid rate below 100%. ${fundsAt} Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`);
   }
 

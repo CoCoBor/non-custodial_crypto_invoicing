@@ -14,8 +14,8 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
-import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { ceilDivide } from "../money/format.js";
+import { parseFeeRate, splitPayout } from "../money/payout-split.js";
 import { openSecret, type SealedSecret } from "../security/secret-envelope.js";
 import {
   isCryptoId,
@@ -351,14 +351,10 @@ function planTonPayout(total: bigint, feeRate: bigint) {
   if (total < 0n || feeRate < 0n || feeRate >= FEE_RATE_SCALE) {
     throw new RangeError("invalid TON payout input");
   }
-  if (total <= TON_PAYOUT_FEE) return undefined;
+  const split = splitPayout({ received: total, networkCost: TON_PAYOUT_FEE, feeRate });
+  if (split === undefined || split.merchantAmount <= 0n) return undefined;
 
-  const afterFee = total - TON_PAYOUT_FEE;
-  const platformFee = ceilDivide(afterFee * feeRate, FEE_RATE_SCALE);
-  const merchantAmount = afterFee - platformFee;
-  if (merchantAmount <= 0n) return undefined;
-
-  return { networkFee: TON_PAYOUT_FEE, platformFee, merchantAmount };
+  return { networkFee: TON_PAYOUT_FEE, ...split };
 }
 
 // ---------- Signing ----------
@@ -513,8 +509,8 @@ async function prepareTonPayout(input: {
     return stop(`merchant account ${input.userId} was not found. ${fundsAt} Check whether the merchant was deleted, then pay out manually.`);
   }
 
-  const feeRate = decimalStrToBigInt(user.merchant_fee, FEE_RATE_DECIMALS);
-  if (feeRate === undefined || feeRate >= FEE_RATE_SCALE) {
+  const feeRate = parseFeeRate(user.merchant_fee);
+  if (feeRate === undefined) {
     return stop(`merchant fee rate "${user.merchant_fee}" is not a valid rate below 100%. ${fundsAt} Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`);
   }
 

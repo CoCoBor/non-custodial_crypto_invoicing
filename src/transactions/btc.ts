@@ -3,6 +3,7 @@ import { z } from "zod";
 import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { env } from "../config/env.js";
 import { ceilDivide } from "../money/format.js";
+import { parseFeeRate, splitPayout } from "../money/payout-split.js";
 import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { openSecret } from "../security/secret-envelope.js";
@@ -16,7 +17,6 @@ import {
 } from "../swap/near.js";
 import { isAddress } from "ethers";
 
-const FEE_RATE_DECIMALS = 100000000n;
 const FEE_RATE_SCALE = 8;
 const MIN_SWAP_TIME_LEFT_MS = 4 * 60 * 60 * 1000;
 
@@ -153,18 +153,12 @@ function calculateBtcPayout(
   }
 
   const networkFee = ceilDivide(BigInt(txSize) * networkFeeRate, 1000n);
-  if (total <= networkFee) return undefined;
-  const feeRates = decimalStrToBigInt(merchantFeeRate, FEE_RATE_SCALE);
-  if (feeRates === undefined) return undefined;
+  const feeRate = parseFeeRate(merchantFeeRate);
+  if (feeRate === undefined) return undefined;
 
-  const platformFee = ceilDivide(
-    (total - networkFee) * feeRates,
-    FEE_RATE_DECIMALS,
-  );
-
-  const merchantAmount = total - platformFee - networkFee;
-
-  if (merchantAmount <= 0n) return undefined;
+  const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
+  if (split === undefined || split.merchantAmount <= 0n) return undefined;
+  const { platformFee, merchantAmount } = split;
 
   return {
     networkFee,
@@ -415,8 +409,7 @@ function findPermanentPayoutProblem(input: {
   if (merchantAddress === depositAddress)
     return "Payout address must differ from the deposit address";
 
-  const feeRate = decimalStrToBigInt(merchantFeeRate, FEE_RATE_SCALE);
-  if (feeRate === undefined || feeRate < 0n || feeRate >= FEE_RATE_DECIMALS)
+  if (parseFeeRate(merchantFeeRate) === undefined)
     return "Invalid merchant fee rate";
 
   return undefined;

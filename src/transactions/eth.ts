@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { env } from "../config/env.js";
-import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { ceilDivide } from "../money/format.js";
+import { parseFeeRate, splitPayout } from "../money/payout-split.js";
 import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { getAddress, isAddress, keccak256, Wallet } from "ethers";
@@ -16,9 +16,6 @@ const GAS_PRICE_HEADROOM_PERCENT = 125n;
 
 const MERCHANT_NONCE = 0;
 const PLATFORM_NONCE = 1;
-
-const FEE_RATE_DECIMALS = 8;
-const FEE_RATE_SCALE = 10n ** BigInt(FEE_RATE_DECIMALS);
 
 const STUCK_TX_REVIEW_MS = 24 * 60 * 60 * 1000;
 async function post(method: string, params: unknown[]): Promise<unknown> {
@@ -140,28 +137,16 @@ function decideTransferCount(input: {
 }): { platformFee: bigint; merchantAmount: bigint } | undefined {
   const { balance, feeRate, gasPrice } = input;
 
-  if (feeRate === 0n) {
-    const merchantAmount = balance - gasPrice * ETH_TRANSFER_GAS;
-    if (merchantAmount <= 0n) return undefined;
-    return {
-      platformFee: 0n,
-      merchantAmount,
-    };
-  }
+  // No platform transfer at a 0% rate, so only one transfer's gas.
+  const transfers = feeRate === 0n ? 1n : 2n;
+  const split = splitPayout({
+    received: balance,
+    networkCost: gasPrice * ETH_TRANSFER_GAS * transfers,
+    feeRate,
+  });
+  if (split === undefined || split.merchantAmount <= 0n) return undefined;
 
-  const networkFee = gasPrice * ETH_TRANSFER_GAS * 2n;
-  const net = balance - networkFee;
-  if (net <= 0n) return undefined;
-  const platformFee = ceilDivide(net * feeRate, FEE_RATE_SCALE);
-
-  const merchantAmount = net - platformFee;
-
-  if (merchantAmount <= 0n) return undefined;
-
-  return {
-    platformFee,
-    merchantAmount,
-  };
+  return split;
 }
 
 function prepareEthPayout(input: {
@@ -316,16 +301,10 @@ async function transferEthToMerchant(
         100n,
       );
       const merchantFeeRate = user.merchant_fee;
-      const feeRate = decimalStrToBigInt(merchantFeeRate, FEE_RATE_DECIMALS);
+      const feeRate = parseFeeRate(merchantFeeRate);
       if (feeRate === undefined) {
         await fail(
-          `Payout stopped: merchant fee rate "${merchantFeeRate}" is not a valid decimal. All funds are still at deposit address ${invoice.address}. Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`,
-        );
-        return;
-      }
-      if (feeRate >= FEE_RATE_SCALE) {
-        await fail(
-          `Payout stopped: merchant fee rate "${merchantFeeRate}" is 100% or more. All funds are still at deposit address ${invoice.address}. Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`,
+          `Payout stopped: merchant fee rate "${merchantFeeRate}" is not a valid rate below 100%. All funds are still at deposit address ${invoice.address}. Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`,
         );
         return;
       }
