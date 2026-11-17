@@ -23,13 +23,9 @@ test("registration creates a v2 merchant that can log in without leaking stored 
     const user = await db.collection("users").findOne({ account_hash: lookup });
     assert.ok(user, "registration must store the merchant in users");
     assert.match(user.user_id, /^[0-9a-f-]{36}$/);
-    assert.match(
-      user.merchant_key,
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-    );
-    // Two separate randomUUID() calls: an api key that equals the public user
-    // id would leak one from the other.
-    assert.notEqual(user.merchant_key, user.user_id);
+    // No API key at registration: the merchant makes one later (tests/routes/api-key.test.ts).
+    assert.equal(user.merchant_key, undefined);
+    assert.equal(user.api_key_hash, "");
     assert.equal(user.merchant_fee, "0.05");
     assert.equal(user.totp_enabled, false);
     assert.equal(user.totp_secret, null);

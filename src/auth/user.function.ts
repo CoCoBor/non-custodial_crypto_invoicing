@@ -101,6 +101,18 @@ export async function validateTurnstile(
   return false;
 }
 
-export function findUserByMerchantKey(merchant_key: string){
-    return User.findOne({merchant_key}).exec()
+export function findUserByMerchantKey(apiKey: string) {
+  return User.findOne({
+    api_key_hash: computeBlindIndex("api-key", apiKey),
+  }).exec();
+}
+
+/** A new API key for the merchant, replacing any old one. Shown once: only its keyed hash is stored. */
+export async function issueApiKey(userId: string): Promise<string | undefined> {
+  const apiKey = randomUUID();
+  const result = await User.updateOne(
+    { user_id: userId },
+    { $set: { api_key_hash: computeBlindIndex("api-key", apiKey) } },
+  ).exec();
+  return result.matchedCount === 1 ? apiKey : undefined;
 }

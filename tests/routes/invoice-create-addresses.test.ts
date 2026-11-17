@@ -8,6 +8,7 @@ import { after, before, describe, it } from "node:test";
 import litecore from "bitcore-lib-ltc";
 
 import { createApp } from "../../src/app.js";
+import { computeBlindIndex } from "../../src/security/blind-index.js";
 import {
   connectToMongoDb,
   disconnectFromMongoDB,
@@ -32,7 +33,7 @@ globalThis.fetch = async (input, init) => {
 
 let server: Server;
 let baseUrl: string;
-const merchantKeys: string[] = [];
+const userIds: string[] = [];
 
 before(async () => {
   await connectToMongoDb();
@@ -43,7 +44,7 @@ before(async () => {
 
 after(async () => {
   const db = await connectToMongoDb();
-  await db.collection("users").deleteMany({ merchant_key: { $in: merchantKeys } });
+  await db.collection("users").deleteMany({ user_id: { $in: userIds } });
   await new Promise<void>((resolve, reject) =>
     server.close((error) => (error ? reject(error) : resolve())),
   );
@@ -54,11 +55,12 @@ after(async () => {
 /** A merchant whose only saved payout address is `address` for `asset`. */
 async function merchantWithPayoutAddress(asset: string, address: string) {
   const merchantKey = randomUUID();
-  merchantKeys.push(merchantKey);
+  const userId = randomUUID();
+  userIds.push(userId);
   const db = await connectToMongoDb();
   await db.collection("users").insertOne({
-    user_id: randomUUID(),
-    merchant_key: merchantKey,
+    user_id: userId,
+    api_key_hash: computeBlindIndex("api-key", merchantKey),
     merchant_fee: "0.005",
     payout_addresses: { [asset]: address },
   });

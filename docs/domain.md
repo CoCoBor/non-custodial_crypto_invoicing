@@ -28,6 +28,9 @@ Marks: ✅ verified by a run or seen in the code · 📄 cited source · ⚠️ 
 - Underpaid tolerance: 0–5%, at most 2 decimals, stored on the invoice as `underpaid`. A payment is accepted when it is at least the amount less the tolerance, rounded up (`src/invoice/payment-rules.ts`). ✅ same run, plus `tests/routes/invoice-create-addresses.test.ts`.
 - An invoice that expires with some money received gets `outcome: "partially_paid"`. Sending that money on is not built yet. ✅ same run.
 - At a 0% fee, BTC, LTC, ETH and SOL send no platform transfer. TON always sends its second message, because it returns the unused network-fee allowance to the platform. ✅ seen in code (`btc.ts`, `ltc.ts`, `eth.ts`, `sol.ts`, `ton.ts`).
+- API keys: only the keyed hash (blind index, purpose `api-key`) is stored, in `users.api_key_hash`. A logged-in merchant makes or replaces the key with `POST /auth/api-key`, and it is shown once. A key can only create invoices and read their status: it never opens `/auth/*`. ✅ `tests/routes/api-key.test.ts`, run 7/7, 2026-11-17.
+- Keys issued before that change sit in plain text in `users.merchant_key` until `npx tsx src/scripts/hash-merchant-keys.ts` is run once on the real database. Until then those merchants get 401. ✅ `tests/scripts/hash-merchant-keys.test.ts` (test database only).
+- The API key travels in a header named `merchant_key`. Some proxies (nginx by default) drop headers that contain underscores. ⚠️ unverified for your hosting.
 - `required_confirmations` is still 1 for every coin. The approved per-chain numbers wait for a check against each chain's docs. ✅ seen in `cryptos.json`.
 
 ## Pitfalls

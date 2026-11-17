@@ -34,7 +34,6 @@ export async function createMerchantAccount(): Promise<CreateMerchantAccount> {
         account_number_cipher: sealSecret("account-number", accountNunmber),
         recovery_public_key: publicKey,
         member_since: Date.now(),
-        merchant_key: randomUUID(),
       });
 
       return {

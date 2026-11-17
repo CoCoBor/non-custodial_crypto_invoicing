@@ -34,7 +34,8 @@ export const userSchema = new Schema(
     },
     totp_enabled: { type: Boolean, default: false },
     totp_last_used_step: { type: Number, default: null, select: false },
-    merchant_key: { type: String, default: "" },
+    // Keyed hash (blind index, purpose "api-key") of the API key. The key itself is shown once and never stored.
+    api_key_hash: { type: String, default: "" },
     merchant_fee: { type: String, default: "0.05" },
     telegram_id: { type: Number },
     telegram_name: { type: String },
@@ -79,10 +80,10 @@ userSchema.index(
   },
 );
 userSchema.index(
-  { merchant_key: 1 },
+  { api_key_hash: 1 },
   {
     unique: true,
-    partialFilterExpression: { merchant_key: { $type: "string", $gt: "" } },
+    partialFilterExpression: { api_key_hash: { $type: "string", $gt: "" } },
   },
 );
 userSchema.index(
