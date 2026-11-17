@@ -1,20 +1,19 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireMerchantKey } from "../../middleware/require-merchant-key.js";
-import bitcore from "bitcore-lib";
+import { ASSET_IDS, checkPayoutAddress } from "../../assets/payout-address.js";
 import * as priceFunc from "../../invoice/price.function.js";
 import cryptos from "../../storage/cryptos.json" with { type: "json" };
 import * as invoiceFunc from "../../invoice/invoice.function.js";
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
 import { generateBtcAddress } from "../../crypto/btc.js";
 export const createInvoiceRouter = Router();
-import { isAddress } from "ethers";
 
 const createSchema = z.object({
   amount: z.string().trim().min(1).max(100),
   lifetime: z.number().int().min(1).max(60).default(30),
   crypto: z.string().trim().min(1).max(100),
-  to_crypto: z.string().trim().min(1).max(100),
+  to_crypto: z.enum(ASSET_IDS),
 });
 
 createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
@@ -37,14 +36,18 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
   const { amount, lifetime, to_crypto } = parsed.data;
 
   const payoutAddress = merchant.payout_addresses?.[to_crypto];
+  const addressCheck = checkPayoutAddress(to_crypto, payoutAddress);
 
-  const validPayoutAddress =
-    payoutAddress &&
-    (to_crypto === "btc"
-      ? bitcore.Address.isValid(payoutAddress, bitcore.Networks.livenet)
-      : isAddress(payoutAddress) && BigInt(payoutAddress) > 0n);
+  if (addressCheck === "unsupported") {
+    return res.status(409).json({
+      error: {
+        code: "PAYOUT_NOT_SUPPORTED",
+        message: `${to_crypto} payouts are not supported yet`,
+      },
+    });
+  }
 
-  if (!payoutAddress || !validPayoutAddress) {
+  if (addressCheck !== "valid" || !payoutAddress) {
     return res.status(409).json({
       error: {
         code: "PAYOUT_ADDRESS_REQUIRED",
@@ -86,7 +89,8 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
     fiatUnits: payment.fiatUnits,
     address: deposit.address,
     encryptedPrivateKey: deposit.encryptedPrivateKey,
-    crypto: payoutAddress,
+    crypto: "btc",
+    payoutAddress,
     toCrypto: to_crypto,
     lifetime,
   });
