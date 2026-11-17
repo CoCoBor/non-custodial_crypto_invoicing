@@ -21,7 +21,15 @@
     "@scure/bip32": "^2.3.0",
     "@scure/bip39": "^2.3.0",
     "@scure/btc-signer": "^2.3.0",
+    "@solana-program/compute-budget": "0.20.0",
+    "@solana-program/system": "0.16.0",
+    "@solana-program/token": "0.18.0",
+    "@solana/kit": "8.6.0",
+    "@ton/core": "0.63.1",
+    "@ton/crypto": "3.3.0",
+    "@ton/ton": "16.3.0",
     "bitcore-lib": "^10.10.7",
+    "bitcore-lib-ltc": "10.10.5",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
     "ethers": "^6.17.0",
@@ -32,6 +40,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@ton/sandbox": "0.45.0",
     "@types/bitcore-lib": "^0.15.6",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",

@@ -1,6 +1,8 @@
 import { env } from "../config/env.js";
 import { Invoice } from "../database/invoices.model.js";
+import { updateSwapStatus as updateNearSwapStatus } from "../swap/near.js";
 import { transferBtcToMerchant, updateSwapStatus } from "../transactions/btc.js";
+import { transferTonToMerchant } from "../transactions/ton.js";
 import { checkInvoicePayment } from "./invoice.function.js";
 
 export function startInvoiceWatcher() {
@@ -11,7 +13,7 @@ export function startInvoiceWatcher() {
   async function checkInvoices(): Promise<void> {
     try {
       const invoices = await Invoice.find({
-        crypto: "btc",
+        crypto: { $in: ["btc", "ton"] },
         status: {
           $in: [
             "waiting",
@@ -23,13 +25,40 @@ export function startInvoiceWatcher() {
         },
       })
         .select(
-          "invoice_id user_id status to_crypto tx.out swap.deposit_address -_id",
+          "invoice_id user_id status crypto to_crypto tx.out swap.deposit_address -_id",
         )
         .lean()
         .exec();
 
       for (const invoice of invoices) {
         if (stopped) break;
+
+        if (
+          invoice.crypto === "ton" &&
+          (invoice.status === "confirmed" || invoice.status === "processing")
+        ) {
+          await transferTonToMerchant(invoice.invoice_id, env.platformTonAddress);
+
+          if (invoice.to_crypto !== "ton" && invoice.status === "processing") {
+            // Read tx.out again: the call above changes it to the
+            // transaction hash when the payout lands.
+            const current = await Invoice.findOne({
+              invoice_id: invoice.invoice_id,
+              status: "processing",
+            })
+              .select("tx.out swap.deposit_address -_id")
+              .lean()
+              .exec();
+            if (current?.tx?.out && current.swap?.deposit_address) {
+              await updateNearSwapStatus(
+                invoice.invoice_id,
+                current.tx.out,
+                current.swap.deposit_address,
+              );
+            }
+          }
+          continue;
+        }
 
         if (invoice.status === "confirmed" || invoice.status === "processing") {
           await transferBtcToMerchant(

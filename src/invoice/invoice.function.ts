@@ -5,6 +5,14 @@ import { env } from "../config/env.js";
 import { z } from "zod";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import { decimalStrToBigInt } from "./money.function.js";
+import { getTonPaymentTotals, tonMinimumPayment } from "../transactions/ton.js";
+
+// Coins whose payments the watcher checks.
+type WatchedCrypto = "btc" | "ton";
+
+function asWatchedCrypto(value: string): WatchedCrypto | undefined {
+  return value === "btc" || value === "ton" ? value : undefined;
+}
 
 export async function findInvoiceById(invoiceId: string, userId: string) {
   return await Invoice.findOne({
@@ -162,11 +170,12 @@ export function getPaymentStatus(input: {
 
 export async function updateInvoicePayment(input: {
   invoiceId: string;
+  crypto: WatchedCrypto;
   currentStatus: "waiting" | "underpaid" | "confirming";
   newStatus: "waiting" | "underpaid" | "confirming" | "confirmed" | "expired";
   paidAmount: bigint;
 }) {
-  const { invoiceId, currentStatus, newStatus, paidAmount } = input;
+  const { invoiceId, crypto, currentStatus, newStatus, paidAmount } = input;
   const changes: Record<string, string | number> = {
     paid_amount: paidAmount.toString(),
     status: newStatus,
@@ -182,9 +191,21 @@ export async function updateInvoicePayment(input: {
   }
 
   return await Invoice.updateOne(
-    { invoice_id: invoiceId, crypto: "btc", status: currentStatus },
+    { invoice_id: invoiceId, crypto, status: currentStatus },
     { $set: changes },
   ).exec();
+}
+
+// undefined = lookup failed; try again next round.
+async function getPaymentTotals(
+  crypto: WatchedCrypto,
+  address: string,
+): Promise<{ receivedAmount: bigint; confirmedAmount: bigint } | undefined> {
+  if (crypto === "ton") return await getTonPaymentTotals(address);
+
+  const payments = await getBtcPayments(address);
+  if (payments === undefined) return undefined;
+  return calculatePaymentTotals(payments, cryptos.btc.required_confirmations);
 }
 
 export async function checkInvoicePayment(
@@ -196,7 +217,9 @@ export async function checkInvoicePayment(
   try {
     const invoice = await findInvoiceById(invoiceId, userId);
 
-    if (!invoice || invoice.crypto !== "btc") return undefined;
+    if (!invoice) return undefined;
+    const crypto = asWatchedCrypto(invoice.crypto);
+    if (crypto === undefined) return undefined;
 
     const currentStatus = invoice.status;
 
@@ -220,6 +243,7 @@ export async function checkInvoicePayment(
       if (Date.now() >= expiresAt) {
         const result = await updateInvoicePayment({
           invoiceId,
+          crypto,
           currentStatus,
           newStatus: "expired",
           paidAmount: BigInt(invoice.paid_amount),
@@ -235,22 +259,25 @@ export async function checkInvoicePayment(
       }
     }
 
-    const payments = await getBtcPayments(invoice.address);
-    if (payments === undefined) return undefined;
+    const totals = await getPaymentTotals(crypto, invoice.address);
+    if (totals === undefined) return undefined;
 
-    const totals = calculatePaymentTotals(
-      payments,
-      cryptos.btc.required_confirmations,
-    );
-
+    const invoiceAmount = BigInt(invoice.amount);
     const newStatus = getPaymentStatus({
-      requiredAmount: BigInt(invoice.amount),
+      // TON: a payment in two parts can end a few nanoton short (storage
+      // fee), so accept the same small shortfall the payout accepts. It
+      // follows the invoice lifetime.
+      requiredAmount:
+        crypto === "ton"
+          ? tonMinimumPayment(invoiceAmount, invoice.lifetime)
+          : invoiceAmount,
       receivedAmount: totals.receivedAmount,
       confirmedAmount: totals.confirmedAmount,
     });
 
     const result = await updateInvoicePayment({
       invoiceId,
+      crypto,
       currentStatus,
       newStatus,
       paidAmount: totals.receivedAmount,

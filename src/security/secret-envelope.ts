@@ -7,7 +7,10 @@ export type SecretPurpose =
   | "monero-view-key"
   | "bitcoin-deposit-key"
   | "litecoin-deposit-key"
-  | "ethereum-deposit-key";
+  | "ethereum-deposit-key"
+  | "solana-deposit-key"
+  | "solana-gas-wallet-key"
+  | "ton-deposit-key";
 
 export interface SealedSecret {
   keyVersion: number;
