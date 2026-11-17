@@ -10,7 +10,8 @@ export type SecretPurpose =
   | "ethereum-deposit-key"
   | "solana-deposit-key"
   | "solana-gas-wallet-key"
-  | "ton-deposit-key";
+  | "ton-deposit-key"
+  | "webhook-secret";
 
 export interface SealedSecret {
   keyVersion: number;

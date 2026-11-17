@@ -5,6 +5,7 @@ import {
   disconnectFromMongoDB,
 } from "./infrastructure/database/mongodb.js";
 import { startInvoiceWatcher } from "./invoice/invoice.watcher.js";
+import { startWebhookSender } from "./webhooks/webhook-sender.js";
 
 const app = createApp();
 
@@ -20,6 +21,8 @@ async function startServer(): Promise<void> {
     });
     const stopInvoiceWatcher = startInvoiceWatcher();
     console.log("Invoice watcher started");
+    const stopWebhookSender = startWebhookSender();
+    console.log("Webhook sender started");
 
     let isShuttingDown = false;
 
@@ -31,6 +34,7 @@ async function startServer(): Promise<void> {
       isShuttingDown = true;
       console.log(`${signal} received; stopping the HTTP server`);
       const watcherStopped = stopInvoiceWatcher();
+      const senderStopped = stopWebhookSender();
       server.close(async (error) => {
         if (error) {
           console.error("The HTTP server did not stop cleanly", error);
@@ -41,6 +45,7 @@ async function startServer(): Promise<void> {
 
         try {
           await watcherStopped;
+          await senderStopped;
           await disconnectFromMongoDB();
           console.log("MongoDB disconnected");
         } catch (error) {

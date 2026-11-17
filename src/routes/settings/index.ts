@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 
@@ -6,6 +8,7 @@ import { confirmTotpCode } from "../../auth/totp-step-up.js";
 import { User } from "../../database/users.model.js";
 import { requireSession } from "../../middleware/require-session.js";
 import { percentToBasisPoints } from "../../money/percent.js";
+import { sealSecret } from "../../security/secret-envelope.js";
 
 export const settingsRouter = Router();
 
@@ -136,5 +139,33 @@ settingsRouter.patch("/webhook-url", async (req, res) => {
   if (!(await confirmTotpCode(userId, totpCode, res))) return;
 
   await User.updateOne({ user_id: userId }, { $set: { webhook_url: url } }).exec();
-  return res.status(200).json({ data: { webhookUrl: url } });
+
+  // The first URL also gets the signing secret, shown this once.
+  let secret: string | undefined;
+  if (url !== "") {
+    const candidate = newWebhookSecret();
+    const stored = await User.updateOne(
+      { user_id: userId, webhook_secret: null },
+      { $set: { webhook_secret: sealSecret("webhook-secret", candidate) } },
+    ).exec();
+    if (stored.modifiedCount === 1) secret = candidate;
+  }
+
+  return res.status(200).json({ data: { webhookUrl: url, secret } });
+});
+
+function newWebhookSecret(): string {
+  return `whsec_${randomBytes(24).toString("base64url")}`;
+}
+
+settingsRouter.post("/webhook-secret", async (req, res) => {
+  const userId = req.session!.userId;
+  if (!(await confirmTotpCode(userId, req.body?.totpCode, res))) return;
+
+  const secret = newWebhookSecret();
+  await User.updateOne(
+    { user_id: userId },
+    { $set: { webhook_secret: sealSecret("webhook-secret", secret) } },
+  ).exec();
+  return res.status(201).json({ data: { secret } });
 });

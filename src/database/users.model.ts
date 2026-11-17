@@ -68,6 +68,8 @@ export const userSchema = new Schema(
     refund_addresses: addressPerAsset(),
     swap_max_loss_bps: { type: Number, default: 50 }, // 0.5%; merchant may set 50-500
     webhook_url: { type: String, default: "" },
+    // Signs webhooks (HMAC-SHA256). Sealed, not hashed: we need it to sign.
+    webhook_secret: { type: sealedSecretSchema, default: null, select: false },
   },
   { collection: USERS_COLLECTION, autoCreate: false, autoIndex: false },
 );

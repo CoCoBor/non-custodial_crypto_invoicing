@@ -49,6 +49,12 @@ Marks: ✅ verified by a run or seen in the code · 📄 cited source · ⚠️ 
   - Swap max loss is 0.5–5% (stored as `swap_max_loss_bps`, 50–500) and needs no code.
   - The webhook URL must be https with no credentials in it. ⚠️ The same URL can still point at an internal address (SSRF); the delivery code must block private addresses.
 - `payout_addresses` and `refund_addresses` share one per-coin field list, and a test keeps it equal to the keys of `cryptos.json`. ✅ `tests/assets/coin-list.test.ts`.
+- Webhooks. ✅ `tests/webhooks/webhook-pass.test.ts` (8/8), `tests/webhooks/destination.test.ts` (16/16) and `tests/routes/webhook-secret.test.ts` (2/2), 2026-11-17. A 4-second server boot against a test database showed the sender starting and stopping, also 2026-11-17.
+  - **Timing:** every 15 s, `src/webhooks/webhook-pass.ts` records each invoice whose `status` differs from `notified_status` as an event, then sends the events that are due. Two status changes between passes produce one webhook with the latest status. An event is recorded at most once: a crash between "claim" and "record" loses that one event.
+  - **Request:** `POST` with `content-type: application/json`, `x-webhook-timestamp: <unix seconds>`, and `x-webhook-signature: sha256=<hex HMAC-SHA256(secret, timestamp + "." + raw body)>`. The body is `{event:"invoice.status_changed", eventId, invoiceId, status, outcome, crypto, toCrypto, amount, amountFiat, paidAmount, txids:{in,out,platformOut}, occurredAt}`. Merchants should dedupe by `eventId`.
+  - **Retries:** after 1 min, 5 min, 30 min and 2 h; the 5th failure marks the event failed. A redirect counts as a failure and is never followed.
+  - **Destinations:** https only, and every address the name resolves to must be public (no loopback, private, link-local or metadata ranges). ⚠️ The name is resolved again when the request is sent, so DNS rebinding is not covered.
+  - **Secret:** `whsec_…`, shown once when the first webhook URL is set; `POST /settings/webhook-secret` with a TOTP code replaces it. It is stored sealed (`webhook-secret`), because it is needed to sign.
 - `required_confirmations` is still 1 for every coin. The approved per-chain numbers wait for a check against each chain's docs. ✅ seen in `cryptos.json`.
 
 ## Pitfalls
