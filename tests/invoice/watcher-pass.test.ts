@@ -30,7 +30,7 @@ after(async () => {
 });
 
 /** A BTC invoice created 5 minutes ago with a 30-minute lifetime. */
-async function btcInvoice() {
+async function btcInvoice(fields: Record<string, unknown> = {}) {
   const invoiceId = randomUUID();
   invoiceIds.push(invoiceId);
   const address = `deposit-${invoiceId}`;
@@ -46,9 +46,12 @@ async function btcInvoice() {
     address,
     lifetime: 30,
     timestamps: { created: NOW - 5 * MINUTE, waiting: NOW - 5 * MINUTE },
+    ...fields,
   });
   return { invoiceId, address };
 }
+
+const AFTER_EXPIRY = NOW + 26 * MINUTE; // created 5 minutes before NOW, lifetime 30
 
 type Totals = { received: bigint; confirmed: bigint } | "lookup fails";
 
@@ -158,6 +161,48 @@ describe("a watcher pass over a fixed-coin BTC invoice", () => {
     assert.equal(invoice?.paid_amount, "0");
   });
 
+  it("never expires an invoice while the chain lookup is failing", async () => {
+    const { invoiceId, address } = await btcInvoice();
+    const { ports } = fakePorts(new Map([[address, "lookup fails"]]), AFTER_EXPIRY);
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(invoiceId))?.status, "waiting");
+  });
+
+  it("counts a full payment that is there at the expiry check as on time", async () => {
+    const { invoiceId, address } = await btcInvoice();
+    const { ports } = fakePorts(new Map([[address, { received: AMOUNT, confirmed: 0n }]]), AFTER_EXPIRY);
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(invoiceId))?.status, "confirming");
+  });
+
+  it("expires an underpaid invoice as partially paid, keeping what arrived", async () => {
+    const { invoiceId, address } = await btcInvoice();
+    const { ports, paidOut } = fakePorts(new Map([[address, { received: 40_000n, confirmed: 40_000n }]]), AFTER_EXPIRY);
+
+    await runWatcherPass(ports);
+
+    const invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.status, "expired");
+    assert.equal(invoice?.outcome, "partially_paid");
+    assert.equal(invoice?.paid_amount, "40000");
+    assert.ok(!paidOut.includes(invoiceId));
+  });
+
+  it("expires an unpaid invoice with no outcome to handle", async () => {
+    const { invoiceId, address } = await btcInvoice();
+    const { ports } = fakePorts(new Map([[address, { received: 0n, confirmed: 0n }]]), AFTER_EXPIRY);
+
+    await runWatcherPass(ports);
+
+    const invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.status, "expired");
+    assert.ok(!invoice?.outcome);
+  });
+
   it("keeps going when one invoice's payout throws", async () => {
     const first = await btcInvoice();
     const second = await btcInvoice();
@@ -178,5 +223,52 @@ describe("a watcher pass over a fixed-coin BTC invoice", () => {
     await runWatcherPass(ports);
 
     assert.ok(attempted.includes(first.invoiceId) && attempted.includes(second.invoiceId));
+  });
+});
+
+describe("the merchant's underpaid tolerance", () => {
+  it("accepts a payment short by no more than the tolerance (95 of 100 at 5%)", async () => {
+    const { invoiceId, address } = await btcInvoice({ underpaid: 5 });
+    const { ports } = fakePorts(new Map([[address, { received: 95_000n, confirmed: 95_000n }]]));
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(invoiceId))?.status, "confirmed");
+  });
+
+  it("refuses a payment one unit short of the tolerance", async () => {
+    const { invoiceId, address } = await btcInvoice({ underpaid: 5 });
+    const { ports } = fakePorts(new Map([[address, { received: 94_999n, confirmed: 94_999n }]]));
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(invoiceId))?.status, "underpaid");
+  });
+
+  it("rounds the accepted minimum up, never in the payer's favour", async () => {
+    // 2.5% of 100,001 is 2,500.025: the payer must send at least 97,501.
+    const amount = 100_001n;
+    const short = await btcInvoice({ underpaid: 2.5, amount: amount.toString() });
+    const enough = await btcInvoice({ underpaid: 2.5, amount: amount.toString() });
+    const { ports } = fakePorts(
+      new Map([
+        [short.address, { received: 97_500n, confirmed: 97_500n }],
+        [enough.address, { received: 97_501n, confirmed: 97_501n }],
+      ]),
+    );
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(short.invoiceId))?.status, "underpaid");
+    assert.equal((await invoiceNow(enough.invoiceId))?.status, "confirmed");
+  });
+
+  it("asks for the full amount when there is no tolerance", async () => {
+    const { invoiceId, address } = await btcInvoice({ underpaid: 0 });
+    const { ports } = fakePorts(new Map([[address, { received: AMOUNT - 1n, confirmed: AMOUNT - 1n }]]));
+
+    await runWatcherPass(ports);
+
+    assert.equal((await invoiceNow(invoiceId))?.status, "underpaid");
   });
 });

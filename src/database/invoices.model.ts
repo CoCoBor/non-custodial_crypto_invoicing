@@ -44,6 +44,7 @@ const invoiceSchema = new Schema(
     platform_fee: { type: String, default: "0" }, // fee charged by the platform, based on user's merchant fee
     swap_fee: { type: Number, default: 0 }, // if to_crypto is another crypto and NEAR Intents is used, fee = amount transferred - network fees - near estimated receive quote
     review_reason: { type: String, default: "" },
+    outcome: { type: String, enum: ["", "partially_paid"], default: "" }, // what is left to handle after the status, e.g. money from a partly paid, expired invoice
     crypto: { type: String, default: "" }, // cryptocurrency ticker
     address: { type: String, default: "" }, // invoice payment address
     to_crypto: { type: String, default: "" }, // cryptocurrency ticker to convert to

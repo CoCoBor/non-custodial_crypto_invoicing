@@ -13,6 +13,7 @@ export async function createInvoice(input: {
   payoutAddress: string;
   toCrypto: keyof typeof cryptos;
   lifetime: number;
+  underpaid: number;
 }) {
   const invoiceId = randomUUID();
   const now = Date.now();
@@ -30,7 +31,7 @@ export async function createInvoice(input: {
     to_crypto: input.toCrypto,
     to_address: input.payoutAddress,
     lifetime: input.lifetime,
-    underpaid: 0,
+    underpaid: input.underpaid,
     fee_paid_by_payer: false,
     timestamps: { created: now, waiting: now },
     private: { private_key: input.encryptedPrivateKey },

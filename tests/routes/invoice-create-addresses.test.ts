@@ -65,11 +65,15 @@ async function merchantWithPayoutAddress(asset: string, address: string) {
   return merchantKey;
 }
 
-async function createInvoice(merchantKey: string, toCrypto: string) {
+async function createInvoice(
+  merchantKey: string,
+  toCrypto: string,
+  extra: Record<string, unknown> = {},
+) {
   const response = await realFetch(`${baseUrl}/invoices`, {
     method: "POST",
     headers: { "content-type": "application/json", merchant_key: merchantKey },
-    body: JSON.stringify({ amount: "25", crypto: "btc", to_crypto: toCrypto }),
+    body: JSON.stringify({ amount: "25", crypto: "btc", to_crypto: toCrypto, ...extra }),
   });
   const body = await response.json();
   return { status: response.status, code: body.error?.code ?? body.code };
@@ -158,6 +162,25 @@ describe("creating an invoice checks the payout address for the coin's own chain
 
       assert.equal(result.status, 409);
       assert.equal(result.code, "PAYOUT_NOT_SUPPORTED");
+    });
+  }
+
+  for (const underpaid of [0, 2.5, 5]) {
+    it(`accepts an underpaid tolerance of ${underpaid}%`, async () => {
+      const merchantKey = await merchantWithPayoutAddress("btc", "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu");
+      const result = await createInvoice(merchantKey, "btc", { underpaid });
+
+      assert.equal(result.code, "PRICE_UNAVAILABLE", `refused with ${result.code}`);
+    });
+  }
+
+  for (const underpaid of [5.01, -1, 0.123, "5"]) {
+    it(`refuses an underpaid tolerance of ${JSON.stringify(underpaid)}`, async () => {
+      const merchantKey = await merchantWithPayoutAddress("btc", "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu");
+      const result = await createInvoice(merchantKey, "btc", { underpaid });
+
+      assert.equal(result.status, 400);
+      assert.equal(result.code, "INVALID_REQUEST");
     });
   }
 

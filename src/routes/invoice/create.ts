@@ -8,6 +8,7 @@ import * as invoiceFunc from "../../invoice/invoice.function.js";
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
 import { generateBtcAddress } from "../../crypto/btc.js";
 import { canPayOutFromBtcDeposit } from "../../transactions/btc.js";
+import { toleranceBasisPoints } from "../../invoice/payment-rules.js";
 export const createInvoiceRouter = Router();
 
 const createSchema = z.object({
@@ -15,6 +16,10 @@ const createSchema = z.object({
   lifetime: z.number().int().min(1).max(60).default(30),
   crypto: z.string().trim().min(1).max(100),
   to_crypto: z.enum(ASSET_IDS),
+  underpaid: z
+    .number()
+    .refine((percent) => toleranceBasisPoints(percent) !== undefined)
+    .default(0),
 });
 
 createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
@@ -34,7 +39,7 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
       error: { code: "INVALID_REQUEST", message: "request body is invalid" },
     });
 
-  const { amount, lifetime, to_crypto } = parsed.data;
+  const { amount, lifetime, to_crypto, underpaid } = parsed.data;
 
   const payoutAddress = merchant.payout_addresses?.[to_crypto];
   const addressCheck = checkPayoutAddress(to_crypto, payoutAddress);
@@ -105,6 +110,7 @@ createInvoiceRouter.post("/", requireMerchantKey, async (req, res) => {
     payoutAddress,
     toCrypto: to_crypto,
     lifetime,
+    underpaid,
   });
 
   return res.status(201).json({

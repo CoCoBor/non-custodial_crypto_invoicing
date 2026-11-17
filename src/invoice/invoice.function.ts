@@ -5,6 +5,7 @@ import { env } from "../config/env.js";
 import { z } from "zod";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import { decimalStrToBigInt } from "./money.function.js";
+import { minimumAcceptedAmount, toleranceBasisPoints } from "./payment-rules.js";
 import { getTonPaymentTotals, tonMinimumPayment } from "../transactions/ton.js";
 
 // Coins whose payments the watcher checks.
@@ -197,12 +198,14 @@ export async function updateInvoicePayment(input: {
   newStatus: "waiting" | "underpaid" | "confirming" | "confirmed" | "expired";
   paidAmount: bigint;
   now: number;
+  outcome?: "partially_paid";
 }) {
-  const { invoiceId, crypto, currentStatus, newStatus, paidAmount, now } = input;
+  const { invoiceId, crypto, currentStatus, newStatus, paidAmount, now, outcome } = input;
   const changes: Record<string, string | number> = {
     paid_amount: paidAmount.toString(),
     status: newStatus,
   };
+  if (outcome) changes.outcome = outcome;
 
   if (
     newStatus !== currentStatus &&
@@ -254,7 +257,37 @@ export async function checkInvoicePayment(
     )
       return undefined;
 
-    if (currentStatus !== "confirming") {
+    // Look before deciding expiry: a payment already there at the expiry
+    // check is on time, and a failed lookup must never expire an invoice.
+    const totals = await ports.getPaymentTotals(crypto, invoice.address);
+    if (totals === undefined) return undefined;
+
+    const invoiceAmount = BigInt(invoice.amount);
+    const acceptedAmount = minimumAcceptedAmount(
+      invoiceAmount,
+      toleranceBasisPoints(invoice.underpaid) ?? 0n,
+    );
+    const tonMinimum = tonMinimumPayment(invoiceAmount, invoice.lifetime);
+    const paymentStatus = getPaymentStatus({
+      // TON: a payment in two parts can end a few nanoton short (storage
+      // fee), so accept the same small shortfall the payout accepts. It
+      // follows the invoice lifetime.
+      requiredAmount:
+        crypto === "ton" && tonMinimum < acceptedAmount
+          ? tonMinimum
+          : acceptedAmount,
+      receivedAmount: totals.receivedAmount,
+      confirmedAmount: totals.confirmedAmount,
+    });
+
+    const now = ports.now();
+    let newStatus: typeof paymentStatus | "expired" = paymentStatus;
+    let outcome: "partially_paid" | undefined;
+
+    if (
+      currentStatus !== "confirming" &&
+      (paymentStatus === "waiting" || paymentStatus === "underpaid")
+    ) {
       const waitingSince = invoice.timestamps?.waiting;
 
       if (waitingSince == null) {
@@ -262,44 +295,12 @@ export async function checkInvoicePayment(
         return undefined;
       }
 
-      const expiresAt = waitingSince + invoice.lifetime * 60 * 1000;
-      const now = ports.now();
-
-      if (now >= expiresAt) {
-        const result = await updateInvoicePayment({
-          invoiceId,
-          crypto,
-          currentStatus,
-          newStatus: "expired",
-          paidAmount: BigInt(invoice.paid_amount),
-          //if expired keep the paid_amount
-          now,
-        });
-        if (result.modifiedCount === 0) return undefined;
-
-        return {
-          invoiceId,
-          status: "expired",
-          paidAmount: invoice.paid_amount,
-        };
+      if (now >= waitingSince + invoice.lifetime * 60 * 1000) {
+        //if expired keep the paid_amount
+        newStatus = "expired";
+        if (totals.receivedAmount > 0n) outcome = "partially_paid";
       }
     }
-
-    const totals = await ports.getPaymentTotals(crypto, invoice.address);
-    if (totals === undefined) return undefined;
-
-    const invoiceAmount = BigInt(invoice.amount);
-    const newStatus = getPaymentStatus({
-      // TON: a payment in two parts can end a few nanoton short (storage
-      // fee), so accept the same small shortfall the payout accepts. It
-      // follows the invoice lifetime.
-      requiredAmount:
-        crypto === "ton"
-          ? tonMinimumPayment(invoiceAmount, invoice.lifetime)
-          : invoiceAmount,
-      receivedAmount: totals.receivedAmount,
-      confirmedAmount: totals.confirmedAmount,
-    });
 
     const result = await updateInvoicePayment({
       invoiceId,
@@ -307,7 +308,8 @@ export async function checkInvoicePayment(
       currentStatus,
       newStatus,
       paidAmount: totals.receivedAmount,
-      now: ports.now(),
+      now,
+      outcome,
     });
     if (result.matchedCount === 0) return undefined;
 
