@@ -8,7 +8,18 @@ import { decimalStrToBigInt } from "./money.function.js";
 import { getTonPaymentTotals, tonMinimumPayment } from "../transactions/ton.js";
 
 // Coins whose payments the watcher checks.
-type WatchedCrypto = "btc" | "ton";
+export type WatchedCrypto = "btc" | "ton";
+
+export type PaymentTotals = { receivedAmount: bigint; confirmedAmount: bigint };
+
+/** The outside world a payment check depends on, so a test can fake it. */
+export type PaymentCheckPorts = {
+  now: () => number;
+  getPaymentTotals: (
+    crypto: WatchedCrypto,
+    address: string,
+  ) => Promise<PaymentTotals | undefined>;
+};
 
 function asWatchedCrypto(value: string): WatchedCrypto | undefined {
   return value === "btc" || value === "ton" ? value : undefined;
@@ -185,8 +196,9 @@ export async function updateInvoicePayment(input: {
   currentStatus: "waiting" | "underpaid" | "confirming";
   newStatus: "waiting" | "underpaid" | "confirming" | "confirmed" | "expired";
   paidAmount: bigint;
+  now: number;
 }) {
-  const { invoiceId, crypto, currentStatus, newStatus, paidAmount } = input;
+  const { invoiceId, crypto, currentStatus, newStatus, paidAmount, now } = input;
   const changes: Record<string, string | number> = {
     paid_amount: paidAmount.toString(),
     status: newStatus,
@@ -198,7 +210,7 @@ export async function updateInvoicePayment(input: {
       newStatus === "confirming" ||
       newStatus === "expired")
   ) {
-    changes[`timestamps.${newStatus}`] = Date.now();
+    changes[`timestamps.${newStatus}`] = now;
   }
 
   return await Invoice.updateOne(
@@ -208,10 +220,10 @@ export async function updateInvoicePayment(input: {
 }
 
 // undefined = lookup failed; try again next round.
-async function getPaymentTotals(
+export async function getPaymentTotals(
   crypto: WatchedCrypto,
   address: string,
-): Promise<{ receivedAmount: bigint; confirmedAmount: bigint } | undefined> {
+): Promise<PaymentTotals | undefined> {
   if (crypto === "ton") return await getTonPaymentTotals(address);
 
   const payments = await getBtcPayments(address);
@@ -222,6 +234,7 @@ async function getPaymentTotals(
 export async function checkInvoicePayment(
   invoiceId: string,
   userId: string,
+  ports: PaymentCheckPorts = { now: Date.now, getPaymentTotals },
 ): Promise<
   { invoiceId: string; status: string; paidAmount: string } | undefined
 > {
@@ -250,8 +263,9 @@ export async function checkInvoicePayment(
       }
 
       const expiresAt = waitingSince + invoice.lifetime * 60 * 1000;
+      const now = ports.now();
 
-      if (Date.now() >= expiresAt) {
+      if (now >= expiresAt) {
         const result = await updateInvoicePayment({
           invoiceId,
           crypto,
@@ -259,6 +273,7 @@ export async function checkInvoicePayment(
           newStatus: "expired",
           paidAmount: BigInt(invoice.paid_amount),
           //if expired keep the paid_amount
+          now,
         });
         if (result.modifiedCount === 0) return undefined;
 
@@ -270,7 +285,7 @@ export async function checkInvoicePayment(
       }
     }
 
-    const totals = await getPaymentTotals(crypto, invoice.address);
+    const totals = await ports.getPaymentTotals(crypto, invoice.address);
     if (totals === undefined) return undefined;
 
     const invoiceAmount = BigInt(invoice.amount);
@@ -292,6 +307,7 @@ export async function checkInvoicePayment(
       currentStatus,
       newStatus,
       paidAmount: totals.receivedAmount,
+      now: ports.now(),
     });
     if (result.matchedCount === 0) return undefined;
 

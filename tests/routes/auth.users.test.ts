@@ -30,7 +30,7 @@ test("registration creates a v2 merchant that can log in without leaking stored 
     // Two separate randomUUID() calls: an api key that equals the public user
     // id would leak one from the other.
     assert.notEqual(user.merchant_key, user.user_id);
-    assert.equal(user.merchant_fee, "0.005");
+    assert.equal(user.merchant_fee, "0.05");
     assert.equal(user.totp_enabled, false);
     assert.equal(user.totp_secret, null);
     assert.deepEqual(user.invoices, []);

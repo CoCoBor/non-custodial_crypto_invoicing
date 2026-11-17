@@ -3,99 +3,124 @@ import { Invoice } from "../database/invoices.model.js";
 import { updateSwapStatus as updateNearSwapStatus } from "../swap/near.js";
 import { transferBtcToMerchant, updateSwapStatus } from "../transactions/btc.js";
 import { transferTonToMerchant } from "../transactions/ton.js";
-import { checkInvoicePayment } from "./invoice.function.js";
+import {
+  checkInvoicePayment,
+  getPaymentTotals,
+  type PaymentCheckPorts,
+} from "./invoice.function.js";
+
+export type WatchedInvoice = {
+  invoice_id: string;
+  user_id: string;
+  status?: string | null;
+  crypto?: string | null;
+  to_crypto?: string | null;
+  tx?: { out?: string | null } | null;
+  swap?: { deposit_address?: string | null } | null;
+};
+
+export type WatcherPorts = PaymentCheckPorts & {
+  /** Pays out a confirmed invoice, or follows a payout already under way. */
+  payOut: (invoice: WatchedInvoice) => Promise<void>;
+};
+
+/** One look at every open invoice. */
+export async function runWatcherPass(
+  ports: WatcherPorts,
+  isStopped: () => boolean = () => false,
+): Promise<void> {
+  const invoices = await Invoice.find({
+    crypto: { $in: ["btc", "ton"] },
+    status: {
+      $in: ["waiting", "underpaid", "confirming", "confirmed", "processing"],
+    },
+  })
+    .select(
+      "invoice_id user_id status crypto to_crypto tx.out swap.deposit_address -_id",
+    )
+    .lean()
+    .exec();
+
+  for (const invoice of invoices) {
+    if (isStopped()) break;
+
+    // One invoice failing must not hold up the others.
+    try {
+      if (invoice.status === "confirmed" || invoice.status === "processing") {
+        await ports.payOut(invoice);
+        continue;
+      }
+
+      const result = await checkInvoicePayment(
+        invoice.invoice_id,
+        invoice.user_id,
+        ports,
+      );
+
+      if (result && result.status !== invoice.status)
+        console.log("Invoice status changed:", result.invoiceId, result.status);
+    } catch (error) {
+      console.error("Invoice watcher failed on", invoice.invoice_id, error);
+    }
+  }
+}
+
+async function payOutOnChain(invoice: WatchedInvoice): Promise<void> {
+  if (invoice.crypto === "ton") {
+    await transferTonToMerchant(invoice.invoice_id, env.platformTonAddress);
+
+    if (invoice.to_crypto !== "ton" && invoice.status === "processing") {
+      // Read tx.out again: the call above changes it to the
+      // transaction hash when the payout lands.
+      const current = await Invoice.findOne({
+        invoice_id: invoice.invoice_id,
+        status: "processing",
+      })
+        .select("tx.out swap.deposit_address -_id")
+        .lean()
+        .exec();
+      if (current?.tx?.out && current.swap?.deposit_address) {
+        await updateNearSwapStatus(
+          invoice.invoice_id,
+          current.tx.out,
+          current.swap.deposit_address,
+        );
+      }
+    }
+    return;
+  }
+
+  await transferBtcToMerchant(invoice.invoice_id, env.platformBtcAddress);
+
+  const isSwap = invoice.to_crypto !== "btc";
+  if (
+    isSwap &&
+    invoice.status === "processing" &&
+    invoice.tx?.out &&
+    invoice.swap?.deposit_address
+  ) {
+    await updateSwapStatus(
+      invoice.invoice_id,
+      invoice.tx.out,
+      invoice.swap.deposit_address,
+    );
+  }
+}
 
 export function startInvoiceWatcher() {
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let currentRun: Promise<void> = Promise.resolve();
 
+  const ports: WatcherPorts = {
+    now: Date.now,
+    getPaymentTotals,
+    payOut: payOutOnChain,
+  };
+
   async function checkInvoices(): Promise<void> {
     try {
-      const invoices = await Invoice.find({
-        crypto: { $in: ["btc", "ton"] },
-        status: {
-          $in: [
-            "waiting",
-            "underpaid",
-            "confirming",
-            "confirmed",
-            "processing",
-          ],
-        },
-      })
-        .select(
-          "invoice_id user_id status crypto to_crypto tx.out swap.deposit_address -_id",
-        )
-        .lean()
-        .exec();
-
-      for (const invoice of invoices) {
-        if (stopped) break;
-
-        if (
-          invoice.crypto === "ton" &&
-          (invoice.status === "confirmed" || invoice.status === "processing")
-        ) {
-          await transferTonToMerchant(invoice.invoice_id, env.platformTonAddress);
-
-          if (invoice.to_crypto !== "ton" && invoice.status === "processing") {
-            // Read tx.out again: the call above changes it to the
-            // transaction hash when the payout lands.
-            const current = await Invoice.findOne({
-              invoice_id: invoice.invoice_id,
-              status: "processing",
-            })
-              .select("tx.out swap.deposit_address -_id")
-              .lean()
-              .exec();
-            if (current?.tx?.out && current.swap?.deposit_address) {
-              await updateNearSwapStatus(
-                invoice.invoice_id,
-                current.tx.out,
-                current.swap.deposit_address,
-              );
-            }
-          }
-          continue;
-        }
-
-        if (invoice.status === "confirmed" || invoice.status === "processing") {
-          await transferBtcToMerchant(
-            invoice.invoice_id,
-            env.platformBtcAddress,
-          );
-
-          const isSwap = invoice.to_crypto !== "btc";
-          if (
-            isSwap &&
-            invoice.status === "processing" &&
-            invoice.tx?.out &&
-            invoice.swap?.deposit_address
-          ) {
-            await updateSwapStatus(
-              invoice.invoice_id,
-              invoice.tx.out,
-              invoice.swap.deposit_address,
-            );
-          }
-          continue;
-        }
-
-        const result = await checkInvoicePayment(
-          invoice.invoice_id,
-          invoice.user_id,
-        );
-
-        if (!result) continue;
-
-        if (result && result.status !== invoice.status)
-          console.log(
-            "Invoice status changed:",
-            result.invoiceId,
-            result.status,
-          );
-      }
+      await runWatcherPass(ports, () => stopped);
     } catch (error) {
       console.error("Invoice watcher failed:", error);
     } finally {
