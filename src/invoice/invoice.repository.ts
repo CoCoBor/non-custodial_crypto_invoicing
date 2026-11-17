@@ -1,7 +1,15 @@
 import { randomUUID } from "crypto";
-import { SealedSecret } from "../security/secret-envelope.js";
+import type { NewDeposit } from "../chains/adapter.js";
 import { Invoice } from "../database/invoices.model.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
+
+// How the backend controls the deposit: its sealed key, or (XMR) the
+// platform wallet's subaddress index.
+function depositKeyFields(deposit: NewDeposit) {
+  return deposit.key.kind === "sealed_key"
+    ? { private: { private_key: deposit.key.sealed } }
+    : { subaddress_index: deposit.key.index };
+}
 
 export async function createInvoice(input: {
   userId: string;
@@ -9,13 +17,13 @@ export async function createInvoice(input: {
   askedAmount: bigint;
   feePaidByPayer: boolean;
   fiatUnits: bigint;
-  address: string;
-  encryptedPrivateKey: SealedSecret;
+  deposit: NewDeposit;
   crypto: string;
   payoutAddress: string;
   toCrypto: keyof typeof cryptos;
   lifetime: number;
   underpaid: number;
+  feeRate: string;
 }) {
   const invoiceId = randomUUID();
   const now = Date.now();
@@ -30,7 +38,8 @@ export async function createInvoice(input: {
     asked_amount: input.askedAmount.toString(),
     amount_fiat: input.fiatUnits.toString(),
     paid_amount: "0",
-    address: input.address,
+    address: input.deposit.address,
+    ...depositKeyFields(input.deposit),
     to_crypto: input.toCrypto,
     to_address: input.payoutAddress,
     lifetime: input.lifetime,
@@ -38,8 +47,8 @@ export async function createInvoice(input: {
     mode: "fixed",
     link: `/pay/${invoiceId}`,
     fee_paid_by_payer: input.feePaidByPayer,
+    fee_rate: input.feeRate,
     timestamps: { created: now, waiting: now },
-    private: { private_key: input.encryptedPrivateKey },
   });
 
   const {
@@ -80,6 +89,7 @@ export async function createMerchantListInvoice(input: {
   lifetime: number;
   underpaid: number;
   feePaidByPayer: boolean;
+  feeRate: string;
 }) {
   const invoiceId = randomUUID();
   const now = Date.now();
@@ -89,6 +99,7 @@ export async function createMerchantListInvoice(input: {
     user_id: input.userId,
     status: "waiting",
     mode: "merchant_list",
+    fee_rate: input.feeRate,
     offered_coins: input.offeredCoins,
     currency: "usd",
     amount: "0",
@@ -122,8 +133,7 @@ export async function recordChosenCoin(input: {
   crypto: string;
   amount: bigint;
   askedAmount: bigint;
-  address: string;
-  encryptedPrivateKey: SealedSecret;
+  deposit: NewDeposit;
   payoutAddress: string;
   now: number;
 }): Promise<boolean> {
@@ -135,9 +145,11 @@ export async function recordChosenCoin(input: {
         to_crypto: input.crypto,
         amount: input.amount.toString(),
         asked_amount: input.askedAmount.toString(),
-        address: input.address,
+        address: input.deposit.address,
+        ...(input.deposit.key.kind === "sealed_key"
+          ? { "private.private_key": input.deposit.key.sealed }
+          : { subaddress_index: input.deposit.key.index }),
         to_address: input.payoutAddress,
-        "private.private_key": input.encryptedPrivateKey,
         "timestamps.chosen": input.now,
       },
     },

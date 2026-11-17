@@ -1,6 +1,6 @@
 import type { AssetId } from "../assets/payout-address.js";
-import { estimateBtcPayoutNetworkCost } from "../transactions/btc.js";
-import { TON_PAYOUT_FEE } from "../transactions/ton.js";
+import type { ChainRegistry } from "../chains/adapter.js";
+import { chainAdapters } from "../chains/registry.js";
 
 /**
  * The network cost a payout is expected to take from a deposit, for
@@ -8,14 +8,9 @@ import { TON_PAYOUT_FEE } from "../transactions/ton.js";
  */
 export async function estimatePayoutNetworkCost(
   coin: AssetId,
+  registry: ChainRegistry = chainAdapters,
 ): Promise<bigint | "unsupported" | undefined> {
-  switch (coin) {
-    case "btc":
-      return await estimateBtcPayoutNetworkCost();
-    case "ton":
-      // Every TON payout charges exactly this budget as its network cost.
-      return TON_PAYOUT_FEE;
-    default:
-      return "unsupported";
-  }
+  const chain = registry[coin];
+  if (chain === undefined) return "unsupported";
+  return await chain.estimateNetworkCost();
 }

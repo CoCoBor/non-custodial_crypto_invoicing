@@ -3,11 +3,10 @@ import { z } from "zod";
 import { decimalStrToBigInt } from "../invoice/money.function.js";
 import { env } from "../config/env.js";
 import { ceilDivide } from "../money/format.js";
-import { parseFeeRate, splitPayout } from "../money/payout-split.js";
-import { acceptedPaymentAmount } from "../invoice/payment-rules.js";
+import { splitPayout } from "../money/payout-split.js";
 import { Invoice } from "../database/invoices.model.js";
-import { User } from "../database/users.model.js";
 import { openSecret } from "../security/secret-envelope.js";
+import type { PayoutRequest, PayoutResult, Transfer } from "../chains/adapter.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import {
   findSwapToken,
@@ -135,7 +134,7 @@ function calculateBtcPayout(
   total: bigint,
   txSize: number,
   networkFeeRate: bigint,
-  merchantFeeRate: string,
+  feeRate: bigint,
 ):
   | {
       networkFee: bigint;
@@ -154,8 +153,6 @@ function calculateBtcPayout(
   }
 
   const networkFee = btcNetworkFee(txSize, networkFeeRate);
-  const feeRate = parseFeeRate(merchantFeeRate);
-  if (feeRate === undefined) return undefined;
 
   const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
   if (split === undefined) return undefined;
@@ -239,7 +236,7 @@ function prepareBtcPayout(input: {
   platformAddress: string;
   merchantAddress: string;
   networkFeeRate: bigint;
-  merchantFeeRate: string;
+  merchantFeeRate: bigint;
   utxos: { txid: string; vout: number; amount: bigint }[];
 }):
   | {
@@ -260,7 +257,7 @@ function prepareBtcPayout(input: {
   const inputCount = utxos.length;
   const total = utxos.reduce((sum, u) => sum + u.amount, 0n);
 
-  const payoutFor = (outputAddresses: string[], feeRate: string) => {
+  const payoutFor = (outputAddresses: string[], feeRate: bigint) => {
     const txSize = estimateBtcTxSize(inputCount, outputAddresses);
     if (txSize === undefined) return undefined;
     const payout = calculateBtcPayout(total, txSize, networkFeeRate, feeRate);
@@ -282,7 +279,7 @@ function prepareBtcPayout(input: {
 
   const payout =
     withPlatform.platformFee < platformDust
-      ? payoutFor([merchantAddress], "0")
+      ? payoutFor([merchantAddress], 0n)
       : withPlatform;
   if (payout === undefined) return undefined;
 
@@ -383,10 +380,6 @@ export function canPayOutFromBtcDeposit(toCrypto: string): boolean {
   return payoutAddressCheckers.has(toCrypto);
 }
 
-function isCryptoId(value: string): value is keyof typeof cryptos {
-  return Object.hasOwn(cryptos, value);
-}
-
 async function getBtcConfirmations(txId: string): Promise<number | undefined> {
   const res = await get(`/tx/${txId}`);
   const parsed = z
@@ -411,13 +404,11 @@ function findPermanentPayoutProblem(input: {
   toCrypto: string;
   depositAddress: string;
   merchantAddress: string;
-  merchantFeeRate: string;
 }): string | undefined {
   const {
     toCrypto,
     depositAddress,
     merchantAddress,
-    merchantFeeRate,
   } = input;
 
   if (!Object.hasOwn(cryptos, toCrypto)) return "Swap payout are not supported";
@@ -439,233 +430,185 @@ function findPermanentPayoutProblem(input: {
   if (merchantAddress === depositAddress)
     return "Payout address must differ from the deposit address";
 
-  if (parseFeeRate(merchantFeeRate) === undefined)
-    return "Invalid merchant fee rate";
-
   return undefined;
 }
 
-export async function transferBtcToMerchant(
-  invoiceId: string,
-  platformAddress: string,
-) {
-  try {
-    let invoice = await Invoice.findOne({
-      invoice_id: invoiceId,
-      crypto: "btc",
-      status: { $in: ["confirmed", "processing"] },
-    })
-      .select("+private.private_key +tx.raw")
-      .exec();
-    if (!invoice) return undefined;
+// What a confirmed payout transaction sent, read back from its own bytes:
+// the first output is the destination, the second (if any) the platform fee
+// (see prepareBtcPayout).
+function sentByBtcTransaction(hex: string, destinationKind: Transfer["kind"]): Transfer[] {
+  const tx = new bitcore.Transaction(hex);
+  return tx.outputs.map((output, index) => ({
+    kind: index === 0 ? destinationKind : "platform_fee",
+    to: String(output.script.toAddress()),
+    amount: BigInt(output.satoshis),
+    txid: tx.id,
+  }));
+}
 
-    async function fail(reason: string) {
-      await Invoice.updateOne(
-        { invoice_id: invoiceId, status: "confirmed" },
-        { $set: { status: "failed", "timestamps.failed": Date.now() } },
-      ).exec();
+/**
+ * The BTC side of ChainAdapter.payout (src/chains/adapter.ts): pays
+ * request.destination from the deposit, or follows the transaction saved in
+ * request.checkpoint (its raw hex). Never touches the database.
+ */
+export async function payOutBtc(
+  request: PayoutRequest,
+  deps: { platformAddress: string },
+): Promise<PayoutResult> {
+  const { platformAddress } = deps;
+  if (!validateAdd(platformAddress)) {
+    throw new Error("Platform BTC address is not a valid mainnet Bitcoin address");
+  }
+  const depositAddress = request.depositAddress;
+  const toCrypto = request.receiveAsset;
+  const needSwap = toCrypto !== "btc";
+  const destinationKind: Transfer["kind"] = needSwap ? "swap_deposit" : request.destinationKind;
+  const pending = (reason: string): PayoutResult => ({ status: "pending", reason });
+  const fail = (reason: string): PayoutResult => ({
+    status: "failed",
+    message: `BTC payout stopped: ${reason}. Nothing was sent: all funds are still at deposit address ${depositAddress}. Fix the cause, then set the invoice back to "confirmed" to retry, or move the funds by hand with the deposit key.`,
+    transfers: [],
+  });
 
-      console.error("BTC payout failed:", invoiceId, reason);
+  let hex: string;
+  let swapDeadline = request.checkpoint?.plan.legacySwap?.deadline;
+
+  if (request.checkpoint === undefined) {
+    const problem = findPermanentPayoutProblem({
+      toCrypto,
+      depositAddress,
+      merchantAddress: request.destination,
+    });
+
+    if (problem !== undefined) return fail(problem);
+
+    const networkFeeRate = await getBtcNetworkFee();
+    if (networkFeeRate === undefined) return pending("BTC fee rate unavailable");
+    const utxos = await getBtcUtxos(depositAddress);
+    if (utxos === undefined) return pending("BTC UTXOs unavailable");
+
+    const utxosAmount = utxos.reduce((sum, u) => sum + u.amount, 0n);
+    // The same minimum the watcher confirmed at, tolerance included.
+    if (utxosAmount < request.minimumAmount) {
+      return pending("spendable UTXOs are below the invoice amount");
     }
 
-    if (invoice.status === "confirmed") {
-      const user = await User.findOne({ user_id: invoice.user_id })
-        .select("merchant_fee")
-        .exec();
-      if (!user) {
-        return await fail("Merchant not found");
-      }
-
-      const problem = findPermanentPayoutProblem({
-        toCrypto: invoice.to_crypto,
-        depositAddress: invoice.address,
-        merchantAddress: invoice.to_address,
-        merchantFeeRate: user.merchant_fee,
+    let payout: NonNullable<ReturnType<typeof prepareBtcPayout>> | undefined;
+    let quote: SwapQuoteResponse | undefined;
+    if (needSwap) {
+      const prepared = await prepareBtcSwap({
+        platformAddress,
+        networkFeeRate,
+        merchantFeeRate: request.feeRate,
+        utxos,
+        toCrypto,
+        recipient: request.destination,
+        refundAddress: depositAddress,
       });
 
-      if (problem !== undefined) return await fail(problem);
+      if (!prepared) return pending("couldn't prepare the swap");
+      payout = prepared.payout;
+      quote = prepared.quote;
+    } else {
+      payout = prepareBtcPayout({
+        platformAddress,
+        merchantAddress: request.destination,
+        networkFeeRate,
+        merchantFeeRate: request.feeRate,
+        utxos,
+      });
+    }
 
-      const merchantAddress = invoice.to_address;
-      const networkFeeRate = await getBtcNetworkFee();
-      if (networkFeeRate === undefined) {
-        console.warn("BTC fee rate unavailable; will retry:", invoiceId);
-        return;
-      }
-      const merchantFeeRate = user.merchant_fee;
-      const utxos = await getBtcUtxos(invoice.address);
-      if (utxos === undefined) {
-        console.warn("BTC UTXOs unavailable; will retry:", invoiceId);
-        return;
-      }
+    if (!payout) return { status: "too_small", reason: "BTC payout is too small after fees" };
 
-      const utxosAmount = utxos.reduce((sum, u) => sum + u.amount, 0n);
-      // The same minimum the watcher confirmed at, tolerance included.
-      if (utxosAmount < acceptedPaymentAmount(invoice)) {
-        console.warn(
-          "Spendable UTXOs are below the invoice amount:",
-          invoiceId,
-        );
-        return undefined;
-      }
+    if (request.depositKey.kind !== "sealed_key") return fail("Deposit private key is missing");
 
-      const toCrypto = invoice.to_crypto;
-      if (!isCryptoId(toCrypto)) return await fail("Unknown payout asset");
+    let signed;
+    try {
+      signed = signBtcTransaction({
+        depositAddress,
+        privateKey: openSecret("bitcoin-deposit-key", request.depositKey.sealed),
+        utxos,
+        outputs: payout.outputs,
+        networkFee: payout.networkFee,
+        networkFeeRate: networkFeeRate,
+        estimateTxSize: payout.txSize,
+      });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : "Signing failed");
+    }
 
-      const needSwap = invoice.to_crypto !== "btc";
-      let payout: NonNullable<ReturnType<typeof prepareBtcPayout>> | undefined;
-      let quote: SwapQuoteResponse | undefined;
-      if (needSwap) {
-        const prepared = await prepareBtcSwap({
-          platformAddress,
-          networkFeeRate,
-          merchantFeeRate,
-          utxos,
-          toCrypto,
-          recipient: invoice.to_address,
-          refundAddress: invoice.address,
-        });
-
-        if (!prepared) {
-          console.warn("Couldn't prepare the swap; will retry:", invoiceId);
-          return;
-        }
-        payout = prepared.payout;
-        quote = prepared.quote;
-      } else {
-        payout = prepareBtcPayout({
-          platformAddress,
-          merchantAddress,
-          networkFeeRate,
-          merchantFeeRate,
-          utxos,
-        });
-      }
-
-      if (!payout) {
-        console.warn("BTC payout is too small after fees:", invoiceId);
-        return undefined;
-      }
-
-      if (!invoice.private?.private_key)
-        return await fail("Deposit private key is missing");
-
-      let signed;
-      try {
-        signed = signBtcTransaction({
-          depositAddress: invoice.address,
-          privateKey: openSecret(
-            "bitcoin-deposit-key",
-            invoice.private.private_key,
-          ),
-          utxos,
-          outputs: payout.outputs,
-          networkFee: payout.networkFee,
-          networkFeeRate: networkFeeRate,
-          estimateTxSize: payout.txSize,
-        });
-      } catch (error) {
-        return await fail(
-          error instanceof Error ? error.message : "Signing failed",
-        );
-      }
-
-      invoice = await Invoice.findOneAndUpdate(
-        { invoice_id: invoiceId, status: "confirmed" },
-        {
-          $set: {
-            status: "processing",
-            "timestamps.processing": Date.now(),
-            "tx.out": signed.txid,
-            "tx.raw": signed.hex,
-            received_amount: needSwap ? "0" : payout.merchantAmount.toString(),
-            network_fee: payout.networkFee.toString(),
-            platform_fee: payout.platformFee.toString(),
-            ...(quote !== undefined && {
-              "swap.deposit_address": quote.quote.depositAddress,
-              "swap.deadline": quote.quote.deadline,
-              "swap.status": "PENDING_DEPOSIT",
-              "swap.quote_response": quote,
-            }),
+    const txid = signed.txid;
+    const saved = await request.saveCheckpoint({
+      state: signed.hex,
+      plan: {
+        transfers: payout.outputs.map((output, index) => ({
+          kind: index === 0 ? destinationKind : "platform_fee",
+          to: output.address,
+          amount: output.amount,
+          txid,
+        })),
+        platformFee: payout.platformFee,
+        networkCost: payout.networkFee,
+        ...(quote !== undefined && {
+          legacySwap: {
+            depositAddress: quote.quote.depositAddress ?? "",
+            deadline: quote.quote.deadline ?? "",
+            quote,
           },
-        },
-        { returnDocument: "after" },
-      )
-        .select("+tx.raw")
-        .exec();
+        }),
+      },
+    });
+    if (!saved) return pending("another run saved this payout first");
 
-      if (invoice === null) {
-        console.warn("Another run claimed it first", invoiceId);
-        return;
-      }
-    }
-
-    const txId = invoice.tx?.out;
-    const hex = invoice.tx?.raw;
-
-    if (!txId || !hex) {
-      console.error(
-        "Processing invoice had no saved BTC transaction: ",
-        invoiceId,
-      );
-      return;
-    }
-
-    const confirmations = await getBtcConfirmations(txId);
-
-    const needSwap = invoice.to_crypto !== "btc";
-
-    if (confirmations === undefined) {
-      if (needSwap) {
-        const expiresAt = Date.parse(invoice.swap?.deadline ?? ""); // NaN if it isn't a valid date
-
-        if (
-          !Number.isFinite(expiresAt) ||
-          expiresAt - Date.now() < MIN_SWAP_TIME_LEFT_MS
-        ) {
-          console.warn(
-            "Swap tx not sent: the NEAR deadline is missing, invalid, or too close:",
-            invoiceId,
-            invoice.swap?.deadline,
-          );
-
-          await Invoice.updateOne(
-            { invoice_id: invoiceId, status: "processing", "tx.out": txId },
-            {
-              $set: {
-                status: "failed",
-                review_reason: `Swap tx was never sent: the NEAR deadline (${invoice.swap?.deadline || "missing"}) is missing, invalid, or too close. The BTC is still at the invoice address; get a new quote or pay the merchant manually.`,
-                "timestamps.failed": Date.now(),
-              },
-            },
-          );
-          return;
-        }
-      }
-
-      const sent = await broadcast(hex);
-      if (sent) console.log("BTC payout broadcast:", invoiceId, sent);
-      // post() already logs the reason when it fails.
-      return; // success or not, check its confirmations on the next round
-    }
-
-    // when swap completed will never set in here
-    if (invoice.to_crypto !== "btc") return;
-
-    if (confirmations === 0) return undefined;
-    const result = await Invoice.updateOne(
-      { invoice_id: invoiceId, status: "processing", "tx.out": txId },
-      { $set: { status: "completed", "timestamps.completed": Date.now() } },
-    ).exec();
-
-    if (result.modifiedCount > 0)
-      return console.log("BTc payout completed:", invoiceId, txId);
-  } catch (error) {
-    console.error(
-      "BTC payout could not finish; invoice state was preserved: ",
-      invoiceId,
-      error instanceof Error ? error.message : "unknown error",
-    );
+    hex = signed.hex;
+    swapDeadline = quote?.quote.deadline;
+  } else {
+    hex = request.checkpoint.state;
   }
+
+  let txId: string;
+  try {
+    txId = new bitcore.Transaction(hex).id;
+  } catch {
+    return {
+      status: "pending",
+      reason: "unreadable saved BTC transaction",
+      review: `Processing invoice had no readable saved BTC transaction. Funds may still be at deposit address ${depositAddress}; check an explorer before sending anything.`,
+    };
+  }
+
+  const confirmations = await getBtcConfirmations(txId);
+
+  if (confirmations === undefined) {
+    if (needSwap) {
+      const expiresAt = Date.parse(swapDeadline ?? ""); // NaN if it isn't a valid date
+
+      if (
+        !Number.isFinite(expiresAt) ||
+        expiresAt - Date.now() < MIN_SWAP_TIME_LEFT_MS
+      ) {
+        console.warn(
+          "Swap tx not sent: the NEAR deadline is missing, invalid, or too close:",
+          depositAddress,
+          swapDeadline,
+        );
+        return {
+          status: "failed",
+          message: `Swap tx was never sent: the NEAR deadline (${swapDeadline || "missing"}) is missing, invalid, or too close. The BTC is still at the invoice address ${depositAddress}; get a new quote or pay the merchant manually.`,
+          transfers: [],
+        };
+      }
+    }
+
+    const sent = await broadcast(hex);
+    if (sent) console.log("BTC payout broadcast:", depositAddress, sent);
+    // post() already logs the reason when it fails.
+    return pending("broadcast; check its confirmations on the next round");
+  }
+
+  if (confirmations === 0) return pending("waiting for the first confirmation");
+  return { status: "paid", transfers: sentByBtcTransaction(hex, destinationKind) };
 }
 
 async function findSwapAssets(
@@ -699,7 +642,7 @@ async function findSwapAssets(
 async function prepareBtcSwap(input: {
   platformAddress: string;
   networkFeeRate: bigint;
-  merchantFeeRate: string;
+  merchantFeeRate: bigint;
   utxos: { txid: string; vout: number; amount: bigint }[];
   toCrypto: keyof typeof cryptos;
   recipient: string;

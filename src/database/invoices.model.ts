@@ -22,6 +22,34 @@ const INVOICE_STATUSES = [
   "cancelled",
 ] as const;
 
+// One incoming payment, as the chain data showed it (see "Chain adapter
+// contract" in docs/domain.md). Amounts are integer strings in smallest units.
+const paymentSchema = new Schema(
+  {
+    txid: { type: String, required: true },
+    amount: { type: String, required: true },
+    first_seen_at: { type: Number, required: true }, // unix ms
+    confirmations: { type: Number, required: true },
+    on_time: { type: Boolean, required: true },
+  },
+  { _id: false },
+);
+
+const transferSchema = new Schema(
+  {
+    kind: {
+      type: String,
+      enum: ["gas_top_up", "merchant_payout", "platform_fee", "refund_route", "swap_deposit"],
+      required: true,
+    },
+    to: { type: String, required: true },
+    amount: { type: String, required: true },
+    txid: { type: String, required: true },
+    status: { type: String, enum: ["pending", "confirmed", "failed"], required: true },
+  },
+  { _id: false },
+);
+
 const invoiceSchema = new Schema(
   {
     invoice_id: { type: String, required: true },
@@ -45,6 +73,7 @@ const invoiceSchema = new Schema(
     received_amount_fiat: { type: String, default: null }, // amount sent to merchant after all fees in the invoice currency
     network_fee: { type: String, default: "0" }, // fee to transfer the received asset to the merchant
     platform_fee: { type: String, default: "0" }, // fee charged by the platform, based on user's merchant fee
+    fee_rate: { type: String, default: "" }, // the merchant's fee rate when the invoice was made; "" on older invoices, which use the merchant's current rate
     swap_fee: { type: Number, default: 0 }, // if to_crypto is another crypto and NEAR Intents is used, fee = amount transferred - network fees - near estimated receive quote
     review_reason: { type: String, default: "" },
     notified_status: { type: String, default: "" }, // last status announced by webhook; see src/webhooks/webhook-pass.ts
@@ -57,10 +86,12 @@ const invoiceSchema = new Schema(
     bot_link: { type: String, default: "" }, // invoice payment link in telegram bot
     return_url: { type: String, default: "" }, // url the user returns to after invoice is completed
     callback_url: { type: String, default: "" }, // url where transaction notifications are sent to
+    payments: { type: [paymentSchema], default: [] },
+    transfers: { type: [transferSchema], default: [] },
     tx: {
       in: { type: String, default: "" },
       out: { type: String, default: "" }, // txid
-      raw: { type: String, default: "", select: false }, // txhex
+      raw: { type: String, default: "", select: false }, // txhex; for chains behind an adapter, the adapter's saved payout state (PayoutCheckpoint.state)
       platform_out: { type: String, default: "" }, 
       platform_raw: { type: String, default: "", select: false }, 
     },
@@ -90,13 +121,14 @@ const invoiceSchema = new Schema(
       chosen: { type: Number, default: null },
       cancelled: { type: Number, default: null },
     }, // time in unix ms
+    subaddress_index: { type: Number, default: null }, // XMR: the deposit is this subaddress of the platform wallet, so there is no key
     private: {
       // A deposit address always comes with its key. A merchant_list invoice
       // has neither until the payer picks a coin.
       private_key: {
         type: encryptedKeySchema,
-        required(this: { address?: string }) {
-          return Boolean(this.address);
+        required(this: { address?: string; subaddress_index?: number | null }) {
+          return Boolean(this.address) && this.subaddress_index == null;
         },
         select: false,
       },

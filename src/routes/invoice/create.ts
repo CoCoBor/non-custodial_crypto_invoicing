@@ -5,11 +5,9 @@ import { ASSET_IDS, checkPayoutAddress } from "../../assets/payout-address.js";
 import * as priceFunc from "../../invoice/price.function.js";
 import cryptos from "../../storage/cryptos.json" with { type: "json" };
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
-import { generateBtcAddress } from "../../crypto/btc.js";
-import { canPayOutFromBtcDeposit } from "../../transactions/btc.js";
+import { adapterFor, depositAssets } from "../../chains/registry.js";
 import { toleranceBasisPoints } from "../../invoice/payment-rules.js";
 import { decimalStrToBigInt } from "../../invoice/money.function.js";
-import { WATCHED_COINS } from "../../invoice/invoice.function.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import type { AppDeps } from "../../app.js";
 
@@ -78,7 +76,8 @@ async function createFixedCoinInvoice(
 
   // Fixed-coin invoices can only take BTC deposits today; never quietly make
   // a BTC invoice for a payer who was told to pay something else.
-  if (crypto !== "btc") {
+  const chain = adapterFor(crypto);
+  if (chain === undefined) {
     return res.status(409).json({
       error: {
         code: "DEPOSIT_COIN_NOT_SUPPORTED",
@@ -110,7 +109,7 @@ async function createFixedCoinInvoice(
 
   // The deposit below is BTC: an invoice whose payout coin a BTC deposit
   // can't be paid out as would leave the payer's BTC stuck at the deposit.
-  if (!canPayOutFromBtcDeposit(to_crypto)) {
+  if (!chain.canPayOutAs(to_crypto)) {
     return res.status(409).json({
       error: {
         code: "PAYOUT_NOT_SUPPORTED",
@@ -119,7 +118,8 @@ async function createFixedCoinInvoice(
     });
   }
 
-  const price = await deps.getPrice("btc", "usd");
+  const depositAsset = chain.asset;
+  const price = await deps.getPrice(depositAsset, "usd");
 
   if (price === undefined)
     return res.status(503).json({
@@ -133,7 +133,7 @@ async function createFixedCoinInvoice(
     fiatAmount: amount,
     fiatDecimals: 2,
     coinPrice: price,
-    coinDecimals: cryptos.btc.decimal,
+    coinDecimals: cryptos[depositAsset].decimal,
   }); //return paymentUnits & fiatUnits
 
   if (payment === undefined)
@@ -145,15 +145,15 @@ async function createFixedCoinInvoice(
     });
 
   const askedAmount = await askedAmountFor({
-    coin: "btc",
+    coin: depositAsset,
     invoiceAmount: payment.paymentUnits,
     feePaidByPayer: fee_paid_by_payer,
     merchantFee: merchant.merchant_fee,
     estimateNetworkCost: deps.estimateNetworkCost,
   });
-  if (typeof askedAmount !== "bigint") return refuseWithoutEstimate(res, "btc", askedAmount);
+  if (typeof askedAmount !== "bigint") return refuseWithoutEstimate(res, depositAsset, askedAmount);
 
-  const deposit = generateBtcAddress();
+  const deposit = await chain.newDeposit();
 
   const invoice = await invoiceRepo.createInvoice({
     userId: merchant.user_id,
@@ -161,13 +161,13 @@ async function createFixedCoinInvoice(
     askedAmount,
     feePaidByPayer: fee_paid_by_payer,
     fiatUnits: payment.fiatUnits,
-    address: deposit.address,
-    encryptedPrivateKey: deposit.encryptedPrivateKey,
-    crypto: "btc",
+    deposit,
+    crypto: depositAsset,
     payoutAddress,
     toCrypto: to_crypto,
     lifetime,
     underpaid,
+    feeRate: merchant.merchant_fee,
   });
 
   return res.status(201).json({
@@ -189,8 +189,8 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
     });
   }
 
-  const requested: readonly string[] = coins ?? WATCHED_COINS;
-  const offeredCoins = WATCHED_COINS.filter(
+  const requested: readonly string[] = coins ?? depositAssets();
+  const offeredCoins = depositAssets().filter(
     (coin) =>
       requested.includes(coin) &&
       checkPayoutAddress(coin, merchant.payout_addresses?.[coin]) === "valid",
@@ -211,6 +211,7 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
     lifetime,
     underpaid,
     feePaidByPayer: fee_paid_by_payer,
+    feeRate: merchant.merchant_fee,
   });
 
   return res.status(201).json({ data: invoice });

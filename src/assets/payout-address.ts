@@ -10,6 +10,10 @@ export type AssetId = keyof typeof cryptos;
 
 export const ASSET_IDS = Object.keys(cryptos) as [AssetId, ...AssetId[]];
 
+export function isAssetId(value: string): value is AssetId {
+  return Object.hasOwn(cryptos, value);
+}
+
 function isValidBtcAddress(address: string): boolean {
   return bitcore.Address.isValid(address, bitcore.Networks.livenet);
 }

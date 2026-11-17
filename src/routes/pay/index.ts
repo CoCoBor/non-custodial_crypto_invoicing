@@ -5,8 +5,7 @@ import type { AppDeps } from "../../app.js";
 import { checkPayoutAddress } from "../../assets/payout-address.js";
 import { Invoice } from "../../database/invoices.model.js";
 import { User } from "../../database/users.model.js";
-import { generateDepositAddress } from "../../invoice/deposit.js";
-import { isWatchedCrypto } from "../../invoice/invoice.function.js";
+import { adapterFor } from "../../chains/registry.js";
 import {
   cancelUnpaidInvoice,
   recordChosenCoin,
@@ -37,6 +36,7 @@ type PayerInvoice = {
   amount: string;
   asked_amount?: string | null;
   fee_paid_by_payer?: boolean | null;
+  fee_rate?: string | null;
   paid_amount?: string | null;
   lifetime: number;
   timestamps?: { waiting?: number | null; created?: number | null } | null;
@@ -109,7 +109,7 @@ export function createPayRouter(deps: AppDeps) {
         error: { code: "INVALID_REQUEST", message: "request body is invalid" },
       });
     }
-    const coin = parsed.data.crypto;
+    const chain = adapterFor(parsed.data.crypto);
     const now = Date.now();
 
     if (invoice.mode !== "merchant_list" || invoice.crypto) {
@@ -118,9 +118,10 @@ export function createPayRouter(deps: AppDeps) {
     if (invoice.status !== "waiting" || now >= expiresAt(invoice)) {
       return conflict(res, "INVOICE_NOT_OPEN", "this invoice can no longer be paid");
     }
-    if (!isWatchedCrypto(coin) || !(invoice.offered_coins ?? []).includes(coin)) {
+    if (chain === undefined || !(invoice.offered_coins ?? []).includes(chain.asset)) {
       return conflict(res, "COIN_NOT_OFFERED", "this coin is not offered for this invoice");
     }
+    const coin = chain.asset;
 
     // The merchant's payout address as it is now: they may have changed it.
     const merchant = await User.findOne({ user_id: invoice.user_id })
@@ -154,19 +155,18 @@ export function createPayRouter(deps: AppDeps) {
       coin,
       invoiceAmount: payment.paymentUnits,
       feePaidByPayer: invoice.fee_paid_by_payer === true,
-      merchantFee: merchant.merchant_fee,
+      merchantFee: invoice.fee_rate || merchant.merchant_fee,
       estimateNetworkCost: deps.estimateNetworkCost,
     });
     if (typeof asked !== "bigint") return refuseWithoutEstimate(res, coin, asked);
 
-    const deposit = await generateDepositAddress(coin);
+    const deposit = await chain.newDeposit();
     const recorded = await recordChosenCoin({
       invoiceId: invoice.invoice_id,
       crypto: coin,
       amount: payment.paymentUnits,
       askedAmount: asked,
-      address: deposit.address,
-      encryptedPrivateKey: deposit.encryptedPrivateKey,
+      deposit,
       payoutAddress,
       now,
     });

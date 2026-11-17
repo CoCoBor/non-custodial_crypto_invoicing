@@ -74,6 +74,22 @@ describe("getBtcPayments reading the recorded listing", () => {
     }
   });
 
+  it("carries Blockbook's blockTime through as the time the payment was seen", async () => {
+    // Both recorded transactions are in the mempool (blockHeight -1), where
+    // Blockbook's blockTime is when it first saw them.
+    const { fetcher } = fakeFetcher({ 1: { body: page() } });
+    const payments = await getBtcPayments(ADDRESS, { fetcher });
+
+    assert.equal(payments?.find((p) => p.txid === TX_A.txid)?.seenAt, TX_A.blockTime * 1000);
+    assert.equal(payments?.find((p) => p.txid === TX_B.txid)?.seenAt, TX_B.blockTime * 1000);
+  });
+
+  it("leaves the time out when Blockbook gives none", async () => {
+    const { fetcher } = fakeFetcher({ 1: { body: page({ transactions: [tx("t1", [{ value: "546", to: ADDRESS }])] }) } });
+
+    assert.equal((await getBtcPayments(ADDRESS, { fetcher }))?.[0]?.seenAt, undefined);
+  });
+
   it("carries the confirmation count through", async () => {
     const { fetcher } = fakeFetcher({ 1: { body: page() } });
     const payments = await getBtcPayments(ADDRESS, { fetcher });

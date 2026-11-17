@@ -203,6 +203,17 @@ describe("a merchant's-list invoice in payer-pays mode", () => {
     assert.deepEqual(estimateCalls, []);
   });
 
+  it("keeps the fee rate copied at creation when the merchant's rate changes before the payer picks", async () => {
+    const { invoiceId, userId } = await listInvoice();
+    assert.equal((await invoiceInDb(invoiceId))?.fee_rate, "0.05");
+    await db.collection("users").updateOne({ user_id: userId }, { $set: { merchant_fee: "0.01" } });
+
+    const choice = await postJson(`${baseUrl}/pay/${invoiceId}/choose`, { crypto: "ton" });
+
+    // Still 5%: (5 + 0.005) / 0.95 → 5,268,421,053 nanoton, not the 1% amount.
+    assert.equal(choice.body.data.payment.amount, "5268421053");
+  });
+
   it("refuses a coin with no network-cost estimate with 409, and records no choice", async () => {
     const { invoiceId } = await listInvoice();
     estimates = { btc: 2_440n };

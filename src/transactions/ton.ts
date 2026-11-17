@@ -11,18 +11,21 @@ import {
 import { mnemonicToPrivateKey, mnemonicValidate } from "@ton/crypto";
 import { WalletContractV5R1 } from "@ton/ton";
 import { z } from "zod";
+import type {
+  ChainPayment,
+  PayoutCheckpoint,
+  PayoutRequest,
+  PayoutResult,
+  Transfer,
+} from "../chains/adapter.js";
 import { env } from "../config/env.js";
-import { Invoice } from "../database/invoices.model.js";
-import { User } from "../database/users.model.js";
 import { ceilDivide } from "../money/format.js";
-import { parseFeeRate, splitPayout } from "../money/payout-split.js";
-import { acceptedPaymentAmount } from "../invoice/payment-rules.js";
+import { splitPayout } from "../money/payout-split.js";
 import { openSecret, type SealedSecret } from "../security/secret-envelope.js";
 import {
   isCryptoId,
   LATE_PAYMENT_NOTE_PREFIX,
   prepareSwap,
-  swapFieldsToSave,
   type PreparedSwap,
 } from "../swap/near.js";
 
@@ -99,8 +102,6 @@ const RECENT_TX_LIMIT = 20;
 const FEE_RATE_DECIMALS = 8;
 const FEE_RATE_SCALE = 10n ** BigInt(FEE_RATE_DECIMALS);
 
-const STUCK_TX_REVIEW_MS = 24 * 60 * 60 * 1000;
-
 // Amounts (nanoton) come as integer strings.
 const u64String = z.string().regex(/^(?:0|[1-9][0-9]*)$/);
 const accountStateSchema = z.enum(["active", "uninitialized", "frozen"]);
@@ -133,6 +134,12 @@ function sameTonAccount(a: string, b: string): boolean {
 }
 
 // ---------- API (toncenter v2 format, served by NOWNodes) ----------
+
+/** One toncenter v2 call: its `result`, or undefined when the call failed. */
+export type TonApi = (
+  method: string,
+  request: { query?: Record<string, string>; body?: unknown },
+) => Promise<unknown>;
 
 // undefined = failed (retry later). Never logs the query or body: for
 // sendBoc the body is the signed message.
@@ -191,10 +198,12 @@ async function callTonApi(
   }
 }
 
+export const nowNodesTonApi: TonApi = callTonApi;
+
 // One consistent snapshot of an account: balance, code, data, and the chain
 // time of that snapshot. A never-used address answers "uninitialized" with
 // balance 0. TON has no reorgs: once the API shows a state, it is final.
-async function getTonAccount(address: Address) {
+async function getTonAccount(api: TonApi, address: Address) {
   const parsed = z
     .object({
       balance: u64String,
@@ -204,7 +213,7 @@ async function getTonAccount(address: Address) {
       sync_utime: z.number().int().positive(),
     })
     .safeParse(
-      await callTonApi("getAddressInformation", {
+      await api("getAddressInformation", {
         query: { address: address.toString() },
       }),
     );
@@ -231,11 +240,11 @@ async function getTonAccount(address: Address) {
 
 // For a receiver: is it a normal wallet, and is it deployed?
 // wallet = the API recognises the code as a standard wallet (v1–v5).
-async function getTonDestination(address: Address) {
+async function getTonDestination(api: TonApi, address: Address) {
   const parsed = z
     .object({ wallet: z.boolean(), account_state: accountStateSchema })
     .safeParse(
-      await callTonApi("getWalletInformation", {
+      await api("getWalletInformation", {
         query: { address: address.toString() },
       }),
     );
@@ -244,20 +253,20 @@ async function getTonDestination(address: Address) {
 }
 
 // The newest transactions of an account, each as a base64 BOC.
-async function getRecentTonTransactions(address: Address) {
+async function getRecentTonTransactions(api: TonApi, address: Address, limit = RECENT_TX_LIMIT) {
   const parsed = z
     .array(z.object({ data: z.string().min(1) }))
     .safeParse(
-      await callTonApi("getTransactions", {
-        query: { address: address.toString(), limit: String(RECENT_TX_LIMIT) },
+      await api("getTransactions", {
+        query: { address: address.toString(), limit: String(limit) },
       }),
     );
   return parsed.success ? parsed.data.map((tx) => tx.data) : undefined;
 }
 
 // Sending the same signed message again is safe: its seqno can be used once.
-async function sendTonMessage(boc: string): Promise<boolean> {
-  return (await callTonApi("sendBoc", { body: { boc } })) !== undefined;
+async function sendTonMessage(api: TonApi, boc: string): Promise<boolean> {
+  return (await api("sendBoc", { body: { boc } })) !== undefined;
 }
 
 // ---------- Wallet ----------
@@ -325,22 +334,72 @@ function readDepositWallet(
 
 // ---------- Payment lookup ----------
 
-// For the invoice watcher. Balance-based, like Solana: a deposit address only
-// receives until the payout empties it. TON has no reorgs, so both numbers
-// are the same.
-// A payment sent "bounceable" to the new (code-less) deposit address goes
-// back to the payer and never shows here; that is why the address is shown
-// in its UQ… form.
-export async function getTonPaymentTotals(
+// A deposit address has a handful of transactions. A full page is treated as
+// a listing that may be missing some.
+const PAYMENT_LIST_LIMIT = 100;
+
+// The value one transaction credited to the account and kept. A payment sent
+// "bounceable" to the new (code-less) deposit address goes back to the payer
+// (bounce phase "ok"), so it is not a payment; that is why the address is
+// shown in its UQ… form. The amount is what was credited, so a storage fee
+// taken from the balance between two payments does not count against the
+// payer.
+function readIncomingPayment(data: string): ChainPayment | null | undefined {
+  let root: Cell;
+  let tx: ReturnType<typeof loadTransaction>;
+  try {
+    root = Cell.fromBase64(data);
+    tx = loadTransaction(root.beginParse());
+  } catch {
+    return undefined;
+  }
+  if (tx.inMessage?.info.type !== "internal") return null;
+  const d = tx.description;
+  if (d.type !== "generic") return null;
+  const credited = d.creditPhase?.credit.coins ?? 0n;
+  if (credited <= 0n || d.bouncePhase?.type === "ok") return null;
+  return {
+    txid: root.hash().toString("hex"),
+    amount: credited,
+    // TON has no reorgs: a transaction the API shows is final.
+    confirmations: 1,
+    seenAt: tx.now * 1000,
+  };
+}
+
+// For the invoice watcher: every payment a deposit address received.
+// undefined = failed or possibly incomplete; retry later.
+export async function getTonPayments(
+  api: TonApi,
   depositAddress: string,
-): Promise<{ receivedAmount: bigint; confirmedAmount: bigint } | undefined> {
+): Promise<ChainPayment[] | undefined> {
   const address = parseTonAddress(depositAddress);
   if (address === undefined) return undefined;
 
-  const account = await getTonAccount(address);
-  if (account === undefined) return undefined;
+  const transactions = await getRecentTonTransactions(api, address, PAYMENT_LIST_LIMIT);
+  if (transactions === undefined) return undefined;
+  if (transactions.length >= PAYMENT_LIST_LIMIT) {
+    console.warn("TON payment listing may be incomplete:", depositAddress);
+    return undefined;
+  }
 
-  return { receivedAmount: account.balance, confirmedAmount: account.balance };
+  const payments: ChainPayment[] = [];
+  for (const data of transactions) {
+    const payment = readIncomingPayment(data);
+    if (payment === undefined) return undefined;
+    if (payment !== null) payments.push(payment);
+  }
+
+  // Only fees and payouts lower a balance, so a balance above everything
+  // listed as received means the listing is missing a payment.
+  const account = await getTonAccount(api, address);
+  if (account === undefined) return undefined;
+  const listed = payments.reduce((sum, p) => sum + p.amount, 0n);
+  if (account.balance > listed) {
+    console.warn("TON deposit holds more than its listed payments:", depositAddress);
+    return undefined;
+  }
+  return payments;
 }
 
 // ---------- Payout math (pure) ----------
@@ -422,7 +481,8 @@ export function signTonPayout(input: {
 // ---------- Prepare one payout ----------
 
 type PreparedPayout =
-  | { kind: "wait" }
+  | { kind: "wait"; reason: string }
+  | { kind: "too_small" }
   | { kind: "stop"; reason: string }
   | {
       kind: "ready";
@@ -446,11 +506,11 @@ function notAWallet(address: string) {
 // wait = temporary problem (retry next round), stop = permanent problem
 // (needs a person). Problems with our own config throw.
 async function prepareTonPayout(input: {
-  invoiceId: string;
+  api: TonApi;
   depositAddress: string;
   merchantAddress: string;
   platformAddress: string;
-  userId: string;
+  feeRate: bigint;
   toCrypto: string;
   sealedDepositKey: SealedSecret | null | undefined;
   // The deposit must hold at least this much (the invoice amount).
@@ -458,12 +518,12 @@ async function prepareTonPayout(input: {
   // The invoice lifetime, for the storage-fee allowance.
   lifetimeMinutes: number;
 }): Promise<PreparedPayout> {
-  const { depositAddress, merchantAddress, platformAddress } = input;
+  const { api, depositAddress, merchantAddress, platformAddress, feeRate } = input;
   const fundsAt = `All funds are still at deposit address ${depositAddress}.`;
 
   function wait(why: string): PreparedPayout {
-    console.warn(`TON payout waiting (${why}); will retry:`, input.invoiceId);
-    return { kind: "wait" };
+    console.warn(`TON payout waiting (${why}); will retry:`, depositAddress);
+    return { kind: "wait", reason: why };
   }
   function stop(reason: string): PreparedPayout {
     return { kind: "stop", reason: `Payout stopped: ${reason}` };
@@ -498,18 +558,6 @@ async function prepareTonPayout(input: {
     }
   }
 
-  const user = await User.findOne({ user_id: input.userId })
-    .select("merchant_fee")
-    .exec();
-  if (!user) {
-    return stop(`merchant account ${input.userId} was not found. ${fundsAt} Check whether the merchant was deleted, then pay out manually.`);
-  }
-
-  const feeRate = parseFeeRate(user.merchant_fee);
-  if (feeRate === undefined) {
-    return stop(`merchant fee rate "${user.merchant_fee}" is not a valid rate below 100%. ${fundsAt} Fix merchant_fee (e.g. "0.005" = 0.5%), then pay out manually.`);
-  }
-
   if (!input.sealedDepositKey) {
     return stop(`the deposit private key is missing from the database. ${fundsAt} Restore the key from backup; without it the funds cannot be moved.`);
   }
@@ -524,7 +572,7 @@ async function prepareTonPayout(input: {
     return stop(`the saved key does not control deposit address ${depositAddress}. Nothing was sent. Find the right key before moving the funds.`);
   }
 
-  const platformAccount = await getTonDestination(platform);
+  const platformAccount = await getTonDestination(api, platform);
   if (platformAccount === undefined) return wait("platform account lookup failed");
   if (
     platformAccount.state === "frozen" ||
@@ -533,7 +581,7 @@ async function prepareTonPayout(input: {
     throw new Error("PLATFORM_TON_ADDRESS is not a normal TON wallet");
   }
 
-  const account = await getTonAccount(deposit);
+  const account = await getTonAccount(api, deposit);
   if (account === undefined) return wait("deposit account lookup failed");
 
   const walletState = readDepositWallet(account, wallet.contract);
@@ -546,7 +594,7 @@ async function prepareTonPayout(input: {
   }
 
   const plan = planTonPayout(account.balance, feeRate);
-  if (plan === undefined) return wait("too small after the fee budget and platform fee");
+  if (plan === undefined) return { kind: "too_small" };
 
   // Who receives: the merchant, or NEAR's deposit address for a swap.
   let receiverText = merchantAddress;
@@ -580,7 +628,7 @@ async function prepareTonPayout(input: {
   const receiver = parseTonAddress(receiverText);
   if (receiver === undefined) throw new Error("receiver address was checked above");
 
-  const destination = await getTonDestination(receiver);
+  const destination = await getTonDestination(api, receiver);
   if (destination === undefined) return wait("receiver account lookup failed");
   const problem =
     destination.state === "frozen"
@@ -638,22 +686,52 @@ const savedTonTxSchema = z.object({
   amount: u64String,
 });
 
-function savedTxFields(prepared: Extract<PreparedPayout, { kind: "ready" }>) {
+type ReadyPayout = Extract<PreparedPayout, { kind: "ready" }>;
+
+// tx.raw holds the state; the plan fills tx.out (the message hash until the
+// payout lands) and the fee fields.
+function checkpointOf(
+  prepared: ReadyPayout,
+  destinationKind: Transfer["kind"],
+  platform: Address,
+): PayoutCheckpoint {
   return {
-    "tx.out": prepared.hash,
-    "tx.raw": JSON.stringify({
+    state: JSON.stringify({
       boc: prepared.boc,
       seqno: prepared.seqno,
       validUntil: prepared.validUntil,
       receiver: prepared.receiver,
       amount: prepared.merchantAmount.toString(),
     }),
-    // Swap: what the merchant gets is known only when NEAR finishes
-    // (updateSwapStatus sets it).
-    received_amount: prepared.swap ? "0" : prepared.merchantAmount.toString(),
-    network_fee: prepared.networkFee.toString(),
-    platform_fee: prepared.platformFee.toString(),
-    ...(prepared.swap ? swapFieldsToSave(prepared.swap) : {}),
+    plan: {
+      transfers: [
+        {
+          kind: prepared.swap ? "swap_deposit" : destinationKind,
+          to: Address.parseRaw(prepared.receiver).toString({ bounceable: false }),
+          amount: prepared.merchantAmount,
+          txid: prepared.hash,
+        },
+        // Message 2 carries the platform fee plus whatever the fee budget
+        // leaves over; the proof records what it really carried.
+        {
+          kind: "platform_fee",
+          to: platform.toString({ bounceable: false }),
+          amount: prepared.platformFee,
+          txid: prepared.hash,
+        },
+      ],
+      platformFee: prepared.platformFee,
+      networkCost: prepared.networkFee,
+      ...(prepared.swap
+        ? {
+            legacySwap: {
+              depositAddress: prepared.swap.depositAddress,
+              deadline: prepared.swap.deadline,
+              quote: prepared.swap.quote,
+            },
+          }
+        : {}),
+    },
   };
 }
 
@@ -803,296 +881,198 @@ function failedPayoutNote(input: {
 
 // ---------- The payout ----------
 
-export async function transferTonToMerchant(
-  invoiceId: string,
-  platformAddress: string,
-) {
-  try {
-    const invoice = await Invoice.findOne({
-      invoice_id: invoiceId,
-      crypto: "ton",
-      status: { $in: ["confirmed", "processing"] },
-    })
-      .select("+private.private_key +tx.raw")
-      .exec();
-    if (!invoice) return;
+// Deposits only take payments while their invoice is open, at most this long
+// (see tonMinimumPayment).
+const MAX_INVOICE_LIFETIME_MINUTES = 60;
 
-    if (!isValidTonAddress(platformAddress)) {
-      throw new Error("Platform TON address is not a valid mainnet TON address");
-    }
-
-    async function markFailed(
-      fromStatus: "confirmed" | "processing",
-      reason: string,
-    ) {
-      const result = await Invoice.updateOne(
-        { invoice_id: invoiceId, crypto: "ton", status: fromStatus },
-        {
-          $set: {
-            status: "failed",
-            "timestamps.failed": Date.now(),
-            review_reason: reason,
-          },
-        },
-      ).exec();
-
-      if (result.matchedCount === 0) {
-        console.warn(
-          `TON payout: could not mark failed, invoice is no longer ${fromStatus}:`,
-          invoiceId,
-          reason,
-        );
-        return;
-      }
-      console.error("TON payout failed:", invoiceId, reason);
-    }
-
-    const isSwap = invoice.to_crypto !== "ton";
-
-    // The deposit must still hold the invoice amount (minus the small
-    // storage-fee allowance, see tonMinimumPayment). On a rebuild, less
-    // means the old message probably landed and this API node can't see it.
-    const prepare = () =>
-      prepareTonPayout({
-        invoiceId,
-        depositAddress: invoice.address,
-        merchantAddress: invoice.to_address,
-        platformAddress,
-        userId: invoice.user_id,
-        toCrypto: invoice.to_crypto,
-        sealedDepositKey: invoice.private?.private_key,
-        // The same minimum the watcher confirmed at, tolerance included.
-        minimumTotal: acceptedPaymentAmount(invoice),
-        lifetimeMinutes: invoice.lifetime,
-      });
-
-    // ----- confirmed: sign, save, then send -----
-    if (invoice.status === "confirmed") {
-      const prepared = await prepare();
-      if (prepared.kind === "wait") return;
-      if (prepared.kind === "stop") {
-        return await markFailed("confirmed", prepared.reason);
-      }
-
-      // Save the signed message before sending it, so a crash can't lose it.
-      const claimed = await Invoice.findOneAndUpdate(
-        { invoice_id: invoiceId, crypto: "ton", status: "confirmed" },
-        {
-          $set: {
-            status: "processing",
-            "timestamps.processing": Date.now(),
-            ...savedTxFields(prepared),
-          },
-        },
-        { returnDocument: "after" },
-      ).exec();
-
-      if (claimed === null) {
-        console.warn("Another run claimed it first", invoiceId);
-        return;
-      }
-
-      if (await sendTonMessage(prepared.boc)) {
-        console.log("TON payout sent:", invoiceId, prepared.hash);
-      }
-      return;
-    }
-
-    // ----- processing: check, resend, or rebuild -----
-    // Until the payout lands, tx.out holds the external message hash (all we
-    // know before sending). Once it lands, tx.out holds the transaction hash,
-    // like the other coins, and the message hash stays derivable from the
-    // saved message in tx.raw.
-    const txOut = invoice.tx?.out;
-    const saved = parseSavedTonTx(invoice.tx?.raw);
-    const deposit = parseTonAddress(invoice.address);
-    const messageHash = saved
-      ? Cell.fromBase64(saved.boc).hash().toString("hex")
-      : undefined;
-
-    if (!txOut || saved === undefined || deposit === undefined || !messageHash) {
-      await Invoice.updateOne(
-        { invoice_id: invoiceId, crypto: "ton", status: "processing" },
-        {
-          $set: {
-            review_reason: `Invoice is processing but has no readable saved TON payout. The claim always saves it, so this is a bug or a manual DB edit. Funds may still be at deposit address ${invoice.address}; check an explorer before sending anything.`,
-          },
-        },
-      ).exec();
-      console.error("TON invoice is processing but has no saved payout; needs review:", invoiceId);
-      return;
-    }
-
-    if (txOut !== messageHash) {
-      // The landing is already recorded (tx.out is the transaction hash).
-      // Only a swap stays processing after that: NEAR's status completes it
-      // (updateSwapStatus in swap/near.ts).
-      return;
-    }
-
-    const noteIfStuck = async () => {
-      const processingAt = invoice.timestamps?.processing;
-      if (processingAt == null || Date.now() - processingAt < STUCK_TX_REVIEW_MS) {
-        return;
-      }
-
-      const reason = `TON payout has not landed after 24 hours (latest message ${messageHash}). Funds stay at deposit address ${invoice.address} until a payout lands. Expired messages are rebuilt automatically; check the logs (API errors). Do not pay the merchant from another wallet: the automatic payout can still land.`;
-
-      const result = await Invoice.updateOne(
-        {
-          invoice_id: invoiceId,
-          crypto: "ton",
-          status: "processing",
-          review_reason: { $ne: reason },
-        },
-        { $set: { review_reason: reason } },
-      ).exec();
-
-      if (result.modifiedCount === 1) {
-        console.error("TON payout stuck; needs review:", invoiceId, messageHash);
-      }
-    };
-
-    // One snapshot: the wallet's seqno and the chain time it was taken at.
-    const account = await getTonAccount(deposit);
-    if (account === undefined) return await noteIfStuck();
-
-    const seqno = readSeqno(account);
-    if (seqno === undefined) return await noteIfStuck();
-
-    if (seqno > saved.seqno) {
-      // Our seqno was used: find that transaction and check what it paid.
-      const transactions = await getRecentTonTransactions(deposit);
-      if (transactions === undefined) return await noteIfStuck();
-
-      const landed = findPayoutBySeqno(transactions, saved.seqno);
-      if (landed === undefined) {
-        console.warn("TON payout seqno was used, but its transaction is not in the recent list:", invoiceId);
-        return await noteIfStuck();
-      }
-
-      const platform = parseTonAddress(platformAddress);
-      if (platform === undefined) {
-        throw new Error("Platform TON address is not a valid mainnet TON address");
-      }
-      // Message 2 carries at most this when nothing went wrong: the platform
-      // fee plus the fee budget, minus what the chain charged.
-      const expectedToPlatform =
-        BigInt(invoice.platform_fee) + BigInt(invoice.network_fee);
-
-      if (
-        landed.failed !== undefined ||
-        !paidExactly(landed.sent, saved.receiver, saved.amount)
-      ) {
-        return await markFailed(
-          "processing",
-          failedPayoutNote({
-            txHash: landed.txHash,
-            failed: landed.failed,
-            sent: landed.sent,
-            receiver: saved.receiver,
-            amount: saved.amount,
-            platform,
-            expectedToPlatform,
-            depositAddress: invoice.address,
-            depositBalance: account.balance,
-          }),
-        );
-      }
-
-      if (landed.messageHash !== messageHash) {
-        // An earlier signed version landed with the same receiver and amount.
-        console.warn("TON payout landed from an earlier signed version:", invoiceId, landed.messageHash);
-      }
-
-      // Late payment: money that reached the deposit after the payout was
-      // signed rides along to the platform in message 2 (mode 128 sends
-      // everything left). Without it, the platform message carries at most
-      // platform fee + fee budget, minus what the chain charged.
-      const toPlatform = landed.sent
-        .filter((message) => message.to.equals(platform))
-        .reduce((sum, message) => sum + message.value, 0n);
-      const lateNote =
-        toPlatform > expectedToPlatform
-          ? `${LATE_PAYMENT_NOTE_PREFIX} at least ${toPlatform - expectedToPlatform} nanoton reached deposit address ${invoice.address} after the payout was signed and went to platform wallet ${platformAddress} in tx ${landed.txHash}. The merchant's payout was not affected. Forward the extra to the merchant.`
-          : "";
-
-      // A normal payout is done: the exact amount was sent non-bounceable, so
-      // the merchant has it (it may take a few seconds to show). A swap stays
-      // processing: the coins reached NEAR, and NEAR's status completes the
-      // invoice (updateSwapStatus in swap/near.ts).
-      const result = await Invoice.updateOne(
-        { invoice_id: invoiceId, crypto: "ton", status: "processing", "tx.out": messageHash },
-        {
-          $set: {
-            "tx.out": landed.txHash,
-            review_reason: lateNote,
-            ...(isSwap
-              ? {}
-              : { status: "completed", "timestamps.completed": Date.now() }),
-          },
-        },
-      ).exec();
-
-      if (result.modifiedCount > 0) {
-        console.log(isSwap ? "TON swap payout reached NEAR:" : "TON payout completed:", invoiceId, landed.txHash);
-        if (lateNote) console.warn("TON late payment went to the platform; needs review:", invoiceId);
-      }
-      return;
-    }
-
-    if (seqno < saved.seqno) {
-      // Seqno never goes down unless the wallet was deleted and deployed
-      // again. Something unusual happened: a person must look.
-      await Invoice.updateOne(
-        { invoice_id: invoiceId, crypto: "ton", status: "processing" },
-        {
-          $set: {
-            review_reason: `TON deposit wallet seqno is ${seqno}, below the saved payout's ${saved.seqno}. Check deposit address ${invoice.address} on an explorer before sending anything.`,
-          },
-        },
-      ).exec();
-      console.error("TON deposit wallet seqno went down; needs review:", invoiceId);
-      return;
-    }
-
-    if (account.chainTime <= saved.validUntil + EXPIRY_MARGIN_SECONDS) {
-      // Not landed yet, but it still can: send the same message again.
-      await sendTonMessage(saved.boc);
-      return await noteIfStuck();
-    }
-
-    // Expired without landing: the chain was past valid_until and the seqno
-    // was still unused. A new message is safe now. It must reuse the same
-    // seqno, so this and any old version can never both land.
-    // A swap also gets a fresh NEAR quote: nothing reached the old one.
-    const prepared = await prepare();
-    if (prepared.kind === "wait") return await noteIfStuck();
-    if (prepared.kind === "stop") {
-      return await markFailed("processing", prepared.reason);
-    }
-    if (prepared.seqno !== saved.seqno) {
-      console.warn("TON rebuild saw a different seqno; waiting for the API to catch up:", invoiceId);
-      return await noteIfStuck();
-    }
-
-    const result = await Invoice.updateOne(
-      { invoice_id: invoiceId, crypto: "ton", status: "processing", "tx.out": messageHash },
-      { $set: savedTxFields(prepared) },
-    ).exec();
-
-    if (result.modifiedCount === 0) {
-      console.warn("Another run rebuilt it first", invoiceId);
-      return;
-    }
-
-    console.log("TON payout expired unsent; rebuilt:", invoiceId, messageHash, "->", prepared.hash);
-    await sendTonMessage(prepared.boc);
-  } catch (error) {
-    console.error(
-      "TON payout could not finish; invoice state was preserved:",
-      invoiceId,
-      error instanceof Error ? error.message : "unknown error",
-    );
+/**
+ * The TON side of ChainAdapter.payout (src/chains/adapter.ts): pays
+ * request.destination from the deposit, or follows the payout saved in
+ * request.checkpoint. Never touches the database.
+ */
+export async function payOutTon(
+  request: PayoutRequest,
+  deps: { api: TonApi; platformAddress: string },
+): Promise<PayoutResult> {
+  const { api, platformAddress } = deps;
+  const platform = parseTonAddress(platformAddress);
+  if (platform === undefined) {
+    throw new Error("Platform TON address is not a valid mainnet TON address");
   }
+  const depositAddress = request.depositAddress;
+  const pending = (reason: string): PayoutResult => ({ status: "pending", reason });
+
+  if (request.depositKey.kind !== "sealed_key") {
+    return {
+      status: "failed",
+      message: `Payout stopped: a TON deposit needs its own key, but this invoice has none. All funds are still at deposit address ${depositAddress}. Nothing was sent.`,
+      transfers: [],
+    };
+  }
+  const sealedDepositKey = request.depositKey.sealed;
+
+  const prepare = () =>
+    prepareTonPayout({
+      api,
+      depositAddress,
+      merchantAddress: request.destination,
+      platformAddress,
+      feeRate: request.feeRate,
+      toCrypto: request.receiveAsset,
+      sealedDepositKey,
+      // The same minimum the watcher confirmed at, tolerance included.
+      minimumTotal: request.minimumAmount,
+      lifetimeMinutes: MAX_INVOICE_LIFETIME_MINUTES,
+    });
+
+  // ----- nothing saved yet: sign, save, then send -----
+  if (request.checkpoint === undefined) {
+    const prepared = await prepare();
+    if (prepared.kind === "wait") return pending(prepared.reason);
+    if (prepared.kind === "too_small") {
+      return { status: "too_small", reason: "too small after the fee budget and platform fee" };
+    }
+    if (prepared.kind === "stop") return { status: "failed", message: prepared.reason, transfers: [] };
+
+    // Save the signed message before sending it, so a crash can't lose it.
+    if (!(await request.saveCheckpoint(checkpointOf(prepared, request.destinationKind, platform)))) {
+      return pending("another run saved this payout first");
+    }
+    if (await sendTonMessage(api, prepared.boc)) {
+      console.log("TON payout sent:", depositAddress, prepared.hash);
+    }
+    return pending("sent; waiting for it to land");
+  }
+
+  // ----- saved: check, resend, or rebuild -----
+  const saved = parseSavedTonTx(request.checkpoint.state);
+  const deposit = parseTonAddress(depositAddress);
+  const messageHash = saved
+    ? Cell.fromBase64(saved.boc).hash().toString("hex")
+    : undefined;
+
+  if (saved === undefined || deposit === undefined || !messageHash) {
+    return {
+      status: "pending",
+      reason: "no readable saved TON payout",
+      review: `Invoice is processing but has no readable saved TON payout. The claim always saves it, so this is a bug or a manual DB edit. Funds may still be at deposit address ${depositAddress}; check an explorer before sending anything.`,
+    };
+  }
+
+  // One snapshot: the wallet's seqno and the chain time it was taken at.
+  const account = await getTonAccount(api, deposit);
+  if (account === undefined) return pending("deposit account lookup failed");
+
+  const seqno = readSeqno(account);
+  if (seqno === undefined) return pending("deposit wallet seqno unreadable");
+
+  if (seqno > saved.seqno) {
+    // Our seqno was used: find that transaction and check what it paid.
+    const transactions = await getRecentTonTransactions(api, deposit);
+    if (transactions === undefined) return pending("deposit transactions lookup failed");
+
+    const landed = findPayoutBySeqno(transactions, saved.seqno);
+    if (landed === undefined) {
+      console.warn("TON payout seqno was used, but its transaction is not in the recent list:", depositAddress);
+      return pending("seqno used, but its transaction is not in the recent list");
+    }
+
+    // What the landed transaction really sent: the proof, or on failure the
+    // record of where the money went.
+    const receiverKind: Transfer["kind"] =
+      request.receiveAsset === "ton" ? request.destinationKind : "swap_deposit";
+    const moved: Transfer[] = landed.sent
+      .filter((m) => m.to.equals(saved.receiver) || m.to.equals(platform))
+      .map((m) => ({
+        kind: m.to.equals(saved.receiver) ? receiverKind : "platform_fee",
+        to: m.to.toString({ bounceable: false }),
+        amount: m.value,
+        txid: landed.txHash,
+      }));
+
+    // Message 2 carries at most this when nothing went wrong: the platform
+    // fee plus the fee budget, minus what the chain charged.
+    const expectedToPlatform =
+      request.checkpoint.plan.platformFee + request.checkpoint.plan.networkCost;
+
+    if (
+      landed.failed !== undefined ||
+      !paidExactly(landed.sent, saved.receiver, saved.amount)
+    ) {
+      return {
+        status: "failed",
+        message: failedPayoutNote({
+          txHash: landed.txHash,
+          failed: landed.failed,
+          sent: landed.sent,
+          receiver: saved.receiver,
+          amount: saved.amount,
+          platform,
+          expectedToPlatform,
+          depositAddress,
+          depositBalance: account.balance,
+        }),
+        transfers: moved,
+      };
+    }
+
+    if (landed.messageHash !== messageHash) {
+      // An earlier signed version landed with the same receiver and amount.
+      console.warn("TON payout landed from an earlier signed version:", depositAddress, landed.messageHash);
+    }
+
+    // Late payment: money that reached the deposit after the payout was
+    // signed rides along to the platform in message 2 (mode 128 sends
+    // everything left). Without it, the platform message carries at most
+    // platform fee + fee budget, minus what the chain charged.
+    const toPlatform = landed.sent
+      .filter((message) => message.to.equals(platform))
+      .reduce((sum, message) => sum + message.value, 0n);
+    const lateNote =
+      toPlatform > expectedToPlatform
+        ? `${LATE_PAYMENT_NOTE_PREFIX} at least ${toPlatform - expectedToPlatform} nanoton reached deposit address ${depositAddress} after the payout was signed and went to platform wallet ${platformAddress} in tx ${landed.txHash}. The merchant's payout was not affected. Forward the extra to the merchant.`
+        : "";
+
+    // The exact amount was sent non-bounceable, so the receiver has it (it
+    // may take a few seconds to show).
+    return { status: "paid", transfers: moved, ...(lateNote ? { note: lateNote } : {}) };
+  }
+
+  if (seqno < saved.seqno) {
+    // Seqno never goes down unless the wallet was deleted and deployed
+    // again. Something unusual happened: a person must look.
+    console.error("TON deposit wallet seqno went down; needs review:", depositAddress);
+    return {
+      status: "pending",
+      reason: "deposit wallet seqno went down",
+      review: `TON deposit wallet seqno is ${seqno}, below the saved payout's ${saved.seqno}. Check deposit address ${depositAddress} on an explorer before sending anything.`,
+    };
+  }
+
+  if (account.chainTime <= saved.validUntil + EXPIRY_MARGIN_SECONDS) {
+    // Not landed yet, but it still can: send the same message again.
+    await sendTonMessage(api, saved.boc);
+    return pending(`message ${messageHash} not landed yet; sent again`);
+  }
+
+  // Expired without landing: the chain was past valid_until and the seqno
+  // was still unused. A new message is safe now. It must reuse the same
+  // seqno, so this and any old version can never both land.
+  // A swap also gets a fresh NEAR quote: nothing reached the old one.
+  const prepared = await prepare();
+  if (prepared.kind === "wait") return pending(prepared.reason);
+  if (prepared.kind === "too_small") return pending("rebuild found the deposit too small");
+  if (prepared.kind === "stop") return { status: "failed", message: prepared.reason, transfers: [] };
+  if (prepared.seqno !== saved.seqno) {
+    console.warn("TON rebuild saw a different seqno; waiting for the API to catch up:", depositAddress);
+    return pending("rebuild saw a different seqno");
+  }
+
+  if (!(await request.saveCheckpoint(checkpointOf(prepared, request.destinationKind, platform)))) {
+    return pending("another run rebuilt it first");
+  }
+
+  console.log("TON payout expired unsent; rebuilt:", depositAddress, messageHash, "->", prepared.hash);
+  await sendTonMessage(api, prepared.boc);
+  return pending("expired unsent; rebuilt and sent");
 }

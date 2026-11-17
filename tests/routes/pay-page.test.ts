@@ -75,15 +75,41 @@ describe("the merchant API", () => {
     assert.equal(invoice?.amount, "50000"); // $25 at $50,000/BTC = 0.0005 BTC
     assert.ok(invoice?.address);
     assert.ok(invoice?.private?.private_key, "the deposit key is missing");
+    assert.equal(invoice?.fee_rate, "0.05", "the merchant's rate was not copied onto the invoice");
   });
 
-  it("refuses a fixed-coin invoice for a deposit coin it can't create yet, rather than make a BTC one", async () => {
+  it("creates a fixed-coin TON invoice with a TON deposit, paid out to the merchant's TON address", async () => {
     const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { crypto: "ton", to_crypto: "ton" });
 
+    assert.equal(response.status, 201);
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "ton");
+    assert.equal(invoice?.to_crypto, "ton");
+    assert.equal(invoice?.to_address, TON_ADDRESS);
+    assert.equal(invoice?.amount, "5000000000"); // $25 at $5/TON = 5 TON
+    assert.match(invoice?.address ?? "", /^UQ/, "a TON deposit is shown non-bounceable");
+    assert.ok(invoice?.private?.private_key, "the deposit key is missing");
+    assert.equal(invoice?.fee_rate, "0.05");
+  });
+
+  it("refuses a fixed-coin invoice for a deposit coin with no chain adapter, rather than make a BTC one", async () => {
+    const m = await merchant({ btc: BTC_ADDRESS, ltc: "LVfF2X4rVkYumLxWRZsK8Z6e1BULNxH5ZW" });
+
+    const response = await createInvoice(m.apiKey, { crypto: "ltc", to_crypto: "ltc" });
+
     assert.equal(response.status, 409);
     assert.equal(response.body.error.code, "DEPOSIT_COIN_NOT_SUPPORTED");
+  });
+
+  it("refuses a TON deposit paid out as another coin", async () => {
+    const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "ton", to_crypto: "btc" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
   });
 
   it("creates a merchant's-list invoice without a deposit, offering only coins that can be paid end to end", async () => {
