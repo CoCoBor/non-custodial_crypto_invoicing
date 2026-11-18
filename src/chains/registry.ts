@@ -9,7 +9,7 @@ import { nowNodesBscRpc, nowNodesEthRpc } from "./evm-rpc.js";
 import { createLtcAdapter } from "./ltc.js";
 import { createSolAdapter, createSplTokenAdapter } from "./sol.js";
 import { nowNodesSolRpc } from "./solana-rpc.js";
-import { createTonAdapter } from "./ton.js";
+import { createTonAdapter, createTonJettonAdapter } from "./ton.js";
 
 const eth: EvmClients = { rpc: nowNodesEthRpc, index: nowNodesEthBlockbook };
 const bsc: EvmClients = { rpc: nowNodesBscRpc, index: nowNodesBscBlockbook };
@@ -33,6 +33,12 @@ export const chainAdapters: ChainRegistry = {
   usdtsol: createSplTokenAdapter({ ...solToken, asset: "usdtsol" }),
   usdcsol: createSplTokenAdapter({ ...solToken, asset: "usdcsol" }),
   ton: createTonAdapter({ platformAddress: env.platformTonAddress }),
+  usdtton: createTonJettonAdapter({
+    asset: "usdtton",
+    platformAddress: env.platformTonAddress,
+    gasWalletKey: env.tonGasWalletKey,
+    getPrice,
+  }),
 };
 
 export function depositAssets(registry: ChainRegistry = chainAdapters): AssetId[] {

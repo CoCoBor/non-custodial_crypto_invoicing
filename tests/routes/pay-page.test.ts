@@ -18,7 +18,7 @@ const TON_ADDRESS = "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_";
 const LTC_ADDRESS = new litecore.PrivateKey().toAddress().toString();
 const SOL_ADDRESS = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const EVM_ADDRESS = "0x000000000000000000000000000000000000dEaD";
-const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500", sol: "125", usdtsol: "1", usdcsol: "1" }; // USD per coin
+const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500", sol: "125", usdtsol: "1", usdcsol: "1", usdtton: "1" }; // USD per coin
 
 let baseUrl: string;
 let db: Db;
@@ -214,6 +214,30 @@ describe("the merchant API", () => {
     assert.match(invoice?.address ?? "", /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
   });
 
+  it("creates a fixed-coin USDT-on-TON invoice with a fresh TON wallet deposit, paid out as the jetton", async () => {
+    const m = await merchant({ usdtton: TON_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdtton", to_crypto: "usdtton" });
+
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "usdtton");
+    assert.equal(invoice?.to_crypto, "usdtton");
+    assert.equal(invoice?.to_address, TON_ADDRESS);
+    assert.equal(invoice?.amount, "25000000"); // $25 at $1 = 25 USDT (6 decimals)
+    assert.match(invoice?.address ?? "", /^UQ[A-Za-z0-9_-]{46}$/);
+    assert.ok(invoice?.private?.private_key, "the deposit key is missing");
+  });
+
+  it("refuses a USDT-on-TON deposit paid out as GRAM", async () => {
+    const m = await merchant({ usdtton: TON_ADDRESS, ton: TON_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdtton", to_crypto: "ton" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
+  });
+
   it("refuses a Solana token deposit paid out as SOL", async () => {
     const m = await merchant({ usdcsol: SOL_ADDRESS, sol: SOL_ADDRESS });
 
@@ -284,6 +308,23 @@ describe("the merchant API", () => {
     const invoice = await invoiceInDb(invoiceId);
     assert.equal(invoice?.crypto, "usdcsol");
     assert.equal(invoice?.to_address, SOL_ADDRESS);
+    assert.ok(invoice?.private?.private_key);
+  });
+
+  it("offers GRAM and USDT on TON on a merchant's-list invoice, and the payer can pick USDT", async () => {
+    const m = await merchant({ ton: TON_ADDRESS, usdtton: TON_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
+
+    const invoiceId: string = response.body.data.invoiceId;
+    assert.deepEqual([...(await invoiceInDb(invoiceId))!.offered_coins].sort(), ["ton", "usdtton"]);
+    const choice = await postJson(`${baseUrl}/pay/${invoiceId}/choose`, { crypto: "usdtton" });
+    assert.equal(choice.status, 200, JSON.stringify(choice.body));
+    assert.equal(choice.body.data.payment.amount, "25000000");
+    assert.match(choice.body.data.payment.address, /^UQ[A-Za-z0-9_-]{46}$/);
+    const invoice = await invoiceInDb(invoiceId);
+    assert.equal(invoice?.crypto, "usdtton");
+    assert.equal(invoice?.to_address, TON_ADDRESS);
     assert.ok(invoice?.private?.private_key);
   });
 

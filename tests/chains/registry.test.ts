@@ -32,8 +32,8 @@ describe("the chain registry", () => {
     });
   }
 
-  it("serves BTC, LTC, ETH with its tokens, SOL with its tokens, BNB and TON deposits today", () => {
-    assert.deepEqual(depositAssets(), ["btc", "ltc", "eth", "sol", "ton", "usdteth", "daieth", "usdceth", "usdtsol", "usdcsol", "bsc"]);
+  it("serves BTC, LTC, ETH with its tokens, SOL with its tokens, BNB, TON and USDT on TON deposits today", () => {
+    assert.deepEqual(depositAssets(), ["btc", "ltc", "eth", "sol", "ton", "usdteth", "daieth", "usdceth", "usdtsol", "usdcsol", "bsc", "usdtton"]);
   });
 
   it("leaves out the BEP-20 tokens until their contracts are checked", () => {
