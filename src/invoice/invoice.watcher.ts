@@ -25,6 +25,7 @@ import {
 import { getPaymentStatus } from "./invoice.function.js";
 import { totalOf } from "./payment-ledger.js";
 import { acceptedPaymentAmount } from "./payment-rules.js";
+import { logStatusChange } from "./status-log.js";
 import {
   hintSwapStart,
   maxLossOf,
@@ -65,7 +66,10 @@ export async function runWatcherPass(
         ],
       },
     },
-    { $set: { status: "expired", "timestamps.expired": now, watch_until: watchUntil(now) } },
+    {
+      $set: { status: "expired", "timestamps.expired": now, watch_until: watchUntil(now) },
+      ...logStatusChange("waiting", "expired", now),
+    },
   ).exec();
 
   // Listed first, so an invoice that closes in this pass is watched from the
@@ -219,7 +223,7 @@ async function checkPayments(invoiceId: string, adapter: ChainAdapter, ports: Wa
 
   const result = await Invoice.updateOne(
     { invoice_id: invoiceId, crypto: invoice.crypto, status: currentStatus },
-    { $set: changes },
+    { $set: changes, ...(newStatus !== currentStatus && logStatusChange(currentStatus, newStatus, now)) },
   ).exec();
   if (result.matchedCount === 1 && newStatus !== currentStatus) {
     console.log("Invoice status changed:", invoiceId, newStatus);
@@ -360,7 +364,10 @@ async function requestPayout(
           ).exec()
         : await Invoice.updateOne(
             { invoice_id: invoice.invoice_id, status: "confirmed" },
-            { $set: { ...fields, status: "processing", "timestamps.processing": ports.now() } },
+            {
+              $set: { ...fields, status: "processing", "timestamps.processing": ports.now() },
+              ...logStatusChange("confirmed", "processing", ports.now()),
+            },
           ).exec();
       if (result.matchedCount !== 1) {
         console.warn("Another run saved this payout first:", invoice.invoice_id);
@@ -430,6 +437,7 @@ async function startSwap(invoice: PayoutInvoice, adapter: ChainAdapter, ports: W
             "timestamps.processing": ports.now(),
           },
           $inc: { "swap.version": 1 },
+          ...logStatusChange("confirmed", "processing", ports.now()),
         },
       ).exec();
       if (result.matchedCount !== 1) {
@@ -506,8 +514,8 @@ async function recordPayoutResult(
         changes.watch_until = watchUntil(now);
       }
       if (invoice.outcome === "too_small_to_forward") changes.outcome = "";
-      const updated = await Invoice.updateOne(open, { $set: changes }).exec();
-      if (updated.matchedCount === 1) {
+      const updated = await updatePayingOut(invoice, changes, now);
+      if (updated) {
         console.log(isSwap ? "Payout reached the swap:" : "Payout completed:", invoiceId);
         if (result.note) console.warn("Payout note needs review:", invoiceId);
         const deposit = result.transfers.find((t) => t.kind === "swap_deposit");
@@ -517,8 +525,9 @@ async function recordPayoutResult(
     }
 
     case "failed": {
-      const updated = await Invoice.updateOne(open, {
-        $set: {
+      const updated = await updatePayingOut(
+        invoice,
+        {
           status: "failed",
           "timestamps.failed": now,
           review_reason: result.message,
@@ -527,8 +536,9 @@ async function recordPayoutResult(
             ...storeTransfers(result.transfers, "confirmed"),
           ],
         },
-      }).exec();
-      if (updated.matchedCount === 0) {
+        now,
+      );
+      if (!updated) {
         console.warn("Payout failed, but the invoice is no longer open:", invoiceId, result.message);
         return;
       }
@@ -536,6 +546,22 @@ async function recordPayoutResult(
       return;
     }
   }
+}
+
+/**
+ * Applies `changes` to a paying-out invoice and logs its status change, if
+ * any. The status read earlier may be stale (saving a checkpoint moves it to
+ * processing), so each paying-out status is tried, the one read first.
+ */
+async function updatePayingOut(invoice: PayoutInvoice, changes: Record<string, unknown>, now: number): Promise<boolean> {
+  const to = changes.status;
+  const tries = invoice.status === "processing" ? (["processing", "confirmed"] as const) : (["confirmed", "processing"] as const);
+  for (const from of tries) {
+    const logged = typeof to === "string" && to !== from ? logStatusChange(from, to, now) : {};
+    const result = await Invoice.updateOne({ invoice_id: invoice.invoice_id, status: from }, { $set: changes, ...logged }).exec();
+    if (result.matchedCount === 1) return true;
+  }
+  return false;
 }
 
 // ---------- Following a swap ----------
@@ -664,7 +690,11 @@ async function followSwap(invoiceId: string, ports: WatcherPorts): Promise<void>
       }
   }
 
-  const result = await Invoice.updateOne(filter, { $set: set, ...bump }).exec();
+  const result = await Invoice.updateOne(filter, {
+    $set: set,
+    ...bump,
+    ...(typeof set.status === "string" && logStatusChange("processing", set.status, now)),
+  }).exec();
   if (result.modifiedCount > 0 && set.status !== undefined) {
     console.log("Swap finished:", invoiceId, reply.status);
   }

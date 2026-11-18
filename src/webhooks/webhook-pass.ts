@@ -33,9 +33,18 @@ export async function runWebhookPass(ports: WebhookPorts): Promise<void> {
   await deliverDueEvents(ports);
 }
 
-/** One event per status change; the same change always gets the same id. */
+/**
+ * The id status events had before they were numbered. Still used for the first
+ * change found on an invoice written before status_log existed, so an event
+ * recorded by the old code just before a deploy is not recorded twice.
+ */
 export function statusEventId(invoiceId: string, from: string, to: string): string {
   return `${invoiceId}:${from}->${to}`;
+}
+
+/** The n-th status event of an invoice, counted from 1. */
+export function numberedStatusEventId(invoiceId: string, n: number): string {
+  return `${invoiceId}:status:${n}`;
 }
 
 /**
@@ -82,7 +91,7 @@ const SWAP_FIELDS = [
   .join(" ");
 
 const INVOICE_FIELDS =
-  `invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer currency amount_fiat locked_rate paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out payments transfers ${SWAP_FIELDS} -_id`;
+  `invoice_id user_id status notified_status status_log notified_status_log status_event_count outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer currency amount_fiat locked_rate paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out payments transfers ${SWAP_FIELDS} -_id`;
 
 type InvoiceSummary = {
   invoice_id: string;
@@ -189,31 +198,66 @@ async function recordEvent(event: {
   ).exec();
 }
 
-// An invoice's status can be changed by many parts of the code; comparing it
-// with the last status announced catches every change in one place. Two
-// changes between passes are announced once, with the latest status.
-// The event is recorded before the change is marked announced, and recording
-// it twice is a no-op, so a crash in between can't lose it.
+type StatusChange = { from: string; to: string; logged: boolean };
+
+/**
+ * The status changes not announced yet, in order. Code that changes a status
+ * logs it in the same update (status_log); a change the log can't explain
+ * (an operator's database edit, or one made before the log existed) shows as
+ * a jump between two entries, or between the last one and the status.
+ */
+function unannouncedChanges(invoice: {
+  status?: string | null;
+  notified_status?: string | null;
+  status_log?: { from: string; to: string }[] | null;
+  notified_status_log?: number | null;
+}): StatusChange[] {
+  const changes: StatusChange[] = [];
+  let reached = invoice.notified_status ?? "";
+  for (const entry of (invoice.status_log ?? []).slice(invoice.notified_status_log ?? 0)) {
+    if (entry.from !== reached) changes.push({ from: reached, to: entry.from, logged: false });
+    changes.push({ from: entry.from, to: entry.to, logged: true });
+    reached = entry.to;
+  }
+  const status = invoice.status ?? "";
+  if (status !== reached) changes.push({ from: reached, to: status, logged: false });
+  return changes;
+}
+
+const countIs = (count: number | null | undefined) => (count ? count : { $in: [0, null] });
+
+// Each change gets its own event, numbered in order. The events are recorded
+// before they are marked announced, and the same log always gives the same
+// ids, so a crash in between can't lose or duplicate one.
 async function recordStatusChanges(now: number): Promise<void> {
   const changed = await Invoice.find({
-    $expr: { $ne: ["$status", { $ifNull: ["$notified_status", ""] }] },
+    $expr: {
+      $or: [
+        { $ne: ["$status", { $ifNull: ["$notified_status", ""] }] },
+        { $gt: [{ $size: { $ifNull: ["$status_log", []] } }, { $ifNull: ["$notified_status_log", 0] }] },
+      ],
+    },
   })
     .select(INVOICE_FIELDS)
     .lean()
     .exec();
 
   for (const invoice of changed) {
-    const from = invoice.notified_status ?? "";
-    const to = invoice.status ?? "";
-
-    if (await hasWebhook(invoice.user_id)) {
-      const eventId = statusEventId(invoice.invoice_id, from, to);
+    const webhook = await hasWebhook(invoice.user_id);
+    let n = invoice.status_event_count ?? 0;
+    for (const change of unannouncedChanges(invoice)) {
+      n += 1;
+      if (!webhook) continue;
+      const eventId =
+        !change.logged && n === 1
+          ? statusEventId(invoice.invoice_id, change.from, change.to)
+          : numberedStatusEventId(invoice.invoice_id, n);
       await recordEvent({
         eventId,
         userId: invoice.user_id,
         invoiceId: invoice.invoice_id,
-        status: to,
-        payload: { event: "invoice.status_changed", eventId, ...invoiceBody(invoice) },
+        status: change.to,
+        payload: { event: "invoice.status_changed", eventId, ...invoiceBody(invoice), status: change.to },
         now,
       });
     }
@@ -221,10 +265,17 @@ async function recordStatusChanges(now: number): Promise<void> {
     await Invoice.updateOne(
       {
         invoice_id: invoice.invoice_id,
-        status: invoice.status,
         notified_status: invoice.notified_status ?? null,
+        notified_status_log: countIs(invoice.notified_status_log),
+        status_event_count: countIs(invoice.status_event_count),
       },
-      { $set: { notified_status: to } },
+      {
+        $set: {
+          notified_status: invoice.status ?? "",
+          notified_status_log: invoice.status_log?.length ?? 0,
+          status_event_count: n,
+        },
+      },
     ).exec();
   }
 }
@@ -400,7 +451,7 @@ async function deliverDueEvents(ports: WebhookPorts): Promise<void> {
     failedAt: null,
     nextAttemptAt: { $lte: new Date(now) },
   })
-    .sort({ nextAttemptAt: 1 })
+    .sort({ nextAttemptAt: 1, _id: 1 })
     .limit(100)
     .lean()
     .exec();

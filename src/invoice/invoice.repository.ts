@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import type { NewDeposit } from "../chains/adapter.js";
 import { Invoice } from "../database/invoices.model.js";
 import { lockedRateView, priceView, type LockedRate, type PriceUnit } from "./pricing.js";
+import { logStatusChange } from "./status-log.js";
 import { watchUntil } from "./watch-window.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 
@@ -54,6 +55,7 @@ export async function createInvoice(input: {
     fee_paid_by_payer: input.feePaidByPayer,
     fee_rate: input.feeRate,
     timestamps: { created: now, waiting: now },
+    status_log: [{ from: "", to: "waiting", at: now }],
   });
 
   const {
@@ -131,6 +133,7 @@ export async function createMerchantListInvoice(input: {
     fee_paid_by_payer: input.feePaidByPayer,
     link: `/pay/${invoiceId}`,
     timestamps: { created: now, waiting: now },
+    status_log: [{ from: "", to: "waiting", at: now }],
   });
 
   return {
@@ -198,7 +201,10 @@ export async function recordChosenCoin(input: {
 export async function cancelUnpaidInvoice(invoiceId: string, address: string, now: number): Promise<boolean> {
   const result = await Invoice.updateOne(
     { invoice_id: invoiceId, status: "waiting", paid_amount: "0", address },
-    { $set: { status: "cancelled", "timestamps.cancelled": now, watch_until: watchUntil(now) } },
+    {
+      $set: { status: "cancelled", "timestamps.cancelled": now, watch_until: watchUntil(now) },
+      ...logStatusChange("waiting", "cancelled", now),
+    },
   ).exec();
   return result.modifiedCount === 1;
 }

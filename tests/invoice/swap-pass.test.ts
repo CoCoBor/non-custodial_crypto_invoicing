@@ -13,7 +13,6 @@ import {
   refundRouteEventId,
   refundRouteSwapEventId,
   runWebhookPass,
-  statusEventId,
   swapEventId,
 } from "../../src/webhooks/webhook-pass.js";
 import { fakeSwap } from "../helpers/fake-swap.js";
@@ -664,7 +663,6 @@ describe("swap status changes in the merchant's webhook outbox", () => {
     for (const id of [
       swapEventId(invoiceId, 1),
       swapEventId(invoiceId, 2),
-      statusEventId(invoiceId, "processing", "failed"),
       refundRouteSwapEventId(invoiceId, 1, 1),
       refundRouteSwapEventId(invoiceId, 1, 2),
       refundRouteEventId(invoiceId, 1),
@@ -672,6 +670,11 @@ describe("swap status changes in the merchant's webhook outbox", () => {
       assert.ok(ids.includes(id), `missing ${id} in ${ids.join(", ")}`);
     }
     assert.equal(ids.filter((id) => id.includes(":swap:")).length, 4, "no swap change announced twice");
+    assert.deepEqual(
+      events.filter((e) => e.body.event === "invoice.status_changed").map((e) => e.body.status),
+      ["confirmed", "processing", "failed"],
+      "each status change once, in order",
+    );
 
     const byId = (id: string) => events.find((e) => e.eventId === id)!.body;
     assert.equal(byId(swapEventId(invoiceId, 1)).swap.amountIn, INTO_SWAP.toString());
@@ -700,7 +703,9 @@ describe("swap status changes in the merchant's webhook outbox", () => {
     await webhookPass(t.now());
 
     const events = await outbox(invoiceId);
-    const completed = events.find((e) => e.eventId === statusEventId(invoiceId, "", "completed"))?.body;
+    const statuses = events.filter((e) => e.body.event === "invoice.status_changed");
+    assert.deepEqual(statuses.map((e) => e.body.status), ["confirmed", "processing", "completed"]);
+    const completed = statuses.at(-1)?.body;
     assert.equal(completed?.swap.amountDelivered, "650000");
     assert.equal(completed?.merchantAmount, "650000");
     const changed = events.find((e) => e.eventId === swapEventId(invoiceId, 2))?.body;

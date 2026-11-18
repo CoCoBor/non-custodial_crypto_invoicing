@@ -38,6 +38,17 @@ const paymentSchema = new Schema(
   { _id: false },
 );
 
+// One status change, written in the same update as the change itself, so the
+// webhook pass can announce every change in order (src/webhooks/webhook-pass.ts).
+const statusChangeSchema = new Schema(
+  {
+    from: { type: String, default: "" }, // "" for the first status
+    to: { type: String, required: true },
+    at: { type: Number, required: true }, // unix ms
+  },
+  { _id: false },
+);
+
 const transferSchema = new Schema(
   {
     kind: {
@@ -148,6 +159,9 @@ const invoiceSchema = new Schema(
     swap_fee: { type: Number, default: 0 }, // if to_crypto is another crypto and NEAR Intents is used, fee = amount transferred - network fees - near estimated receive quote
     review_reason: { type: String, default: "" },
     notified_status: { type: String, default: "" }, // last status announced by webhook; see src/webhooks/webhook-pass.ts
+    status_log: { type: [statusChangeSchema], default: [] }, // empty on invoices made before it existed
+    notified_status_log: { type: Number, default: 0 }, // how many status_log entries the webhook pass has announced
+    status_event_count: { type: Number, default: 0 }, // status events numbered so far; numbers the event ids
     outcome: {
       type: String,
       enum: ["", "partially_paid", "too_small_to_forward", "held_for_manual_handling"],
