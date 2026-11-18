@@ -519,10 +519,11 @@ describe("money too small to forward", () => {
     assert.equal(invoice?.watch_done, true);
   });
 
-  it("marks a confirmed invoice whose merchant payout is too small, and keeps it confirmed", async () => {
-    const userId = await merchant();
+  /** A confirmed invoice paid in full with 1,000 sat: fee 50 + network 1,000 leave the merchant nothing. */
+  async function dustInvoice(userId: string) {
     const invoiceId = randomUUID();
     invoiceIds.push(invoiceId);
+    const address = `deposit-${invoiceId}`;
     await db.collection("invoices").insertOne({
       invoice_id: invoiceId,
       user_id: userId,
@@ -533,20 +534,85 @@ describe("money too small to forward", () => {
       amount: "1000",
       amount_fiat: "1",
       paid_amount: "1000",
-      address: `deposit-${invoiceId}`,
+      address,
       lifetime: 30,
       fee_rate: "0.05",
       timestamps: { created: CREATED, waiting: CREATED, confirmed: NOW - MINUTE },
       private: { private_key: sealedKey() },
+      payments: [{ txid: "tx-tiny", amount: "1000", first_seen_at: CREATED + MINUTE, confirmations: 1, on_time: true }],
+      status_log: [{ from: "", to: "waiting", at: CREATED }, { from: "waiting", to: "confirmed", at: NOW - MINUTE }],
     });
+    return { invoiceId, address };
+  }
+
+  it("closes a confirmed invoice whose merchant payout is too small: failed, marked, watched for 7 days, and logged", async () => {
+    const userId = await merchant();
+    const { invoiceId, address } = await dustInvoice(userId);
     const chain = fakeChain();
-    chain.pay(`deposit-${invoiceId}`, "tx-tiny", 1_000n);
+    chain.pay(address, "tx-tiny", 1_000n);
 
     await passes(chain, NOW, 1);
 
     const invoice = await invoiceNow(invoiceId);
-    assert.equal(invoice?.status, "confirmed");
+    assert.equal(invoice?.status, "failed");
     assert.equal(invoice?.outcome, "too_small_to_forward");
+    assert.equal(invoice?.timestamps?.failed, NOW);
+    assert.equal(invoice?.watch_until, NOW + WEEK);
+    assert.deepEqual(invoice?.status_log?.at(-1), { from: "confirmed", to: "failed", at: NOW });
+    assert.match(invoice?.review_reason ?? "", new RegExp(`Too small to forward.*1000.*${address}`));
+    assert.equal(chain.broadcastsFor(address).length, 0);
+  });
+
+  it("is no longer retried as a merchant payout once closed", async () => {
+    const userId = await merchant();
+    const { invoiceId, address } = await dustInvoice(userId);
+    const chain = fakeChain();
+    chain.pay(address, "tx-tiny", 1_000n);
+
+    await passes(chain, NOW, 4);
+
+    const invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.status, "failed");
+    assert.equal(invoice?.status_log?.length, 3, "one close, logged once");
+    assert.equal(chain.callsFor(address).filter((r) => r.destinationKind === "merchant_payout").length, 1);
+    assert.equal(chain.broadcastsFor(address).length, 0);
+  });
+
+  it("forwards a closed dust invoice's money together with a top-up that arrives within the 7 days", async () => {
+    const userId = await merchant();
+    const { invoiceId, address } = await dustInvoice(userId);
+    const chain = fakeChain();
+    chain.pay(address, "tx-tiny", 1_000n);
+    await passes(chain, NOW, 1);
+
+    chain.pay(address, "tx-top-up", 40_000n, { seenAt: NOW + DAY });
+    await passes(chain, NOW + DAY + MINUTE, 2);
+
+    const invoice = await invoiceNow(invoiceId);
+    // 41,000: fee 2,050, network 1,000, refund address 37,950
+    assert.deepEqual(routeTransfers(invoice, 1), [
+      ["refund_route", REFUND, "37950", "confirmed"],
+      ["platform_fee", PLATFORM, "2050", "confirmed"],
+    ]);
+    assert.deepEqual(paymentPayouts(invoice), { "tx-tiny": 1, "tx-top-up": 1 });
+    assert.equal(invoice?.outcome, "");
+    assert.equal(invoice?.status, "failed");
+  });
+
+  it("leaves a closed dust invoice's money at the deposit, marked and with its note, when the watch ends", async () => {
+    const userId = await merchant();
+    const { invoiceId, address } = await dustInvoice(userId);
+    const chain = fakeChain();
+    chain.pay(address, "tx-tiny", 1_000n);
+    await passes(chain, NOW, 1);
+
+    await passes(chain, NOW + WEEK + 2 * DAY, 2);
+
+    const invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.watch_done, true);
+    assert.equal(invoice?.outcome, "too_small_to_forward");
+    assert.match(invoice?.review_reason ?? "", new RegExp(`Too small to forward.*${address}`));
+    assert.equal(chain.broadcastsFor(address).length, 0);
   });
 });
 

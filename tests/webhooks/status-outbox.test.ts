@@ -145,6 +145,21 @@ const statusEvents = async (invoiceId: string) =>
   (await outbox(invoiceId)).filter((e) => e.body.event === "invoice.status_changed");
 
 describe("every status change is its own webhook event", () => {
+  it("announces a payout too small to forward as one failed event that carries the outcome", async () => {
+    const { invoiceId, address } = await confirmedInvoice(await merchantWithWebhook());
+    const payments = new Map([[address, [{ txid: `pay-${invoiceId}`, amount: AMOUNT, confirmations: 3 }]]]);
+    const watch = watcher(() => NOW, payments, async () => ({ status: "too_small", reason: "fees exceed it" }));
+
+    await watch();
+    await webhookPass(NOW);
+
+    const events = await outbox(invoiceId);
+    assert.deepEqual(
+      events.map((e) => [e.body.event, e.body.status, e.body.outcome]),
+      [["invoice.status_changed", "failed", "too_small_to_forward"]],
+    );
+  });
+
   it("announces two changes made between two webhook passes as two events, in order", async () => {
     const { invoiceId } = await confirmedInvoice(await merchantWithWebhook());
     const watch = watcher(() => NOW, new Map(), paysAtOnce);

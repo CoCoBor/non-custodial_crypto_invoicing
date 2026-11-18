@@ -534,13 +534,18 @@ describe("paying out", () => {
     );
   });
 
-  it("keeps the invoice confirmed when the deposit is too small to forward", async () => {
+  it("closes the invoice as failed, too small to forward, when the deposit is too small to forward", async () => {
     const { invoiceId } = await confirmedInvoice();
     const { ports } = fakePorts(new Map(), NOW, async () => ({ status: "too_small", reason: "fees exceed it" }));
 
     await runWatcherPass(ports);
 
-    assert.equal((await invoiceNow(invoiceId))?.status, "confirmed");
+    const invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.status, "failed");
+    assert.equal(invoice?.outcome, "too_small_to_forward");
+    assert.equal(invoice?.watch_until, NOW + 7 * 24 * 60 * MINUTE);
+    assert.deepEqual(invoice?.status_log?.at(-1), { from: "confirmed", to: "failed", at: NOW });
+    assert.match(invoice?.review_reason ?? "", /fees exceed it/);
   });
 
   it("writes an adapter's review note without changing the status", async () => {

@@ -366,8 +366,9 @@ describe("a swap-mode invoice paid in BTC, received in USDC", () => {
     await t.pass();
 
     const invoice = await invoiceNow(invoiceId);
-    assert.equal(invoice?.status, "confirmed");
+    assert.equal(invoice?.status, "failed", "closed: the 7-day watch forwards it with any top-up");
     assert.equal(invoice?.outcome, "too_small_to_forward");
+    assert.equal(typeof invoice?.watch_until, "number");
     assert.deepEqual(invoice?.transfers ?? [], []);
     assert.deepEqual(t.chain.broadcastsFrom(address), []);
   });

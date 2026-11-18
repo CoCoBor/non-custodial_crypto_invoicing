@@ -472,6 +472,10 @@ async function recordPayoutResult(
   const now = ports.now();
   const open = { invoice_id: invoiceId, status: PAYING_OUT };
 
+  if (result.status === "too_small" && invoice.status === "confirmed") {
+    return await closeTooSmall(invoice, result.reason, now);
+  }
+
   switch (result.status) {
     case "pending":
     case "too_small": {
@@ -546,6 +550,32 @@ async function recordPayoutResult(
       return;
     }
   }
+}
+
+/**
+ * Ends an invoice whose money is too small to forward (spec story 58): it
+ * stays at the deposit, marked, and the invoice is handed to the 7-day
+ * closed-invoice watch, which forwards it together with any money that
+ * arrives in time. Retrying it as a merchant payout every pass never ended.
+ * The outcome rides on the status event, as with "expired, partially paid".
+ */
+async function closeTooSmall(invoice: PayoutInvoice, reason: string, now: number): Promise<void> {
+  const until = watchUntil(now);
+  const received = totalOf(invoice.payments ?? []);
+  const result = await Invoice.updateOne(
+    { invoice_id: invoice.invoice_id, status: "confirmed" },
+    {
+      $set: {
+        status: "failed",
+        "timestamps.failed": now,
+        outcome: "too_small_to_forward",
+        watch_until: until,
+        review_reason: `Too small to forward (${reason}): ${received} (smallest ${invoice.crypto} units) stays at deposit address ${invoice.address}. Until ${new Date(until).toISOString()} the watcher forwards it together with any money that arrives; after that, only a person with the deposit key can move it.`,
+      },
+      ...logStatusChange("confirmed", "failed", now),
+    },
+  ).exec();
+  if (result.matchedCount === 1) console.warn("Too small to forward; invoice closed:", invoice.invoice_id);
 }
 
 /**
