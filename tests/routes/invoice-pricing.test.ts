@@ -271,7 +271,8 @@ describe("an invoice priced in crypto", () => {
     const inBtc = await createInvoice(m.apiKey, { amount: "0.001", currency: "btc", mode: "merchant_list" });
     assert.equal(inLtc.status, 201);
     assert.deepEqual(inLtc.body.data.price, { unit: "btc", amount: "0.001" });
-    assert.deepEqual(priceCalls, [], "no price is locked before the payer picks a coin");
+    // Prices are looked at for the minimum check, but no rate is locked before the payer picks a coin.
+    assert.equal((await invoiceInDb(inLtc.body.data.invoiceId))?.locked_rate ?? null, null);
 
     const ltcChoice = await choose(inLtc.body.data.invoiceId, "ltc");
     const btcChoice = await choose(inBtc.body.data.invoiceId, "btc");
@@ -290,7 +291,7 @@ describe("a merchant's-list invoice priced in fiat", () => {
     const created = await createInvoice(m.apiKey, { amount: "25", currency: "eur", mode: "merchant_list" });
     assert.equal(created.status, 201);
     assert.deepEqual(created.body.data.price, { unit: "eur", amount: "25" });
-    assert.deepEqual(fxCalls, [], "the rate is locked at the choice, not at creation");
+    assert.equal((await invoiceInDb(created.body.data.invoiceId))?.locked_rate ?? null, null, "the rate is locked at the choice, not at creation");
 
     const choice = await choose(created.body.data.invoiceId, "btc");
 

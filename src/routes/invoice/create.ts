@@ -11,6 +11,7 @@ import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new
 import { DepositUnavailableError } from "../../chains/adapter.js";
 import type { AppDeps } from "../../app.js";
 import { DEFAULT_SWAP_MAX_LOSS_BPS } from "../../invoice/swap-payout.js";
+import { coinsAtLeastMinimum, isBelowMinimum, refuseBelowMinimum } from "../../invoice/minimum-amount.js";
 
 const commonFields = {
   amount: z.string().trim().min(1).max(100),
@@ -84,6 +85,19 @@ function parsePrice(
   return { unit, units };
 }
 
+function everyCoinBelowMinimum(res: Response) {
+  return res.status(400).json({
+    error: {
+      code: "AMOUNT_BELOW_MINIMUM",
+      message: "for every coin offered, the payer would be asked for less than its minimum invoice amount",
+    },
+  });
+}
+
+function pricing(price: { unit: PriceUnit; units: bigint }, feePaidByPayer: boolean, merchant: Merchant, deps: AppDeps) {
+  return { unit: price.unit, priceUnits: price.units, feePaidByPayer, feeRate: merchant.merchant_fee, deps, now: Date.now() };
+}
+
 export function createInvoiceRouter(deps: AppDeps) {
   const router = Router();
 
@@ -97,7 +111,7 @@ export function createInvoiceRouter(deps: AppDeps) {
         message: "merchant key is missing or invalid",
       });
 
-    if (req.body?.mode === "merchant_list") return await createMerchantListInvoice(req, res, merchant);
+    if (req.body?.mode === "merchant_list") return await createMerchantListInvoice(req, res, merchant, deps);
     if (req.body?.mode === "swap") return await createSwapInvoice(req, res, merchant, deps);
     return await createFixedCoinInvoice(req, res, merchant, deps);
   });
@@ -188,6 +202,7 @@ async function createFixedCoinInvoice(
     estimateNetworkCost: deps.estimateNetworkCost,
   });
   if (typeof askedAmount !== "bigint") return refuseWithoutEstimate(res, depositAsset, askedAmount);
+  if (isBelowMinimum(depositAsset, askedAmount)) return refuseBelowMinimum(res, depositAsset, askedAmount);
 
   const deposit = await newDepositOrUnavailable(chain);
   if (deposit instanceof DepositUnavailableError) return refuseWithoutDeposit(res, deposit);
@@ -216,7 +231,7 @@ async function createFixedCoinInvoice(
 
 // The payer picks the coin later, on the payment page. Offered: the coins
 // the merchant has a valid payout address for that can be paid end to end.
-async function createMerchantListInvoice(req: Request, res: Response, merchant: Merchant) {
+async function createMerchantListInvoice(req: Request, res: Response, merchant: Merchant, deps: AppDeps) {
   const parsed = merchantListSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
   const { lifetime, underpaid, coins, fee_paid_by_payer } = parsed.data;
@@ -224,12 +239,12 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
   if (price === undefined) return res;
 
   const requested: readonly string[] = coins ?? depositAssets();
-  const offeredCoins = depositAssets().filter(
+  const payable = depositAssets().filter(
     (coin) =>
       requested.includes(coin) &&
       checkPayoutAddress(coin, merchant.payout_addresses?.[coin]) === "valid",
   );
-  if (offeredCoins.length === 0) {
+  if (payable.length === 0) {
     return res.status(409).json({
       error: {
         code: "NO_COINS_AVAILABLE",
@@ -237,6 +252,8 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
       },
     });
   }
+  const offeredCoins = await coinsAtLeastMinimum({ coins: payable, ...pricing(price, fee_paid_by_payer, merchant, deps) });
+  if (offeredCoins.length === 0) return everyCoinBelowMinimum(res);
 
   const invoice = await invoiceRepo.createMerchantListInvoice({
     userId: merchant.user_id,
@@ -279,14 +296,16 @@ async function createSwapInvoice(req: Request, res: Response, merchant: Merchant
   }
 
   const requested: readonly string[] = coins ?? deposits;
-  const offeredCoins = deposits.filter(
+  const payable = deposits.filter(
     (coin) => requested.includes(coin) && (coin === receive || swappable.includes(coin)),
   );
-  if (offeredCoins.length === 0) {
+  if (payable.length === 0) {
     return res.status(409).json({
       error: { code: "NO_COINS_AVAILABLE", message: `none of these coins can be paid out as ${receive}` },
     });
   }
+  const offeredCoins = await coinsAtLeastMinimum({ coins: payable, ...pricing(price, fee_paid_by_payer, merchant, deps) });
+  if (offeredCoins.length === 0) return everyCoinBelowMinimum(res);
 
   const maxLoss = merchant.swap_max_loss_bps;
   const invoice = await invoiceRepo.createMerchantListInvoice({

@@ -11,6 +11,7 @@ import { cancelIfUnpaid } from "../../invoice/cancel.js";
 import { coinOptions, recordChosenCoin } from "../../invoice/invoice.repository.js";
 import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new-deposit.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
+import { isBelowMinimum, minInvoiceAmount } from "../../invoice/minimum-amount.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
 import { lockPrice, lockedRateView, parsePriceUnit, priceView, type LockedRate } from "../../invoice/pricing.js";
 import { publicRateLimit } from "../../middleware/public-rate-limit.js";
@@ -179,6 +180,9 @@ export function createPayRouter(deps: AppDeps) {
       estimateNetworkCost: deps.estimateNetworkCost,
     });
     if (typeof asked !== "bigint") return refuseWithoutEstimate(res, coin, asked);
+    if (isBelowMinimum(coin, asked)) {
+      return conflict(res, "COIN_BELOW_MINIMUM", `at today's price this invoice is below the ${coin} minimum of ${minInvoiceAmount(coin)} smallest units; choose another coin`);
+    }
 
     const deposit = await newDepositOrUnavailable(chain);
     if (deposit instanceof DepositUnavailableError) return refuseWithoutDeposit(res, deposit);
