@@ -42,7 +42,7 @@ import { createSolanaRpc, type SolanaRpc } from "../../../src/chains/solana-rpc.
 // Slots are shortened (--ticks-per-slot), so "finalized" (about 32 slots
 // behind) and a blockhash's expiry (150 blocks) come within seconds.
 
-const TICKS_PER_SLOT = 8;
+const TICKS_PER_SLOT = 4;
 
 const INSTALL_HINT =
   "solana-test-validator was not found, so the Solana payout tests are skipped. " +
