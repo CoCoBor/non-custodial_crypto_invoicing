@@ -46,7 +46,7 @@ async function getBtcNetworkFee(api: BlockbookApi) {
 
   const parsed = z.object({ result: z.string() }).safeParse(await res);
   if (!parsed.success) {
-    console.warn("Unexpected Blockbook UTXO response: ", parsed.error.message);
+    console.warn("Unexpected Blockbook fee-estimate response: ", parsed.error.message);
     return undefined;
   }
 
