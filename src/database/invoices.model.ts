@@ -76,6 +76,21 @@ const refundRouteSchema = new Schema(
   { _id: false },
 );
 
+// The rates the coin amount was worked out with, locked when the coin was
+// chosen (see LockedRate in src/invoice/pricing.ts). Times are unix ms.
+const lockedRateSchema = new Schema(
+  {
+    locked_at: { type: Number, required: true },
+    coin_price_usd: { type: String, default: null },
+    coin_price_usd_at: { type: Number, default: null },
+    fiat_per_usd: { type: String, default: null },
+    fiat_per_usd_at: { type: Number, default: null },
+    price_asset_price_usd: { type: String, default: null },
+    price_asset_price_usd_at: { type: Number, default: null },
+  },
+  { _id: false },
+);
+
 const invoiceSchema = new Schema(
   {
     invoice_id: { type: String, required: true },
@@ -87,10 +102,11 @@ const invoiceSchema = new Schema(
     lifetime: { type: Number, default: 0 }, // lifetime in minutes within 1-60 minutes, default: 30
     underpaid: { type: Number, default: 0 }, // Allowed underpayment percentage before invoice is considered unpaid, default: 0
     fee_paid_by_payer: { type: Boolean, default: false }, // false = merchant covers transaction + platform fees, true = payer covers transaction + platform fees, default = false
-    currency: { type: String, default: "usd" }, // invoice currency
+    currency: { type: String, default: "usd" }, // invoice currency: the price unit, a fiat code (src/storage/currencies.ts) or an asset id
     amount: { type: String, required: true }, // invoice amount
     asked_amount: { type: String, default: "" }, // what the payer is asked to send: amount, plus the fees in payer-pays mode; see askedAmount()
-    amount_fiat: { type: String, required: true }, // invoice amount in the invoice currency
+    amount_fiat: { type: String, required: true }, // invoice amount in the invoice currency, in its smallest units (cents; satoshi for a BTC price)
+    locked_rate: { type: lockedRateSchema, default: null }, // null until the coin is chosen
     paid_amount: { type: String, default: "0" }, // amount payer paid
     paid_amount_fiat: { type: Number, default: 0 }, // amount payer paid in the invoice currency
     remainder_amount: { type: Number, default: 0 }, // amount payer must pay for invoice to be confirmed

@@ -9,14 +9,12 @@ import { DepositUnavailableError } from "../../chains/adapter.js";
 import { adapterFor } from "../../chains/registry.js";
 import { cancelIfUnpaid } from "../../invoice/cancel.js";
 import { recordChosenCoin } from "../../invoice/invoice.repository.js";
-import { intToDecimalStr } from "../../invoice/money.function.js";
 import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new-deposit.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
-import { getUsdToCrypto } from "../../invoice/price.function.js";
+import { lockPrice, lockedRateView, parsePriceUnit, priceView, type LockedRate } from "../../invoice/pricing.js";
 import { publicRateLimit } from "../../middleware/public-rate-limit.js";
 import { answerCancel } from "../cancel-response.js";
-import cryptos from "../../storage/cryptos.json" with { type: "json" };
 
 // The payer's page. No login: the invoice id (a random UUID) is the key, so
 // nothing here may show the merchant's details or payout addresses.
@@ -32,6 +30,7 @@ type PayerInvoice = {
   offered_coins?: string[] | null;
   currency?: string | null;
   amount_fiat: string;
+  locked_rate?: Partial<LockedRate> | null;
   crypto?: string | null;
   address?: string | null;
   amount: string;
@@ -56,6 +55,8 @@ function payerView(invoice: PayerInvoice) {
     mode: invoice.mode,
     currency: invoice.currency,
     amountFiat: invoice.amount_fiat,
+    price: priceView(invoice),
+    lockedRate: lockedRateView(invoice.locked_rate),
     expiresAt: new Date(expiresAt(invoice)).toISOString(),
     coins: invoice.mode === "merchant_list" && !chosen ? invoice.offered_coins ?? [] : [],
     payment: chosen
@@ -134,27 +135,28 @@ export function createPayRouter(deps: AppDeps) {
       return conflict(res, "COIN_NOT_OFFERED", "this coin is not offered for this invoice");
     }
 
-    const price = await deps.getPrice(coin, "usd");
-    if (price === undefined) {
+    // The rate is locked now, at the choice (spec story 47).
+    const unit = parsePriceUnit(invoice.currency ?? undefined);
+    const payment =
+      unit === undefined
+        ? "price_unavailable"
+        : await lockPrice({
+            unit,
+            priceUnits: BigInt(invoice.amount_fiat),
+            coin,
+            getPrice: deps.getPrice,
+            getUsdToFiat: deps.getUsdToFiat,
+            now,
+          });
+    if (payment === "price_unavailable") {
       return res.status(503).json({
         error: { code: "PRICE_UNAVAILABLE", message: "no valid price" },
-      });
-    }
-    const payment = getUsdToCrypto({
-      fiatAmount: intToDecimalStr(BigInt(invoice.amount_fiat), 2),
-      fiatDecimals: 2,
-      coinPrice: price,
-      coinDecimals: cryptos[coin].decimal,
-    });
-    if (payment === undefined) {
-      return res.status(400).json({
-        error: { code: "INVALID_PAYMENT", message: "no valid payment" },
       });
     }
 
     const asked = await askedAmountFor({
       coin,
-      invoiceAmount: payment.paymentUnits,
+      invoiceAmount: payment.amount,
       feePaidByPayer: invoice.fee_paid_by_payer === true,
       merchantFee: invoice.fee_rate || merchant.merchant_fee,
       estimateNetworkCost: deps.estimateNetworkCost,
@@ -166,8 +168,9 @@ export function createPayRouter(deps: AppDeps) {
     const recorded = await recordChosenCoin({
       invoiceId: invoice.invoice_id,
       crypto: coin,
-      amount: payment.paymentUnits,
+      amount: payment.amount,
       askedAmount: asked,
+      lockedRate: payment.rate,
       deposit,
       payoutAddress,
       now,

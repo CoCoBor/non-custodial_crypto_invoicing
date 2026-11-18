@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type { NewDeposit } from "../chains/adapter.js";
 import { Invoice } from "../database/invoices.model.js";
+import { lockedRateView, priceView, type LockedRate, type PriceUnit } from "./pricing.js";
 import { watchUntil } from "./watch-window.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 
@@ -17,7 +18,9 @@ export async function createInvoice(input: {
   paymentUnits: bigint;
   askedAmount: bigint;
   feePaidByPayer: boolean;
-  fiatUnits: bigint;
+  priceUnit: PriceUnit;
+  priceUnits: bigint;
+  lockedRate: LockedRate;
   deposit: NewDeposit;
   crypto: string;
   payoutAddress: string;
@@ -33,11 +36,12 @@ export async function createInvoice(input: {
     invoice_id: invoiceId,
     user_id: input.userId,
     status: "waiting",
-    currency: "usd",
+    currency: input.priceUnit,
     crypto: input.crypto,
     amount: input.paymentUnits.toString(),
     asked_amount: input.askedAmount.toString(),
-    amount_fiat: input.fiatUnits.toString(),
+    amount_fiat: input.priceUnits.toString(),
+    locked_rate: input.lockedRate,
     paid_amount: "0",
     address: input.deposit.address,
     ...depositKeyFields(input.deposit),
@@ -73,6 +77,8 @@ export async function createInvoice(input: {
     askedAmount: result.asked_amount,
     feePaidByPayer: result.fee_paid_by_payer,
     amountFiat: amount_fiat,
+    price: priceView(result),
+    lockedRate: lockedRateView(result.locked_rate),
     address,
     lifetime,
     createdAt: timestamps?.created,
@@ -85,7 +91,8 @@ export async function createInvoice(input: {
 /** An invoice whose coin the payer picks later: no deposit address yet. */
 export async function createMerchantListInvoice(input: {
   userId: string;
-  fiatUnits: bigint;
+  priceUnit: PriceUnit;
+  priceUnits: bigint;
   offeredCoins: string[];
   lifetime: number;
   underpaid: number;
@@ -102,10 +109,10 @@ export async function createMerchantListInvoice(input: {
     mode: "merchant_list",
     fee_rate: input.feeRate,
     offered_coins: input.offeredCoins,
-    currency: "usd",
+    currency: input.priceUnit,
     amount: "0",
     asked_amount: "0",
-    amount_fiat: input.fiatUnits.toString(),
+    amount_fiat: input.priceUnits.toString(),
     paid_amount: "0",
     lifetime: input.lifetime,
     underpaid: input.underpaid,
@@ -120,6 +127,7 @@ export async function createMerchantListInvoice(input: {
     mode: result.mode,
     currency: result.currency,
     amountFiat: result.amount_fiat,
+    price: priceView(result),
     offeredCoins: result.offered_coins,
     feePaidByPayer: result.fee_paid_by_payer,
     lifetime: result.lifetime,
@@ -134,6 +142,7 @@ export async function recordChosenCoin(input: {
   crypto: string;
   amount: bigint;
   askedAmount: bigint;
+  lockedRate: LockedRate;
   deposit: NewDeposit;
   payoutAddress: string;
   now: number;
@@ -146,6 +155,7 @@ export async function recordChosenCoin(input: {
         to_crypto: input.crypto,
         amount: input.amount.toString(),
         asked_amount: input.askedAmount.toString(),
+        locked_rate: input.lockedRate,
         address: input.deposit.address,
         ...(input.deposit.key.kind === "sealed_key"
           ? { "private.private_key": input.deposit.key.sealed }

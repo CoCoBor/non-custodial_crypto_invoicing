@@ -2,12 +2,10 @@ import { Router, type Request, type Response } from "express";
 import { z } from "zod";
 import { requireMerchantKey } from "../../middleware/require-merchant-key.js";
 import { ASSET_IDS, checkPayoutAddress } from "../../assets/payout-address.js";
-import * as priceFunc from "../../invoice/price.function.js";
-import cryptos from "../../storage/cryptos.json" with { type: "json" };
 import * as invoiceRepo from "../../invoice/invoice.repository.js";
 import { adapterFor, depositAssets } from "../../chains/registry.js";
 import { toleranceBasisPoints } from "../../invoice/payment-rules.js";
-import { decimalStrToBigInt } from "../../invoice/money.function.js";
+import { lockPrice, parsePriceAmount, parsePriceUnit, type PriceUnit } from "../../invoice/pricing.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new-deposit.js";
 import { DepositUnavailableError } from "../../chains/adapter.js";
@@ -15,6 +13,7 @@ import type { AppDeps } from "../../app.js";
 
 const commonFields = {
   amount: z.string().trim().min(1).max(100),
+  currency: z.string().max(20).optional(),
   lifetime: z.number().int().min(1).max(60).default(30),
   underpaid: z
     .number()
@@ -42,6 +41,39 @@ function invalidRequest(res: Response) {
   return res.status(400).json({
     error: { code: "INVALID_REQUEST", message: "request body is invalid" },
   });
+}
+
+function unsupportedCurrency(res: Response) {
+  return res.status(400).json({
+    error: {
+      code: "UNSUPPORTED_CURRENCY",
+      message: "currency must be USD, EUR, GBP, INR, PKR, VND, BRL, NGN, IDR, UAH, PHP, MYR or an asset id",
+    },
+  });
+}
+
+function invalidPayment(res: Response) {
+  return res.status(400).json({
+    error: { code: "INVALID_PAYMENT", message: "no valid payment" },
+  });
+}
+
+/** The price unit and the price in its smallest units, or the 400 already sent. */
+function parsePrice(
+  res: Response,
+  body: { currency?: string; amount: string },
+): { unit: PriceUnit; units: bigint } | undefined {
+  const unit = parsePriceUnit(body.currency);
+  if (unit === undefined) {
+    unsupportedCurrency(res);
+    return undefined;
+  }
+  const units = parsePriceAmount(unit, body.amount);
+  if (units === undefined) {
+    invalidPayment(res);
+    return undefined;
+  }
+  return { unit, units };
 }
 
 export function createInvoiceRouter(deps: AppDeps) {
@@ -74,7 +106,9 @@ async function createFixedCoinInvoice(
   const parsed = fixedCoinSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
 
-  const { amount, lifetime, crypto, to_crypto, underpaid, fee_paid_by_payer } = parsed.data;
+  const { lifetime, crypto, to_crypto, underpaid, fee_paid_by_payer } = parsed.data;
+  const price = parsePrice(res, parsed.data);
+  if (price === undefined) return res;
 
   // Fixed-coin invoices can only take BTC deposits today; never quietly make
   // a BTC invoice for a payer who was told to pay something else.
@@ -121,9 +155,16 @@ async function createFixedCoinInvoice(
   }
 
   const depositAsset = chain.asset;
-  const price = await deps.getPrice(depositAsset, "usd");
+  const payment = await lockPrice({
+    unit: price.unit,
+    priceUnits: price.units,
+    coin: depositAsset,
+    getPrice: deps.getPrice,
+    getUsdToFiat: deps.getUsdToFiat,
+    now: Date.now(),
+  });
 
-  if (price === undefined)
+  if (payment === "price_unavailable")
     return res.status(503).json({
       error: {
         code: "PRICE_UNAVAILABLE",
@@ -131,24 +172,9 @@ async function createFixedCoinInvoice(
       },
     });
 
-  const payment = priceFunc.getUsdToCrypto({
-    fiatAmount: amount,
-    fiatDecimals: 2,
-    coinPrice: price,
-    coinDecimals: cryptos[depositAsset].decimal,
-  }); //return paymentUnits & fiatUnits
-
-  if (payment === undefined)
-    return res.status(400).json({
-      error: {
-        code: "INVALID_PAYMENT",
-        message: "no valid payment",
-      },
-    });
-
   const askedAmount = await askedAmountFor({
     coin: depositAsset,
-    invoiceAmount: payment.paymentUnits,
+    invoiceAmount: payment.amount,
     feePaidByPayer: fee_paid_by_payer,
     merchantFee: merchant.merchant_fee,
     estimateNetworkCost: deps.estimateNetworkCost,
@@ -160,10 +186,12 @@ async function createFixedCoinInvoice(
 
   const invoice = await invoiceRepo.createInvoice({
     userId: merchant.user_id,
-    paymentUnits: payment.paymentUnits,
+    paymentUnits: payment.amount,
     askedAmount,
     feePaidByPayer: fee_paid_by_payer,
-    fiatUnits: payment.fiatUnits,
+    priceUnit: price.unit,
+    priceUnits: price.units,
+    lockedRate: payment.rate,
     deposit,
     crypto: depositAsset,
     payoutAddress,
@@ -183,14 +211,9 @@ async function createFixedCoinInvoice(
 async function createMerchantListInvoice(req: Request, res: Response, merchant: Merchant) {
   const parsed = merchantListSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
-  const { amount, lifetime, underpaid, coins, fee_paid_by_payer } = parsed.data;
-
-  const fiatUnits = decimalStrToBigInt(amount, 2);
-  if (fiatUnits === undefined || fiatUnits <= 0n) {
-    return res.status(400).json({
-      error: { code: "INVALID_PAYMENT", message: "no valid payment" },
-    });
-  }
+  const { lifetime, underpaid, coins, fee_paid_by_payer } = parsed.data;
+  const price = parsePrice(res, parsed.data);
+  if (price === undefined) return res;
 
   const requested: readonly string[] = coins ?? depositAssets();
   const offeredCoins = depositAssets().filter(
@@ -209,7 +232,8 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
 
   const invoice = await invoiceRepo.createMerchantListInvoice({
     userId: merchant.user_id,
-    fiatUnits,
+    priceUnit: price.unit,
+    priceUnits: price.units,
     offeredCoins,
     lifetime,
     underpaid,

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireMerchantKey } from "../../middleware/require-merchant-key.js";
 import { findInvoiceById } from "../../invoice/invoice.function.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
+import { lockedRateView, priceView } from "../../invoice/pricing.js";
 
 export const invoiceStatusRouter = Router();
 
@@ -62,6 +63,8 @@ invoiceStatusRouter.get("/:id", requireMerchantKey, async (req, res) => {
       askedAmount: askedAmount(invoice).toString(),
       feePaidByPayer: invoice.fee_paid_by_payer ?? false,
       amountFiat: invoice.amount_fiat,
+      price: priceView(invoice),
+      lockedRate: lockedRateView(invoice.locked_rate),
       paidAmount: invoice.paid_amount,
       address: invoice.address,
       lifetime: invoice.lifetime,

@@ -204,6 +204,43 @@ describe("turning status changes into webhooks", () => {
     assert.equal(merchantPaysBody.feePaidByPayer, false);
   });
 
+  it("includes the price and the rate locked when the coin was chosen", async () => {
+    const userId = await merchant();
+    const inEur = await invoiceOf(userId, "confirmed");
+    const beforeRates = await invoiceOf(userId, "confirmed");
+    const lockedRate = {
+      locked_at: NOW - MINUTE,
+      coin_price_usd: "50000",
+      coin_price_usd_at: NOW - MINUTE,
+      fiat_per_usd: "0.8",
+      fiat_per_usd_at: NOW - 60 * MINUTE,
+      price_asset_price_usd: null,
+      price_asset_price_usd_at: null,
+    };
+    await db.collection("invoices").updateOne(
+      { invoice_id: inEur },
+      { $set: { currency: "eur", amount_fiat: "4000", locked_rate: lockedRate } },
+    );
+
+    await runWebhookPass(ports());
+
+    const body = JSON.parse(forInvoice(inEur)[0]!.body);
+    assert.deepEqual(body.price, { unit: "eur", amount: "40" });
+    assert.deepEqual(body.lockedRate, {
+      lockedAt: NOW - MINUTE,
+      coinPriceUsd: "50000",
+      coinPriceUsdAt: NOW - MINUTE,
+      fiatPerUsd: "0.8",
+      fiatPerUsdAt: NOW - 60 * MINUTE,
+      priceAssetPriceUsd: null,
+      priceAssetPriceUsdAt: null,
+    });
+    // Made before the price unit and the rate were stored: USD, no rate.
+    const olderBody = JSON.parse(forInvoice(beforeRates)[0]!.body);
+    assert.deepEqual(olderBody.price, { unit: "usd", amount: "25" });
+    assert.equal(olderBody.lockedRate, null);
+  });
+
   it("sends nothing for a merchant without a webhook URL", async () => {
     const invoiceId = await invoiceOf(await merchant(""), "confirmed");
 

@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { Invoice } from "../database/invoices.model.js";
 import { askedAmount } from "../invoice/payment-rules.js";
+import { lockedRateView, priceView, type LockedRate } from "../invoice/pricing.js";
 import { User } from "../database/users.model.js";
 import { WebhookEvent } from "../database/webhook-event.model.js";
 import { openSecret } from "../security/secret-envelope.js";
@@ -48,7 +49,7 @@ export function refundRouteEventId(invoiceId: string, route: number): string {
 }
 
 const INVOICE_FIELDS =
-  "invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer amount_fiat paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id";
+  "invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer currency amount_fiat locked_rate paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id";
 
 type InvoiceSummary = {
   invoice_id: string;
@@ -59,7 +60,9 @@ type InvoiceSummary = {
   amount: string;
   asked_amount?: string | null;
   fee_paid_by_payer?: boolean | null;
+  currency?: string | null;
   amount_fiat: string;
+  locked_rate?: Partial<LockedRate> | null;
   paid_amount?: string | null;
   platform_fee?: string | null;
   network_fee?: string | null;
@@ -78,6 +81,8 @@ function invoiceBody(invoice: InvoiceSummary) {
     askedAmount: askedAmount(invoice).toString(),
     feePaidByPayer: invoice.fee_paid_by_payer ?? false,
     amountFiat: invoice.amount_fiat,
+    price: priceView(invoice),
+    lockedRate: lockedRateView(invoice.locked_rate),
     paidAmount: invoice.paid_amount,
     platformFee: invoice.platform_fee,
     networkFee: invoice.network_fee,
