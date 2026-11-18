@@ -12,6 +12,7 @@ import { DepositUnavailableError } from "../../chains/adapter.js";
 import type { AppDeps } from "../../app.js";
 import { DEFAULT_SWAP_MAX_LOSS_BPS } from "../../invoice/swap-payout.js";
 import { coinsAtLeastMinimum, isBelowMinimum, refuseBelowMinimum } from "../../invoice/minimum-amount.js";
+import { returnUrlSchema } from "../../invoice/return-url.js";
 
 const commonFields = {
   amount: z.string().trim().min(1).max(100),
@@ -22,6 +23,7 @@ const commonFields = {
     .refine((percent) => toleranceBasisPoints(percent) !== undefined)
     .default(0),
   fee_paid_by_payer: z.boolean().default(false),
+  return_url: returnUrlSchema.optional(),
 };
 
 const fixedCoinSchema = z.object({
@@ -128,7 +130,7 @@ async function createFixedCoinInvoice(
   const parsed = fixedCoinSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
 
-  const { lifetime, crypto, to_crypto, underpaid, fee_paid_by_payer } = parsed.data;
+  const { lifetime, crypto, to_crypto, underpaid, fee_paid_by_payer, return_url } = parsed.data;
   const price = parsePrice(res, parsed.data);
   if (price === undefined) return res;
 
@@ -222,6 +224,7 @@ async function createFixedCoinInvoice(
     lifetime,
     underpaid,
     feeRate: merchant.merchant_fee,
+    returnUrl: return_url,
   });
 
   return res.status(201).json({
@@ -234,7 +237,7 @@ async function createFixedCoinInvoice(
 async function createMerchantListInvoice(req: Request, res: Response, merchant: Merchant, deps: AppDeps) {
   const parsed = merchantListSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
-  const { lifetime, underpaid, coins, fee_paid_by_payer } = parsed.data;
+  const { lifetime, underpaid, coins, fee_paid_by_payer, return_url } = parsed.data;
   const price = parsePrice(res, parsed.data);
   if (price === undefined) return res;
 
@@ -264,6 +267,7 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
     underpaid,
     feePaidByPayer: fee_paid_by_payer,
     feeRate: merchant.merchant_fee,
+    returnUrl: return_url,
   });
 
   return res.status(201).json({ data: invoice });
@@ -275,7 +279,7 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
 async function createSwapInvoice(req: Request, res: Response, merchant: Merchant, deps: AppDeps) {
   const parsed = swapSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);
-  const { lifetime, underpaid, coins, fee_paid_by_payer, to_crypto: receive } = parsed.data;
+  const { lifetime, underpaid, coins, fee_paid_by_payer, to_crypto: receive, return_url } = parsed.data;
   const price = parsePrice(res, parsed.data);
   if (price === undefined) return res;
 
@@ -317,6 +321,7 @@ async function createSwapInvoice(req: Request, res: Response, merchant: Merchant
     underpaid,
     feePaidByPayer: fee_paid_by_payer,
     feeRate: merchant.merchant_fee,
+    returnUrl: return_url,
     swap: {
       receiveCrypto: receive,
       receiveAddress,

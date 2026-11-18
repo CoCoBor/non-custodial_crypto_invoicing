@@ -29,6 +29,7 @@ export async function createInvoice(input: {
   lifetime: number;
   underpaid: number;
   feeRate: string;
+  returnUrl?: string;
 }) {
   const invoiceId = randomUUID();
   const now = Date.now();
@@ -54,6 +55,7 @@ export async function createInvoice(input: {
     link: `/pay/${invoiceId}`,
     fee_paid_by_payer: input.feePaidByPayer,
     fee_rate: input.feeRate,
+    return_url: input.returnUrl ?? "",
     timestamps: { created: now, waiting: now },
     status_log: [{ from: "", to: "waiting", at: now }],
   });
@@ -87,6 +89,7 @@ export async function createInvoice(input: {
     toCrypto: result.to_crypto,
     toAddress: result.to_address,
     link: result.link,
+    returnUrl: result.return_url || null,
   };
 }
 
@@ -109,6 +112,7 @@ export async function createMerchantListInvoice(input: {
   underpaid: number;
   feePaidByPayer: boolean;
   feeRate: string;
+  returnUrl?: string;
   swap?: { receiveCrypto: string; receiveAddress: string; maxLossBps: number };
 }) {
   const invoiceId = randomUUID();
@@ -132,6 +136,7 @@ export async function createMerchantListInvoice(input: {
     underpaid: input.underpaid,
     fee_paid_by_payer: input.feePaidByPayer,
     link: `/pay/${invoiceId}`,
+    return_url: input.returnUrl ?? "",
     timestamps: { created: now, waiting: now },
     status_log: [{ from: "", to: "waiting", at: now }],
   });
@@ -153,6 +158,7 @@ export async function createMerchantListInvoice(input: {
     lifetime: result.lifetime,
     createdAt: now,
     link: result.link,
+    returnUrl: result.return_url || null,
   };
 }
 

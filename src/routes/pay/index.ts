@@ -13,6 +13,7 @@ import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import { isBelowMinimum, minInvoiceAmount } from "../../invoice/minimum-amount.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
+import { returnUrlForPayer } from "../../invoice/return-url.js";
 import { lockPrice, lockedRateView, parsePriceUnit, priceView, type LockedRate } from "../../invoice/pricing.js";
 import { publicRateLimit } from "../../middleware/public-rate-limit.js";
 import { answerCancel } from "../cancel-response.js";
@@ -42,6 +43,7 @@ type PayerInvoice = {
   paid_amount?: string | null;
   lifetime: number;
   timestamps?: { waiting?: number | null; created?: number | null } | null;
+  return_url?: string | null;
 };
 
 function expiresAt(invoice: PayerInvoice): number {
@@ -64,6 +66,7 @@ function payerView(invoice: PayerInvoice) {
     price: priceView(invoice),
     lockedRate: lockedRateView(invoice.locked_rate),
     expiresAt: new Date(expiresAt(invoice)).toISOString(),
+    returnUrl: returnUrlForPayer(invoice),
     coins,
     ...(isSwapMode && {
       receiveCrypto: invoice.to_crypto,
