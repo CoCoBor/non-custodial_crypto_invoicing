@@ -565,8 +565,21 @@ export async function getPrice(
 
   if (!asset) return undefined;
 
-  const coin = asset.symbol.toLowerCase();
+  return await priceOfCoin(asset.symbol.toLowerCase(), currency);
+}
 
+/**
+ * The price of TRX, which payers can't pay with (it is not in cryptos.json):
+ * Tron USDT payouts burn it for their network fees.
+ */
+export async function getTrxPrice(currency: Currency): Promise<string | undefined> {
+  return await priceOfCoin("trx", currency);
+}
+
+async function priceOfCoin(
+  coin: string,
+  currency: Currency,
+): Promise<string | undefined> {
   // A same-asset unit conversion; it does not mean USDT equals USD.
   if (coin === currency) return "1";
 

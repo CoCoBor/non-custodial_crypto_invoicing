@@ -4,6 +4,7 @@ import { Address as TonAddress } from "@ton/core";
 import litecore from "bitcore-lib-ltc";
 import { getAddress, isAddress } from "ethers";
 // Type only: importing the module itself would loop (secret-envelope imports env).
+import { isValidTronAddress } from "../chains/tron-address.js";
 import type { SealedSecret } from "../security/secret-envelope.js";
 
 
@@ -131,6 +132,23 @@ export const env = Object.freeze({
     process.env.TON_GAS_WALLET_KEY,
   ),
 
+  // Receives the platform fee for USDT on Tron. Optional so the server
+  // starts without it: Tron payouts wait (with a review note) until it is
+  // set. Address only.
+  platformTrxAddress: readOptionalTronAddress(
+    "PLATFORM_TRX_ADDRESS",
+    process.env.PLATFORM_TRX_ADDRESS,
+  ),
+
+  // The Tron gas wallet: a hot wallet that sends a USDT deposit the TRX its
+  // payout burns. Sealed with DATA_ENCRYPTION_KEY. Create it with
+  // `npx tsx src/scripts/create-tron-gas-wallet.ts`. Optional: USDT payouts
+  // on Tron wait (with a review note) until it is set.
+  trxGasWalletKey: readOptionalSealedSecret(
+    "TRX_GAS_WALLET_KEY",
+    process.env.TRX_GAS_WALLET_KEY,
+  ),
+
   nearIntentsJwt: readRequiredString("NEAR_INTENTS", process.env.NEAR_INTENTS),
 });
 
@@ -154,6 +172,15 @@ function readEthAddress(name: string, value: string | undefined): string {
 
 function readOptionalEthAddress(name: string, value: string | undefined): string | undefined {
   return value?.trim() ? readEthAddress(name, value) : undefined;
+}
+
+function readOptionalTronAddress(name: string, value: string | undefined): string | undefined {
+  const address = value?.trim();
+  if (!address) return undefined;
+  if (!isValidTronAddress(address)) {
+    throw new Error(`${name} must be a valid mainnet Tron address (T…)`);
+  }
+  return address;
 }
 
 function readLtcAddress(name: string, value: string | undefined): string {

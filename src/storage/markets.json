@@ -193,5 +193,15 @@
     "usdt": {
       "kraken": "DAIUSDT"
     }
+  },
+  "trx": {
+    "usdt": {
+      "binance": "TRXUSDT",
+      "mexc": "TRXUSDT",
+      "bybit": "TRXUSDT",
+      "okx": "TRX-USDT",
+      "gate": "TRX_USDT",
+      "kucoin": "TRX-USDT"
+    }
   }
 }
