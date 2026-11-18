@@ -19,7 +19,7 @@ export async function startTestApp(deps?: Partial<AppDeps>): Promise<{
   stop: () => Promise<void>;
 }> {
   const db = await connectToMongoDb();
-  const server: Server = createApp(deps).listen(0);
+  const server: Server = createApp(deps).listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 

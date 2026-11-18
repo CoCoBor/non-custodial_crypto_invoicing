@@ -12,7 +12,7 @@ import { signChallenge } from "../helpers/recovery-signer.js";
 
 test("registration creates a v2 merchant that can log in without leaking stored credentials", async () => {
   const db = await connectToMongoDb();
-  const server = createApp().listen(0);
+  const server = createApp().listen(0, "127.0.0.1");
   await once(server, "listening");
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   let lookup: string | undefined;

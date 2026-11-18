@@ -37,7 +37,7 @@ const userIds: string[] = [];
 
 before(async () => {
   await connectToMongoDb();
-  server = createApp().listen(0);
+  server = createApp().listen(0, "127.0.0.1");
   await once(server, "listening");
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
