@@ -437,7 +437,7 @@ describe("a USDT-on-TON payout", () => {
     const merchant = await em.deployedWallet(payer);
     const invoiceAmount = 25_000_000n;
     const estimate = await adapter.estimateNetworkCost();
-    assert.ok(estimate !== undefined);
+    assert.ok(typeof estimate === "bigint");
     const asked = payerPaysAskedAmount({ invoiceAmount, estimatedNetworkCost: estimate, feeRate: FIVE_PERCENT });
     const d = await paidDeposit(asked, merchant.address);
 

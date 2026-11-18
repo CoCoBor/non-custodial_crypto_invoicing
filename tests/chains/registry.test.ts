@@ -32,8 +32,8 @@ describe("the chain registry", () => {
     });
   }
 
-  it("serves BTC, LTC, ETH with its tokens, SOL with its tokens, BNB, TON, USDT on TON and USDT on Tron deposits today", () => {
-    assert.deepEqual(depositAssets(), ["btc", "ltc", "eth", "sol", "ton", "usdteth", "daieth", "usdceth", "usdtsol", "usdcsol", "bsc", "usdtton", "usdttrx"]);
+  it("serves BTC, LTC, ETH with its tokens, SOL with its tokens, XMR, BNB, TON, USDT on TON and USDT on Tron deposits today", () => {
+    assert.deepEqual(depositAssets(), ["btc", "ltc", "eth", "sol", "xmr", "ton", "usdteth", "daieth", "usdceth", "usdtsol", "usdcsol", "bsc", "usdtton", "usdttrx"]);
   });
 
   it("offers no TRX deposit: TRX only pays Tron fees", () => {

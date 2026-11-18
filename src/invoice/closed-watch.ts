@@ -292,7 +292,7 @@ async function startRoute(watch: Watch, ready: LedgerPayment[]): Promise<void> {
   // F1 with the expected network cost first; the chain's own dust or rent
   // limit is the adapter's too_small below.
   const estimate = await adapter.estimateNetworkCost();
-  if (estimate !== undefined && splitPayout({ received: totalOf(ready), networkCost: estimate, feeRate }) === undefined) {
+  if (typeof estimate === "bigint" && splitPayout({ received: totalOf(ready), networkCost: estimate, feeRate }) === undefined) {
     return await save(watch, { outcome: "too_small_to_forward" });
   }
 

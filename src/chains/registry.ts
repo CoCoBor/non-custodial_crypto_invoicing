@@ -10,8 +10,10 @@ import { createLtcAdapter } from "./ltc.js";
 import { createSolAdapter, createSplTokenAdapter } from "./sol.js";
 import { nowNodesSolRpc } from "./solana-rpc.js";
 import { createTonAdapter, createTonJettonAdapter } from "./ton.js";
+import { createMoneroRpc } from "./monero-rpc.js";
 import { createTronTokenAdapter } from "./tron.js";
 import { nowNodesTronApi, nowNodesTronIndex } from "./tron-api.js";
+import { createXmrAdapter } from "./xmr.js";
 
 const eth: EvmClients = { rpc: nowNodesEthRpc, index: nowNodesEthBlockbook };
 const bsc: EvmClients = { rpc: nowNodesBscRpc, index: nowNodesBscBlockbook };
@@ -48,6 +50,21 @@ export const chainAdapters: ChainRegistry = {
     platformAddress: env.platformTrxAddress,
     gasWalletKey: env.trxGasWalletKey,
     trxPrice: () => getTrxPrice("usdt"),
+  }),
+  // Registered even without a wallet: XMR invoices are then refused with a
+  // 503 and the payer is never shown a deposit.
+  xmr: createXmrAdapter({
+    wallet: env.moneroWalletRpcUrl === undefined
+      ? undefined
+      : createMoneroRpc({
+          url: env.moneroWalletRpcUrl,
+          label: "XMR wallet RPC",
+          ...(env.moneroWalletRpcLogin !== undefined && { login: env.moneroWalletRpcLogin }),
+        }),
+    daemon: env.moneroDaemonRpcUrl === undefined
+      ? undefined
+      : createMoneroRpc({ url: env.moneroDaemonRpcUrl, label: "XMR daemon RPC", timeoutMs: 15_000 }),
+    platformAddress: env.platformXmrAddress,
   }),
 };
 

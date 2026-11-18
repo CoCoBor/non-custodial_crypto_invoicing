@@ -447,7 +447,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     await node.payToken(contract, holder, 1n);
     const invoiceAmount = 250n * ONE_USDT;
     const estimate = await adapter.estimateNetworkCost();
-    assert.ok(estimate !== undefined && estimate > 0n);
+    assert.ok(typeof estimate === "bigint" && estimate > 0n);
     const asked = payerPaysAskedAmount({ invoiceAmount, estimatedNetworkCost: estimate, feeRate: FIVE_PERCENT });
     const d = await fundedDeposit(asked, { destination: holder });
 

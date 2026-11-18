@@ -84,8 +84,10 @@ describe("the payout network-cost estimate", () => {
   });
 
   it("has none for a coin a payer can't deposit yet", async () => {
-    for (const coin of ["usdtbsc", "xmr"] as const) {
-      assert.equal(await estimatePayoutNetworkCost(coin), "unsupported");
-    }
+    assert.equal(await estimatePayoutNetworkCost("usdtbsc"), "unsupported");
+  });
+
+  it("has none for XMR while no monerod is configured (MONERO_DAEMON_RPC_URL)", async () => {
+    assert.equal(await estimatePayoutNetworkCost("xmr"), "unsupported");
   });
 });

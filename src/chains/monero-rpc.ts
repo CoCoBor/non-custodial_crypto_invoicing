@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import http from "node:http";
+import https from "node:https";
 
 import { z } from "zod";
 
@@ -9,6 +11,10 @@ import { z } from "zod";
 // 2617, qop "auth"), which fetch does not do, so it is done here: the first
 // call gets a 401 with the challenge, later calls reuse it with a rising
 // nonce count until the server issues a new nonce.
+//
+// The wallet (epee) keeps a nonce per TCP connection: an answer sent on
+// another connection is refused as stale. So each client talks over one
+// kept-alive socket (node:http, not fetch, whose pool may switch sockets).
 
 export type MoneroRpcError = { code: number; message: string };
 
@@ -122,7 +128,37 @@ export function createMoneroRpc(options: {
   // server sees the requests, and the wallet serves one call at a time anyway.
   let queue: Promise<unknown> = Promise.resolve();
 
-  async function post(body: string): Promise<Response> {
+  const target = new URL(url);
+  const transport = target.protocol === "https:" ? https : http;
+  const agent = new transport.Agent({ keepAlive: true, maxSockets: 1 });
+  const timeoutMs = options.timeoutMs ?? 120_000;
+
+  async function send(body: string, headers: Record<string, string>) {
+    return await new Promise<{ status: number; authenticate: string | undefined; text: string }>((resolve, reject) => {
+      const req = transport.request(
+        target,
+        { method: "POST", agent, headers: { ...headers, "content-length": String(Buffer.byteLength(body)) } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => {
+            const authenticate = res.headers["www-authenticate"];
+            resolve({
+              status: res.statusCode ?? 0,
+              authenticate: Array.isArray(authenticate) ? authenticate.join(", ") : authenticate,
+              text: Buffer.concat(chunks).toString("utf8"),
+            });
+          });
+          res.on("error", reject);
+        },
+      );
+      req.setTimeout(timeoutMs, () => req.destroy(new Error(`timed out after ${timeoutMs} ms`)));
+      req.on("error", reject);
+      req.end(body);
+    });
+  }
+
+  async function post(body: string) {
     const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
     if (login && challenge) {
       nc += 1;
@@ -135,13 +171,7 @@ export function createMoneroRpc(options: {
         cnonce: randomBytes(8).toString("hex"),
       });
     }
-    return await fetch(url, {
-      method: "POST",
-      headers,
-      body,
-      signal: AbortSignal.timeout(options.timeoutMs ?? 120_000),
-      redirect: "error",
-    });
+    return await send(body, headers);
   }
 
   async function callNow(method: string, params: Record<string, unknown>): Promise<MoneroRpcAnswer | undefined> {
@@ -150,8 +180,7 @@ export function createMoneroRpc(options: {
     try {
       let res = await post(body);
       if (res.status === 401 && login) {
-        await res.arrayBuffer();
-        challenge = pickChallenge(res.headers.get("www-authenticate"));
+        challenge = pickChallenge(res.authenticate ?? null);
         nc = 0;
         if (challenge === undefined) {
           console.warn(`${label}: 401 without a usable digest challenge:`, method);
@@ -159,11 +188,11 @@ export function createMoneroRpc(options: {
         }
         res = await post(body);
       }
-      if (!res.ok) {
+      if (res.status < 200 || res.status > 299) {
         console.warn(`${label} HTTP failed:`, method, res.status);
         return undefined;
       }
-      const parsed = replySchema.safeParse(parseWithBigints(await res.text()));
+      const parsed = replySchema.safeParse(parseWithBigints(res.text));
       if (!parsed.success) {
         console.warn(`${label}: not a JSON-RPC reply:`, method);
         return undefined;

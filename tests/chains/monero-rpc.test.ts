@@ -32,17 +32,26 @@ describe("digest authorization", () => {
   });
 });
 
-// A server that asks for digest auth the way monero-wallet-rpc does: one 401
-// carrying two challenges (MD5-sess and MD5), and a fresh nonce now and then.
+// A server that asks for digest auth the way monero-wallet-rpc (epee) does:
+// one 401 carrying two challenges (MD5-sess and MD5), and a nonce that
+// belongs to the TCP connection it was issued on. A retry on another
+// connection is "stale" (seen on the real wallet, v0.18.5.4).
 let server: Server;
 let url: string;
-let nonce = randomBytes(8).toString("hex");
+const nonces = new WeakMap<object, string>();
+const activeSockets = new Set<object>();
 const seen: { authorized: boolean; nc?: string }[] = [];
 let answer: (method: string) => { status: number; body: unknown } = () => ({ status: 200, body: {} });
 let lastBody = "";
 
+function nonceOf(req: IncomingMessage): string {
+  if (!nonces.has(req.socket)) nonces.set(req.socket, randomBytes(16).toString("base64"));
+  return nonces.get(req.socket)!;
+}
+
 function authorized(req: IncomingMessage): { ok: boolean; nc?: string } {
   const header = req.headers.authorization;
+  const nonce = nonces.get(req.socket);
   if (!header?.startsWith("Digest ")) return { ok: false };
   const field = (name: string) => new RegExp(`${name}="?([^",]+)"?`).exec(header)?.[1];
   if (field("nonce") !== nonce || field("username") !== "alice" || field("algorithm") !== "MD5") return { ok: false, nc: field("nc") };
@@ -60,6 +69,7 @@ before(async () => {
       const auth = authorized(req);
       seen.push({ authorized: auth.ok, ...(auth.nc && { nc: auth.nc }) });
       if (!auth.ok) {
+        const nonce = nonceOf(req);
         res.writeHead(401, {
           "www-authenticate": [
             `Digest qop="auth",algorithm=MD5-sess,realm="monero-rpc",nonce="${nonce}",stale=false`,
@@ -75,6 +85,10 @@ before(async () => {
       res.end(typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body));
     });
   }).listen(0, "127.0.0.1");
+  server.on("connection", (socket) => {
+    activeSockets.add(socket);
+    socket.on("close", () => activeSockets.delete(socket));
+  });
   await once(server, "listening");
   url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/json_rpc`;
 });
@@ -97,7 +111,7 @@ describe("the Monero JSON-RPC client", () => {
     seen.length = 0;
     const rpc = createMoneroRpc({ url, login: { username: "alice", password: "s3cret" } });
     await rpc.call("get_version");
-    nonce = randomBytes(8).toString("hex");
+    for (const socket of activeSockets) nonces.delete(socket);
 
     assert.deepEqual(await rpc.call("get_version"), { result: { version: 1 } });
     assert.deepEqual(seen.map((s) => s.authorized), [false, true, false, true]);

@@ -15,6 +15,20 @@ export type DepositKey =
 
 export type NewDeposit = { address: string; key: DepositKey };
 
+/**
+ * newDeposit can't make a deposit now (XMR: no platform wallet configured,
+ * or it does not answer). Invoice creation answers 503 instead of crashing.
+ */
+export class DepositUnavailableError extends Error {
+  constructor(
+    readonly asset: AssetId,
+    reason: string,
+  ) {
+    super(`${asset} deposits are unavailable: ${reason}`);
+    this.name = "DepositUnavailableError";
+  }
+}
+
 /** One incoming payment to a deposit address, as the chain shows it now. */
 export type ChainPayment = {
   txid: string;
@@ -95,8 +109,11 @@ export type ChainAdapter = {
   newDeposit: () => Promise<NewDeposit>;
   /** Every incoming payment to `address`. undefined: the lookup failed (never [] for a failure). */
   getPayments: (address: string) => Promise<ChainPayment[] | undefined>;
-  /** Expected network cost of paying out one payment. undefined: unavailable now. */
-  estimateNetworkCost: () => Promise<bigint | undefined>;
+  /**
+   * Expected network cost of paying out one payment. undefined: unavailable
+   * now. "unsupported": never available as configured (XMR without a daemon).
+   */
+  estimateNetworkCost: () => Promise<bigint | "unsupported" | undefined>;
   payout: (request: PayoutRequest) => Promise<PayoutResult>;
 };
 
