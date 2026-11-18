@@ -58,6 +58,7 @@ import {
 //    wallet refuses one, its TON comes back and no token moved.
 //    response_destination is the deposit itself: unused TON stays there,
 //    and a later payout from it tops up only what is missing (as on EVM).
+//    (So before fix ticket F; a payout that tops up now sweeps: see below.)
 // "Paid" is proven by the receivers' jetton wallets: the transaction in
 // which each one credited the planned amount.
 //
