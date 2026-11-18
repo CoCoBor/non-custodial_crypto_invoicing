@@ -710,6 +710,10 @@ async function followRouteSwap(watch: Watch, stored: StoredRoute): Promise<void>
         recipient: swap.recipient,
         deliveryTxids: reply.deliveryTxids,
       });
+      if (delivery.kind === "unverifiable") {
+        review = `Refund route ${stored.n}: the swap provider reports the swap delivered. ${delivery.reason}.`;
+        break;
+      }
       if (delivery.kind !== "seen") {
         if (stuck) review = `Refund route ${stored.n}: the swap provider reports the swap delivered, but ${delivery.reason}. Check ${swap.recipient} on a ${swap.receive_crypto} explorer.`;
         break;

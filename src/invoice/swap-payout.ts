@@ -130,7 +130,9 @@ export type Delivery =
   | { kind: "seen"; amount: bigint; txids: string[] }
   | { kind: "not_seen"; reason: string }
   /** No way to look it up now (lookup failed, or no adapter for the receive coin). */
-  | { kind: "unknown"; reason: string };
+  | { kind: "unknown"; reason: string }
+  /** The receive coin's chain can never show it (Monero): a person must confirm it. */
+  | { kind: "unverifiable"; reason: string };
 
 /**
  * The provider's delivery, as the receive coin's own chain shows it: the
@@ -144,6 +146,14 @@ export async function seenDelivery(input: {
   deliveryTxids: string[];
 }): Promise<Delivery> {
   if (input.deliveryTxids.length === 0) return { kind: "not_seen", reason: "the provider names no delivery transaction" };
+  // Only the sender (the provider) can prove what a Monero transaction paid
+  // to an address outside our wallet, and it gives us no proof.
+  if (input.receiveAsset === "xmr") {
+    return {
+      kind: "unverifiable",
+      reason: `Monero does not show who received a transaction, so the delivery can't be checked on chain: ask the merchant to confirm that XMR transaction ${input.deliveryTxids.join(", ")} reached ${input.recipient}, then complete the invoice by hand`,
+    };
+  }
   const adapter = (input.chains as Record<string, ChainAdapter | undefined>)[input.receiveAsset];
   if (adapter === undefined) return { kind: "unknown", reason: `no ${input.receiveAsset} chain adapter to check the delivery` };
 

@@ -590,6 +590,14 @@ async function followSwap(invoiceId: string, ports: WatcherPorts): Promise<void>
         recipient: invoice.to_address,
         deliveryTxids: reply.deliveryTxids,
       });
+      if (delivery.kind === "unverifiable") {
+        set = {
+          "swap.status": reply.status,
+          "swap.destination_txids": reply.deliveryTxids,
+          review_reason: note(`The swap provider reports the swap delivered. ${delivery.reason}.`),
+        };
+        break;
+      }
       if (delivery.kind !== "seen") {
         set = { "swap.status": reply.status, "swap.destination_txids": reply.deliveryTxids };
         if (stuck) {
