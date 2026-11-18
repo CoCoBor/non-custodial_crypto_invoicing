@@ -204,9 +204,9 @@ describe("FX rates that can't be used", () => {
     assert.equal(await db.collection("invoices").countDocuments({ user_id: m.userId }), 0);
   });
 
-  it("answers 503 PRICE_UNAVAILABLE for a rate older than 48 hours", async () => {
+  it("answers 503 PRICE_UNAVAILABLE for a rate older than 72 hours", async () => {
     const m = await merchant();
-    fx.eur = { rate: "0.8", at: Date.now() - 49 * HOUR };
+    fx.eur = { rate: "0.8", at: Date.now() - 73 * HOUR };
 
     const response = await fixed(m.apiKey, { amount: "25", currency: "eur" });
 
