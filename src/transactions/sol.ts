@@ -56,6 +56,8 @@ export type SolPayoutDeps = {
   rpc: SolanaRpc;
   /** Our own config: a missing one makes the payout wait with a review note. */
   platformAddress: string | undefined;
+  /** Blocks past its last valid height the finalized chain must be before a saved payout is called lost. */
+  lostMarginBlocks?: number;
 };
 
 export type SplPayoutDeps = SolPayoutDeps & {
@@ -78,6 +80,8 @@ const LAMPORTS_PER_SIGNATURE = 5_000n;
 const MICROLAMPORTS_PER_LAMPORT = 1_000_000n;
 // 2 compute-budget + up to 2 SOL transfers. Mainnet simulation on 2026-11-09 used 600.
 const SOL_PAYOUT_COMPUTE_UNITS = 1_500;
+// About 60 s of 400 ms blocks past a saved payout's last valid height.
+const DEFAULT_LOST_MARGIN_BLOCKS = 150n;
 // 2 compute-budget + up to 2 create-if-missing + 2 token transfers.
 // Mainnet simulation on 2026-11-09: 30,664 with both accounts created and a close.
 const TOKEN_PAYOUT_COMPUTE_UNITS = 100_000;
@@ -433,17 +437,30 @@ async function follow(
   state: SavedTx,
   rebuild: () => Promise<PayoutResult>,
   prove: (tx: ParsedTransaction, planned: SavedTx["transfers"][number]) => Promise<bigint | undefined>,
+  lostMarginBlocks: bigint,
 ): Promise<PayoutResult> {
   const { depositAddress } = request;
   // Read the finalized height BEFORE the status: if it is already past
   // lastValidBlockHeight and the status still finds nothing, it never landed.
   const height = await finalizedBlockHeight(rpc);
   if (height === undefined) return { status: "pending", reason: "SOL block height unavailable" };
-  const status = await signatureStatus(rpc, state.signature);
+  let status = await signatureStatus(rpc, state.signature);
   if (status === undefined) return { status: "pending", reason: "SOL signature status unavailable" };
 
+  const lastValid = BigInt(state.lastValidBlockHeight);
+  if (status === null && height > lastValid) {
+    // A provider's nodes can be at different heights: the one answering the
+    // status may not have the block holding it yet. Only a margin past the
+    // last valid height, and a second lookup, prove it never landed.
+    if (height <= lastValid + lostMarginBlocks) {
+      return { status: "pending", reason: `SOL payout ${state.signature} expired unseen; waiting ${lostMarginBlocks} blocks before rebuilding it` };
+    }
+    status = await signatureStatus(rpc, state.signature);
+    if (status === undefined) return { status: "pending", reason: "SOL signature status unavailable" };
+  }
+
   if (status === null) {
-    if (height > BigInt(state.lastValidBlockHeight)) {
+    if (height > lastValid) {
       const rebuilt = await rebuild();
       if (rebuilt.status !== "too_small") return rebuilt;
       // The plan was saved before, so the watcher treats this payout as in flight.
@@ -489,6 +506,9 @@ async function follow(
   }
   return { status: "paid", transfers: moved, ...(notes.length > 0 && { note: notes.join(" ") }) };
 }
+
+const lostMargin = (deps: SolPayoutDeps) =>
+  deps.lostMarginBlocks === undefined ? DEFAULT_LOST_MARGIN_BLOCKS : BigInt(deps.lostMarginBlocks);
 
 async function saveAndSend(
   request: PayoutRequest,
@@ -557,7 +577,7 @@ export async function payOutSol(request: PayoutRequest, deps: SolPayoutDeps): Pr
   if (request.checkpoint !== undefined) {
     const state = readState(request.checkpoint.state);
     if (state?.mode !== "native") return unreadable(request.depositAddress);
-    return await follow(request, deps.rpc, state, () => startSol(request, deps), solTransferProof(request.depositAddress));
+    return await follow(request, deps.rpc, state, () => startSol(request, deps), solTransferProof(request.depositAddress), lostMargin(deps));
   }
   return await startSol(request, deps);
 }
@@ -717,7 +737,7 @@ export async function payOutSplToken(request: PayoutRequest, deps: SplPayoutDeps
     if (state?.mode !== "token" || state.feePayer === undefined) return unreadable(request.depositAddress);
     const feePayer = state.feePayer;
     const prove = splTransferProof(request.depositAddress, deps.token);
-    return await follow(request, deps.rpc, state, () => startSplToken(request, deps), (tx, planned) => prove(tx, planned, feePayer));
+    return await follow(request, deps.rpc, state, () => startSplToken(request, deps), (tx, planned) => prove(tx, planned, feePayer), lostMargin(deps));
   }
   return await startSplToken(request, deps);
 }

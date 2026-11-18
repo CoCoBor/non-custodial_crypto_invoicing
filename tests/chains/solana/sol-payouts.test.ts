@@ -53,16 +53,27 @@ async function newGasWallet(): Promise<{ address: string; sealed: SealedSecret }
   return { address: signer.address, sealed: sealSecret("solana-gas-wallet-key", getBase58Decoder().decode(keyPair)) };
 }
 
-/** Passes every call through, and records each signed transaction sent. */
+/**
+ * Passes every call through, and records each signed transaction sent. `hideStatusReads` answers "not found" to that many
+ * status lookups, and `heightAheadBlocks` moves the finalized height forward: together, a load-balanced provider whose
+ * node answering the status is behind the one answering the height.
+ */
 function countingRpc(inner: SolanaRpc) {
   const sent: string[] = [];
+  const state = { hideStatusReads: 0, heightAheadBlocks: 0 };
   const rpc: SolanaRpc = {
     call: async (method, params) => {
       if (method === "sendTransaction") sent.push(String(params[0]));
-      return await inner.call(method, params);
+      if (method === "getSignatureStatuses" && state.hideStatusReads > 0) {
+        state.hideStatusReads -= 1;
+        return { context: { slot: 0 }, value: [null] };
+      }
+      const reply = await inner.call(method, params);
+      if (method === "getBlockHeight" && typeof reply === "number") return reply + state.heightAheadBlocks;
+      return reply;
     },
   };
-  return { rpc, sent };
+  return { rpc, sent, state };
 }
 
 /** The gas wallet's spend in token units at the test prices (token = $1), rounded up. */
@@ -91,13 +102,15 @@ describe("Solana payouts on a local solana-test-validator", { skip: skipReason }
   });
 
   /** Fresh platform and gas wallets, so balances start at 0. */
-  async function freshAdapters(options: { gasWalletKey?: boolean } = {}) {
+  async function freshAdapters(options: { gasWalletKey?: boolean; lostMarginBlocks?: number } = {}) {
     platform = await newAddress();
     gasWallet = await newGasWallet();
     await node.airdrop(gasWallet.address, LAMPORTS_PER_SOL);
     prices = { sol: SOL_USD, [USDT.asset]: "1" };
-    native = createSolAdapter({ rpc: rpc.rpc, platformAddress: platform });
+    const margin = options.lostMarginBlocks === undefined ? {} : { lostMarginBlocks: options.lostMarginBlocks };
+    native = createSolAdapter({ rpc: rpc.rpc, platformAddress: platform, ...margin });
     token = createSplTokenAdapter({
+      ...margin,
       rpc: rpc.rpc,
       asset: USDT.asset,
       platformAddress: platform,
@@ -343,7 +356,7 @@ describe("Solana payouts on a local solana-test-validator", { skip: skipReason }
   });
 
   it("rebuilds a saved payout whose blockhash expired unsent, saving the new one before sending it", async () => {
-    await freshAdapters();
+    await freshAdapters({ lostMarginBlocks: 5 });
     const saved: PayoutCheckpoint[] = [];
     let crash = true;
     const d = await fundedDeposit(native, LAMPORTS_PER_SOL, {
@@ -360,8 +373,8 @@ describe("Solana payouts on a local solana-test-validator", { skip: skipReason }
     const lost = saved[0]!.plan.transfers[0]!.txid;
     const lastValid = BigInt(JSON.parse(saved[0]!.state).lastValidBlockHeight);
     await node.waitFor(
-      async () => BigInt(await node.rpc<number>("getBlockHeight", [{ commitment: "finalized" }])) > lastValid,
-      "the saved blockhash to expire",
+      async () => BigInt(await node.rpc<number>("getBlockHeight", [{ commitment: "finalized" }])) > lastValid + 5n,
+      "the saved blockhash to expire, plus the margin",
       60_000,
     );
 
@@ -378,6 +391,62 @@ describe("Solana payouts on a local solana-test-validator", { skip: skipReason }
     assert.equal(distinct(rpc.sent.slice(sentBefore)), 1, "the expired transaction was never sent");
     assert.equal(await node.rpc("getSignatureStatuses", [[lost], { searchTransactionHistory: true }]).then((s) => s.value[0]), null);
     assert.equal(await node.balance(d.destination), LAMPORTS_PER_SOL - LAMPORTS_PER_SOL / 20n - SOL_FEE);
+  });
+
+  describe("a saved payout a lagging node can't find, while the finalized height is past its last valid height", () => {
+    const MARGIN = 150;
+    const finalizedHeight = async () => BigInt(await node.rpc<number>("getBlockHeight", [{ commitment: "finalized" }]));
+
+    it("waits, and never rebuilds, within the margin past the last valid height", async () => {
+      await freshAdapters({ lostMarginBlocks: MARGIN });
+      const saved: PayoutCheckpoint[] = [];
+      const d = await fundedDeposit(native, LAMPORTS_PER_SOL, {
+        saveCheckpoint: async (next) => {
+          saved.push(next);
+          throw new Error("process killed after the save");
+        },
+      });
+      const again = (): PayoutRequest => ({ ...d.request(undefined), checkpoint: saved.at(-1) });
+      await assert.rejects(native.payout(d.request(undefined)), /process killed/);
+      const lastValid = BigInt(JSON.parse(saved[0]!.state).lastValidBlockHeight);
+      const sentBefore = rpc.sent.length;
+
+      rpc.state.hideStatusReads = 1_000;
+      rpc.state.heightAheadBlocks = Number(lastValid - (await finalizedHeight())) + 1;
+      try {
+        const raced = await native.payout(again());
+        assert.equal(raced.status, "pending", show(raced));
+      } finally {
+        rpc.state.hideStatusReads = 0;
+        rpc.state.heightAheadBlocks = 0;
+      }
+      assert.equal(saved.length, 1, "nothing rebuilt");
+      assert.equal(rpc.sent.length, sentBefore, "nothing sent");
+
+      const paid = await payUntilPaid(native, again);
+      assert.equal(paid.transfers[0]!.txid, saved[0]!.plan.transfers[0]!.txid);
+    });
+
+    it("past the margin, looks the status up again and proves the landed payout instead of rebuilding", async () => {
+      await freshAdapters({ lostMarginBlocks: MARGIN });
+      const d = await fundedDeposit(native, LAMPORTS_PER_SOL);
+      const paid = await payUntilPaid(native, d.request);
+      const lastValid = BigInt(JSON.parse(d.saved[0]!.state).lastValidBlockHeight);
+      const sentBefore = rpc.sent.length;
+
+      rpc.state.hideStatusReads = 1;
+      rpc.state.heightAheadBlocks = Number(lastValid - (await finalizedHeight())) + MARGIN + 10;
+      let again: PayoutResult;
+      try {
+        again = await native.payout(d.request());
+      } finally {
+        rpc.state.hideStatusReads = 0;
+        rpc.state.heightAheadBlocks = 0;
+      }
+      assert.deepEqual(again, paid);
+      assert.equal(d.saved.length, 1, "nothing rebuilt");
+      assert.equal(rpc.sent.length, sentBefore, "nothing sent");
+    });
   });
 
   it("pays a payer-pays SOL invoice paid exactly: the merchant receives exactly the invoice amount", async () => {

@@ -17,7 +17,7 @@ const newDeposit: ChainAdapter["newDeposit"] = async () => {
   return { address, key: { kind: "sealed_key", sealed: encryptedPrivateKey } };
 };
 
-export function createSolAdapter(deps: { rpc: SolanaRpc; platformAddress: string | undefined }): ChainAdapter {
+export function createSolAdapter(deps: { rpc: SolanaRpc; platformAddress: string | undefined; lostMarginBlocks?: number }): ChainAdapter {
   const asset = "sol";
   return {
     asset,
@@ -38,6 +38,7 @@ export function createSplTokenAdapter(deps: {
   platformAddress: string | undefined;
   gasWalletKey: SealedSecret | undefined;
   getPrice: PricePort;
+  lostMarginBlocks?: number;
 }): ChainAdapter {
   const facts = cryptos[deps.asset];
   if (!("mint_address" in facts) || facts.chain.symbol !== "sol") {
@@ -60,6 +61,7 @@ export function createSplTokenAdapter(deps: {
         platformAddress: deps.platformAddress,
         gasWalletKey: deps.gasWalletKey,
         getPrice: deps.getPrice,
+        ...(deps.lostMarginBlocks !== undefined && { lostMarginBlocks: deps.lostMarginBlocks }),
       }),
   };
 }
