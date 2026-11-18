@@ -25,6 +25,7 @@ export const EVM_CHAINS = {
     nativeAsset: "eth",
     maxGasPrice: 500_000_000_000n, // 500 gwei
     gasWalletPurpose: "ethereum-gas-wallet-key",
+    lostAfterBlocks: 20n, // about 4 minutes at 12 s blocks
   },
   bsc: {
     label: "BSC",
@@ -32,6 +33,7 @@ export const EVM_CHAINS = {
     nativeAsset: "bsc",
     maxGasPrice: 100_000_000_000n, // 100 gwei
     gasWalletPurpose: "bsc-gas-wallet-key",
+    lostAfterBlocks: 64n, // under a minute at 0.75 s blocks, about 3 minutes at 3 s
   },
 } as const satisfies Record<string, EvmChain>;
 

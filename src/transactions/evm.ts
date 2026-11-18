@@ -27,6 +27,12 @@ export type EvmChain = {
   /** A price per gas above this means the node is broken: wait instead of paying it. */
   maxGasPrice: bigint;
   gasWalletPurpose: SecretPurpose;
+  /**
+   * A saved transaction is called lost only once another transaction used its
+   * nonce at least this many blocks ago. Below 128, so a full node still holds
+   * the state at that block.
+   */
+  lostAfterBlocks: bigint;
 };
 
 export type EvmToken = { asset: AssetId; contract: string; decimals: number };
@@ -124,6 +130,57 @@ async function receiptOf(rpc: EvmRpc, txid: string): Promise<Receipt | null | un
   const parsed = receiptSchema.safeParse(reply);
   if (!parsed.success || parsed.data.transactionHash.toLowerCase() !== txid) return undefined;
   return parsed.data;
+}
+
+/** undefined: the lookup failed. */
+async function transactionKnown(rpc: EvmRpc, txid: string): Promise<boolean | undefined> {
+  const reply = await rpc.call("eth_getTransactionByHash", [txid]);
+  if (reply === null) return false;
+  const parsed = z.object({ hash: txHash }).safeParse(reply);
+  if (!parsed.success || parsed.data.hash.toLowerCase() !== txid) return undefined;
+  return true;
+}
+
+type SavedTxFate =
+  | { fate: "mined"; receipt: Receipt }
+  | { fate: "can_land" }
+  | { fate: "wait"; reason: string }
+  | { fate: "lost" };
+
+/**
+ * What became of a saved transaction from `sender`. "lost" needs proof: its
+ * nonce was already used `lostAfterBlocks` blocks ago and, read after that,
+ * the node knows neither its receipt nor the transaction. A nonce used more
+ * recently may be our own transaction whose receipt the node can't serve yet
+ * (a load-balanced provider's node behind the one that answered the nonce;
+ * anvil under load).
+ */
+async function savedTxFate(rpc: EvmRpc, chain: EvmChain, tx: SignedTx, sender: string): Promise<SavedTxFate> {
+  const wait = (reason: string): SavedTxFate => ({ fate: "wait", reason });
+  const receipt = await receiptOf(rpc, tx.txid);
+  if (receipt === undefined) return wait(`${chain.label} receipt lookup failed`);
+  if (receipt !== null) return { fate: "mined", receipt };
+
+  const latest = await nonceOf(rpc, sender, "latest");
+  if (latest === undefined) return wait(`${chain.label} nonce of ${sender} unavailable`);
+  // A saved transfer can land only while its nonce is unused.
+  if (BigInt(tx.nonce) >= latest) return { fate: "can_land" };
+
+  const head = await quantity(rpc, "eth_blockNumber", []);
+  if (head === undefined) return wait(`${chain.label} block number unavailable`);
+  const recent = wait(`nonce ${tx.nonce} of ${sender} was used in the last ${chain.lostAfterBlocks} blocks; waiting for the receipt of ${tx.txid}`);
+  if (head < chain.lostAfterBlocks) return recent;
+  const usedLongAgo = await quantity(rpc, "eth_getTransactionCount", [sender, "0x" + (head - chain.lostAfterBlocks).toString(16)]);
+  if (usedLongAgo === undefined) return wait(`${chain.label} nonce of ${sender} at an older block unavailable`);
+  if (BigInt(tx.nonce) >= usedLongAgo) return recent;
+
+  const again = await receiptOf(rpc, tx.txid);
+  if (again === undefined) return wait(`${chain.label} receipt lookup failed`);
+  if (again !== null) return { fate: "mined", receipt: again };
+  const known = await transactionKnown(rpc, tx.txid);
+  if (known === undefined) return wait(`${chain.label} transaction lookup failed`);
+  if (known) return wait(`${tx.txid} is known to the node but has no receipt yet`);
+  return { fate: "lost" };
 }
 
 async function broadcast(rpc: EvmRpc, chain: EvmChain, signed: SignedTx): Promise<void> {
@@ -296,15 +353,27 @@ async function followDepositTransfers(
   const moved: Transfer[] = [...alreadyMoved];
   const notes: string[] = [];
   const missing: SignedTx[] = [];
+  let waiting: string | undefined;
 
   for (const tx of txs) {
-    const receipt = await receiptOf(rpc, tx.txid);
-    if (receipt === undefined) return { status: "pending", reason: `${chain.label} receipt lookup failed` };
-    if (receipt === null) {
+    const found = await savedTxFate(rpc, chain, tx, depositAddress);
+    if (found.fate === "wait") {
+      waiting ??= found.reason;
+      continue;
+    }
+    if (found.fate === "can_land") {
       missing.push(tx);
       continue;
     }
-    if (receipt.status === "0x0") {
+    if (found.fate === "lost") {
+      return {
+        status: "failed",
+        message: `${chain.label} payout stopped: saved transfer ${tx.txid} can never land, because another transaction used nonce ${tx.nonce} of deposit address ${depositAddress}. Someone else may hold the deposit key. Check the address on a block explorer; whatever is left is still there.`,
+        transfers: moved,
+      };
+    }
+    const { receipt } = found;
+    if (found.receipt.status === "0x0") {
       if (tx.kind === "platform_fee") {
         notes.push(`Platform transfer ${tx.txid} reverted: its gas was paid, but nothing moved. The platform's ${tx.amount} is still at deposit address ${depositAddress}; send it by hand.`);
         continue;
@@ -318,21 +387,9 @@ async function followDepositTransfers(
     moved.push({ kind: tx.kind, to: tx.to, amount: proof(tx, receipt), txid: tx.txid });
   }
 
-  if (missing.length > 0) {
-    // A saved transfer can land only while its nonce is unused.
-    const used = await nonceOf(rpc, depositAddress, "latest");
-    if (used === undefined) return { status: "pending", reason: "deposit nonce unavailable" };
-    const lost = missing.find((tx) => BigInt(tx.nonce) < used);
-    if (lost !== undefined) {
-      return {
-        status: "failed",
-        message: `${chain.label} payout stopped: saved transfer ${lost.txid} can never land, because another transaction used nonce ${lost.nonce} of deposit address ${depositAddress}. Someone else may hold the deposit key. Check the address on a block explorer; whatever is left is still there.`,
-        transfers: moved,
-      };
-    }
-    for (const tx of missing) await broadcast(rpc, chain, tx);
-    return { status: "pending", reason: "broadcast; waiting for the receipts" };
-  }
+  for (const tx of missing) await broadcast(rpc, chain, tx);
+  if (missing.length > 0) return { status: "pending", reason: "broadcast; waiting for the receipts" };
+  if (waiting !== undefined) return { status: "pending", reason: waiting };
 
   for (const transfer of moved) {
     const planned = txs.find((tx) => tx.txid === transfer.txid);
@@ -640,16 +697,14 @@ async function followTokenPayout(
   if (current.phase === "top_up") {
     const topUp = current.topUp;
     if (topUp === undefined) return unreadable(chain, depositAddress);
-    const receipt = await receiptOf(rpc, topUp.txid);
-    if (receipt === undefined) return { status: "pending", reason: `${chain.label} receipt lookup failed` };
+    const found = await savedTxFate(rpc, chain, topUp, current.gasWallet);
+    if (found.fate === "wait") return { status: "pending", reason: found.reason };
+    if (found.fate === "can_land") {
+      await broadcast(rpc, chain, topUp);
+      return { status: "pending", reason: "gas top-up broadcast; waiting for its receipt" };
+    }
 
-    if (receipt === null) {
-      const used = await nonceOf(rpc, current.gasWallet, "latest");
-      if (used === undefined) return { status: "pending", reason: `${chain.label} gas wallet nonce unavailable` };
-      if (BigInt(topUp.nonce) >= used) {
-        await broadcast(rpc, chain, topUp);
-        return { status: "pending", reason: "gas top-up broadcast; waiting for its receipt" };
-      }
+    if (found.fate === "lost") {
       // Its nonce went to another gas wallet transaction: this top-up can
       // never land. Same value and gas price, next free nonce, saved first.
       if (deps.gasWalletKey === undefined) {
@@ -674,7 +729,7 @@ async function followTokenPayout(
       return { status: "pending", reason: "gas top-up rebuilt and broadcast" };
     }
 
-    if (receipt.status === "0x0") {
+    if (found.receipt.status === "0x0") {
       // A value transfer to an address with no code can't revert.
       return {
         status: "failed",

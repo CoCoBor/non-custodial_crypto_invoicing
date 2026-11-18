@@ -5,7 +5,7 @@ import { Wallet } from "ethers";
 
 import type { ChainAdapter, PayoutCheckpoint, PayoutRequest, PayoutResult } from "../../../src/chains/adapter.js";
 import type { EvmRpc } from "../../../src/chains/evm-rpc.js";
-import { createEvmNativeAdapter, createEvmTokenAdapter } from "../../../src/chains/evm.js";
+import { createEvmNativeAdapter, createEvmTokenAdapter, EVM_CHAINS } from "../../../src/chains/evm.js";
 import { parseFeeRate, payerPaysAskedAmount } from "../../../src/money/payout-split.js";
 import { ceilDivide } from "../../../src/money/format.js";
 import { sealSecret, type SecretPurpose } from "../../../src/security/secret-envelope.js";
@@ -488,8 +488,14 @@ for (const spec of CHAINS) {
         type: 0, chainId: spec.chainId, nonce: Number(await node.nonce(gasWallet.address)), gasPrice: GAS_PRICE, gasLimit: 21_000n, to: newAddress(), value: 1n,
       });
       await node.rpc("eth_sendRawTransaction", [raw]);
-
       const again = (): PayoutRequest => ({ ...d.request(undefined), checkpoint: saved.at(-1) });
+
+      // Until the nonce was taken lostAfterBlocks ago, the saved top-up might be
+      // the one that took it (a receipt not readable yet): nothing is rebuilt.
+      assert.equal((await token.payout(again())).status, "pending");
+      assert.equal(saved.length, 1, "no top-up rebuilt while the nonce was used only recently");
+      await node.mine(Number(EVM_CHAINS[spec.name].lostAfterBlocks));
+
       const result = await payUntilPaid(token, again);
 
       const lostTopUp = saved[0]!.plan.transfers[0]!.txid;
