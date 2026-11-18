@@ -33,42 +33,50 @@ export function refuseBelowMinimum(res: Response, asset: AssetId, asked: bigint)
   });
 }
 
-/**
- * The coins whose asked amount for this price is at least their minimum. A
- * coin with no price or fee estimate now stays: the payer's choice locks the
- * price and checks again.
- */
-export async function coinsAtLeastMinimum(input: {
-  coins: AssetId[];
+type PriceInput = {
   unit: PriceUnit;
   priceUnits: bigint;
   feePaidByPayer: boolean;
   feeRate: string;
   deps: Pick<AppDeps, "getPrice" | "getUsdToFiat" | "estimateNetworkCost">;
   now: number;
-}): Promise<AssetId[]> {
+};
+
+/**
+ * The coins whose asked amount for this price is at least their minimum. A
+ * coin with no price or fee estimate now stays: the payer's choice locks the
+ * price and checks again.
+ */
+export async function coinsAtLeastMinimum(input: PriceInput & { coins: AssetId[] }): Promise<AssetId[]> {
   const keep = await Promise.all(
-    input.coins.map(async (coin) => {
-      const payment = await lockPrice({
-        unit: input.unit,
-        priceUnits: input.priceUnits,
-        coin,
-        getPrice: input.deps.getPrice,
-        getUsdToFiat: input.deps.getUsdToFiat,
-        now: input.now,
-      });
-      if (payment === "price_unavailable") return true;
-      if (!isBelowMinimum(coin, payment.amount)) return true;
-      if (!input.feePaidByPayer) return false;
-      const asked = await askedAmountFor({
-        coin,
-        invoiceAmount: payment.amount,
-        feePaidByPayer: true,
-        merchantFee: input.feeRate,
-        estimateNetworkCost: input.deps.estimateNetworkCost,
-      });
-      return typeof asked !== "bigint" || !isBelowMinimum(coin, asked);
-    }),
+    input.coins.map((coin) =>
+      reachesMinimum(coin, input).catch((error: unknown) => {
+        console.warn(`Minimum check for ${coin} failed; offering it, the choice checks again:`, error);
+        return true;
+      }),
+    ),
   );
   return input.coins.filter((_, i) => keep[i]);
+}
+
+async function reachesMinimum(coin: AssetId, input: PriceInput): Promise<boolean> {
+  const payment = await lockPrice({
+    unit: input.unit,
+    priceUnits: input.priceUnits,
+    coin,
+    getPrice: input.deps.getPrice,
+    getUsdToFiat: input.deps.getUsdToFiat,
+    now: input.now,
+  });
+  if (payment === "price_unavailable") return true;
+  if (!isBelowMinimum(coin, payment.amount)) return true;
+  if (!input.feePaidByPayer) return false;
+  const asked = await askedAmountFor({
+    coin,
+    invoiceAmount: payment.amount,
+    feePaidByPayer: true,
+    merchantFee: input.feeRate,
+    estimateNetworkCost: input.deps.estimateNetworkCost,
+  });
+  return typeof asked !== "bigint" || !isBelowMinimum(coin, asked);
 }

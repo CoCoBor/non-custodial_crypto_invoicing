@@ -47,7 +47,10 @@ const NETWORK_COST = 1_000n;
 
 before(async () => {
   ({ baseUrl, db, stop } = await startTestApp({
-    getPrice: async (coin) => prices[coin],
+    getPrice: async (coin) => {
+      if (prices[coin] === "throws") throw new Error("price source down");
+      return prices[coin];
+    },
     estimateNetworkCost: async () => NETWORK_COST,
     swap: unusedSwap(),
   }));
@@ -162,6 +165,16 @@ describe("coins offered on an invoice the payer picks the coin for", () => {
 
   it("keeps offering a coin it has no price for now: the choice checks again", async () => {
     prices = { btc: priceWhereMinimumIsWorth("btc", 1n) };
+    const m = await merchant({ btc: BTC_ADDRESS, ltc: LTC_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { amount: "2", mode: "merchant_list", coins: ["btc", "ltc"] });
+
+    assert.equal(response.status, 201);
+    assert.deepEqual(response.body.data.offeredCoins, ["btc", "ltc"]);
+  });
+
+  it("keeps offering a coin whose price lookup throws, rather than failing the invoice", async () => {
+    prices = { btc: priceWhereMinimumIsWorth("btc", 1n), ltc: "throws" };
     const m = await merchant({ btc: BTC_ADDRESS, ltc: LTC_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { amount: "2", mode: "merchant_list", coins: ["btc", "ltc"] });
