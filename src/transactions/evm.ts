@@ -216,8 +216,8 @@ function isValidEvmAddress(address: string): boolean {
 type Prepared = { wallet: Wallet; gasPrice: bigint; nonce: bigint };
 
 /**
- * Everything both payouts check before planning. A string result is the
- * finished PayoutResult to return.
+ * Everything both payouts check before planning. A PayoutResult answer
+ * ends the payout there.
  */
 async function prepare(
   request: PayoutRequest,
