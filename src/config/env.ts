@@ -177,6 +177,11 @@ export const env = Object.freeze({
 
   nearIntentsJwt: readRequiredString("NEAR_INTENTS", process.env.NEAR_INTENTS),
 
+  // Exolix, the swap provider for pairs with XMR on one side
+  // (src/swap/exolix.ts). Empty: Exolix is off, and swap mode neither offers
+  // XMR nor delivers it; swaps already open are still followed.
+  exolixApiKey: process.env.EXOLIX_API_KEY?.trim() ?? "",
+
   // ExchangeRate-API's keyed plan, the first source of USD → fiat rates.
   // Optional: without it only the keyless currency-api is asked
   // (src/invoice/fx-rates.ts).

@@ -1,0 +1,44 @@
+{
+  "id": "ab93061434dd0s",
+  "amount": 0.64,
+  "amountTo": 0.06584184,
+  "coinFrom": {
+    "coinCode": "XMR",
+    "coinName": "Monero",
+    "network": "XMR",
+    "networkName": "Monero",
+    "networkShortName": null,
+    "icon": "https://exolix.com/public/coins/XMR.png",
+    "memoName": null,
+    "contract": null
+  },
+  "coinTo": {
+    "coinCode": "ETH",
+    "coinName": "Ethereum",
+    "network": "ETH",
+    "networkName": "Ethereum (ERC20)",
+    "networkShortName": "ERC20",
+    "icon": "https://exolix.com/public/coins/ETH.png",
+    "memoName": null,
+    "contract": "0x0000000000000000000000000000000000000000"
+  },
+  "comment": null,
+  "createdAt": "2022-06-02T05:56:59.719Z",
+  "depositAddress": "8Ac94Ag5AHWJ6UTNhhsxxxVenseJZE1YtSWCEVUkCwjkANaGUtCTBjo51cxxxefLn47RxfMTLhj2dfVix6xDqBmY847F4CK",
+  "depositExtraId": null,
+  "withdrawalAddress": "0x999e78a3c0xdx8464e0d96xxx0cf33a82d41a153",
+  "withdrawalExtraId": "",
+  "hashIn": {
+    "hash": "6eb14e310e83d68b5xxxc779159a0776e9bae39e3c2f9xxea5138a23bb75c4b6",
+    "link": "https://xxx.xx/bitcoin/transaction/6eb14e310e83d68b5xxxc779159a0776e9bae39e3c2f9xxea5138a23bb75c4b6"
+  },
+  "hashOut": {
+    "hash": null,
+    "link": null
+  },
+  "rate": 0.10287788,
+  "rateType": "float",
+  "refundAddress": null,
+  "refundExtraId": null,
+  "status": "exchanging"
+}

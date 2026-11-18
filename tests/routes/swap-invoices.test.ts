@@ -5,12 +5,14 @@ import { after, before, describe, it } from "node:test";
 import type { Db } from "mongodb";
 
 import { computeBlindIndex } from "../../src/security/blind-index.js";
+import { createSwapProvider } from "../../src/swap/registry.js";
 import { postJson, startTestApp } from "../helpers/http-app.js";
 
 // Swap mode over HTTP: the merchant API creates the invoice, the payer picks
 // any coin the swap provider and a chain adapter support, and the rate is
-// locked at the choice. The swap port is the real NEAR adapter: only its
-// `supports` (no network) is used here.
+// locked at the choice. The swap port is the real one (NEAR and Exolix behind
+// the router) with Exolix off (no API key): only `supports` (no network) is
+// used here. Exolix on: tests/routes/xmr-swap-invoices.test.ts.
 // Needs a test database: MONGODB_URI=… MONGODB_DATABASE=merchant_test.
 
 const USDC_ADDRESS = "0x000000000000000000000000000000000000dEaD";
@@ -22,7 +24,16 @@ let stop: () => Promise<void>;
 const userIds: string[] = [];
 
 before(async () => {
-  ({ baseUrl, db, stop } = await startTestApp({ getPrice: async (coin) => PRICES[coin] }));
+  const swap = createSwapProvider({
+    fetch: async () => {
+      throw new Error("no network in this test");
+    },
+    nearJwt: "",
+    exolixApiKey: "",
+    now: Date.now,
+    usdPrice: async (coin) => PRICES[coin],
+  });
+  ({ baseUrl, db, stop } = await startTestApp({ getPrice: async (coin) => PRICES[coin], swap }));
 });
 
 after(async () => {
@@ -71,7 +82,7 @@ describe("creating a swap-mode invoice", () => {
       [...data.offeredCoins].sort(),
       ["btc", "bsc", "daieth", "eth", "ltc", "sol", "ton", "usdceth", "usdteth", "usdtsol", "usdcsol", "usdtton", "usdttrx"].sort(),
     );
-    assert.ok(!data.offeredCoins.includes("xmr"), "XMR waits for the Exolix provider (ticket 24)");
+    assert.ok(!data.offeredCoins.includes("xmr"), "XMR needs Exolix, which is off");
     assert.deepEqual(
       data.coinOptions.find((o: { crypto: string }) => o.crypto === "usdceth"),
       { crypto: "usdceth", payout: "direct" },
@@ -108,7 +119,7 @@ describe("creating a swap-mode invoice", () => {
     assert.equal(await db.collection("invoices").countDocuments({ user_id: m.userId }), 0);
   });
 
-  it("is refused for a receive coin no swap can deliver (XMR before ticket 24) or with no chain adapter", async () => {
+  it("is refused for a receive coin no swap can deliver (XMR with Exolix off) or with no chain adapter", async () => {
     const m = await merchant({
       xmr: "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A",
       usdtbsc: USDC_ADDRESS,

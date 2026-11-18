@@ -1,0 +1,44 @@
+{
+  "id": "exo0a1b2c3d4e5f",
+  "amount": 1.5,
+  "amountTo": 752.1745,
+  "coinFrom": {
+    "coinCode": "XMR",
+    "coinName": "Monero",
+    "network": "XMR",
+    "networkName": "Monero",
+    "networkShortName": null,
+    "icon": "https://exolix.com/public/coins/XMR.png",
+    "memoName": null,
+    "contract": null
+  },
+  "coinTo": {
+    "coinCode": "USDT",
+    "coinName": "TetherUS",
+    "network": "TRX",
+    "networkName": "Tron",
+    "networkShortName": "TRC20",
+    "icon": "https://exolix.com/public/coins/USDT.png",
+    "memoName": null,
+    "contract": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+  },
+  "comment": null,
+  "createdAt": "2026-11-18T12:06:00.000Z",
+  "depositAddress": "8AsN91rznfkBGTY8psSNkJBg9SZgxxGGRUhGwRptBhgr5XSQ1XzmA9m8QAnoxydecSh5aLJXdrgXwTDMMZ1AuXsN1EX5Mtm",
+  "depositExtraId": null,
+  "withdrawalAddress": "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8",
+  "withdrawalExtraId": "",
+  "hashIn": {
+    "hash": null,
+    "link": null
+  },
+  "hashOut": {
+    "hash": null,
+    "link": null
+  },
+  "rate": 501.44966667,
+  "rateType": "float",
+  "refundAddress": "86kKnBKFqzCLxtK1Jmx2BkNBDBSMDEVaRYMMyVbeURYDWs8uNGDZURKCA5yRcyMxHzPcmCf1q2fSdhQVcaKsFrtGRsdGfNk",
+  "refundExtraId": "",
+  "status": "wait"
+}

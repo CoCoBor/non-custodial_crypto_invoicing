@@ -6,7 +6,8 @@
         "explorer_link": "https://mempool.space/tx/***",
         "decimal": 8,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:btc.omft.near"
+        "near_asset_id": "nep141:btc.omft.near",
+        "exolix": { "coin": "BTC", "network": "BTC" }
     },
     "ltc": {
         "name": "Litecoin",
@@ -15,7 +16,8 @@
         "explorer_link": "https://blockchair.com/litecoin/transaction/***",
         "decimal": 8,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:ltc.omft.near"
+        "near_asset_id": "nep141:ltc.omft.near",
+        "exolix": { "coin": "LTC", "network": "LTC" }
     },
     "eth": {
         "name": "Ethereum",
@@ -24,7 +26,8 @@
         "explorer_link": "https://etherscan.io/tx/***",
         "decimal": 18,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:eth.omft.near"
+        "near_asset_id": "nep141:eth.omft.near",
+        "exolix": { "coin": "ETH", "network": "ETH" }
     },
     "sol": {
         "name": "Solana",
@@ -33,7 +36,8 @@
         "explorer_link": "https://solscan.io/tx/***",
         "decimal": 9,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:sol.omft.near"
+        "near_asset_id": "nep141:sol.omft.near",
+        "exolix": { "coin": "SOL", "network": "SOL" }
     },
     "xmr": {
         "name": "Monero",
@@ -41,7 +45,8 @@
         "symbol": "xmr",
         "explorer_link": "https://monero.com/tx/***",
         "decimal": 12,
-        "required_confirmations": 1
+        "required_confirmations": 1,
+        "exolix": { "coin": "XMR", "network": "XMR" }
     },
     "ton": {
         "name": "GRAM",
@@ -60,7 +65,8 @@
         "contract_address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
         "decimal": 6,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near"
+        "near_asset_id": "nep141:eth-0xdac17f958d2ee523a2206206994597c13d831ec7.omft.near",
+        "exolix": { "coin": "USDT", "network": "ETH" }
     },
     "daieth": {
         "name": "Dai Stablecoin",
@@ -70,7 +76,8 @@
         "contract_address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
         "decimal": 18,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:eth-0x6b175474e89094c44da98b954eedeac495271d0f.omft.near"
+        "near_asset_id": "nep141:eth-0x6b175474e89094c44da98b954eedeac495271d0f.omft.near",
+        "exolix": { "coin": "DAI", "network": "ETH" }
     },
     "usdceth": {
         "name": "USDC",
@@ -80,7 +87,8 @@
         "contract_address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
         "decimal": 6,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near"
+        "near_asset_id": "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near",
+        "exolix": { "coin": "USDC", "network": "ETH" }
     },
     "usdtbsc": {
         "name": "Tether USD (BSC)",
@@ -90,7 +98,8 @@
         "contract_address": "0x55d398326f99059fF775485246999027B3197955",
         "decimal": 18,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:bnb-0x55d398326f99059ff775485246999027b3197955.omdep.near"
+        "near_asset_id": "nep141:bnb-0x55d398326f99059ff775485246999027b3197955.omdep.near",
+        "exolix": { "coin": "USDT", "network": "BSC" }
     },
     "usdcbsc": {
         "name": "USD Coin (BSC)",
@@ -100,7 +109,8 @@
         "contract_address": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
         "decimal": 18,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:bnb-0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d.omdep.near"
+        "near_asset_id": "nep141:bnb-0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d.omdep.near",
+        "exolix": { "coin": "USDC", "network": "BSC" }
     },
     "usdtsol": {
         "name": "Tether USD (Solana)",
@@ -110,7 +120,8 @@
         "mint_address": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
         "decimal": 6,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near"
+        "near_asset_id": "nep141:sol-c800a4bd850783ccb82c2b2c7e84175443606352.omft.near",
+        "exolix": { "coin": "USDT", "network": "SOL" }
     },
     "usdcsol": {
         "name": "USD Coin (Solana)",
@@ -120,7 +131,8 @@
         "mint_address": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
         "decimal": 6,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near"
+        "near_asset_id": "nep141:sol-5ce3bf3a31af18be40ba30f721101b4341690186.omft.near",
+        "exolix": { "coin": "USDC", "network": "SOL" }
     },
     "bsc": {
         "name": "BNB",
@@ -129,7 +141,8 @@
         "explorer_link": "https://bscscan.com/tx/***",
         "decimal": 18,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:bnb.omdep.near"
+        "near_asset_id": "nep141:bnb.omdep.near",
+        "exolix": { "coin": "BNB", "network": "BSC" }
     },
     "daibsc": {
         "name": "Dai (BSC)",
@@ -138,7 +151,8 @@
         "explorer_link": "https://bscscan.com/tx/***",
         "contract_address": "0x1AF3F329e8BE154074D8769D1FFa4eE058B1DBc3",
         "decimal": 18,
-        "required_confirmations": 1
+        "required_confirmations": 1,
+        "exolix": { "coin": "DAI", "network": "BSC" }
     },
     "usdtton": {
         "name": "Tether USD (TON)",
@@ -148,7 +162,8 @@
         "jetton_master": "EQCxE6mUtQJKFnGfaROTKOt1lZbDiiX1kCixRv7Nw2Id_sDs",
         "decimal": 6,
         "required_confirmations": 1,
-        "near_asset_id": "nep245:v2_1.omni.hot.tg:1117_3tsdfyziyc7EJbP2aULWSKU4toBaAcN4FdTgfm5W1mC4ouR"
+        "near_asset_id": "nep245:v2_1.omni.hot.tg:1117_3tsdfyziyc7EJbP2aULWSKU4toBaAcN4FdTgfm5W1mC4ouR",
+        "exolix": { "coin": "USDT", "network": "TON" }
     },
     "usdttrx": {
         "name": "Tether USD (Tron)",
@@ -158,6 +173,7 @@
         "contract_address": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
         "decimal": 6,
         "required_confirmations": 1,
-        "near_asset_id": "nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near"
+        "near_asset_id": "nep141:tron-d28a265909efecdcee7c5028585214ea0b96f015.omft.near",
+        "exolix": { "coin": "USDT", "network": "TRX" }
     }
 }

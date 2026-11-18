@@ -19,6 +19,7 @@ export function fakeAppEnv(
     ACCOUNT_LOOKUP_HMAC_KEY: randomBytes(32).toString("base64"),
     NOWNODES_API_KEY: "fake-nownodes-key",
     NEAR_INTENTS: "fake-near-jwt",
+    EXOLIX_API_KEY: "fake-exolix-key",
     PLATFORM_BTC_ADDRESS: "bc1qfake",
     PLATFORM_ETH_ADDRESS: "0x000000000000000000000000000000000000dEaD",
     PLATFORM_LTC_ADDRESS: new litecore.PrivateKey().toAddress().toString(),

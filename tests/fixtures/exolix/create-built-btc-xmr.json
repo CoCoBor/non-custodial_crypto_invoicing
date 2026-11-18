@@ -1,0 +1,44 @@
+{
+  "id": "exo9f8e7d6c5b4a",
+  "amount": 0.00094,
+  "amountTo": 0.11809674,
+  "coinFrom": {
+    "coinCode": "BTC",
+    "coinName": "Bitcoin",
+    "network": "BTC",
+    "networkName": "Bitcoin",
+    "networkShortName": null,
+    "icon": "https://exolix.com/public/coins/BTC.png",
+    "memoName": null,
+    "contract": null
+  },
+  "coinTo": {
+    "coinCode": "XMR",
+    "coinName": "Monero",
+    "network": "XMR",
+    "networkName": "Monero",
+    "networkShortName": null,
+    "icon": "https://exolix.com/public/coins/XMR.png",
+    "memoName": null,
+    "contract": null
+  },
+  "comment": null,
+  "createdAt": "2026-11-18T12:06:00.000Z",
+  "depositAddress": "bc1q9d4ywgfnd8h43da5tpcxcn6ajv590cg6d3tg6axemvljvt2k76zs50tv4q",
+  "depositExtraId": null,
+  "withdrawalAddress": "44Kbx4sJ7JDRDV5aAhLJzQCjDz2ViLRduE3ijDZu3osWKBjMGkV1XPk4pfDUMqt1Aiezvephdqm6YD19GKFD9ZcXVUTp6BW",
+  "withdrawalExtraId": "",
+  "hashIn": {
+    "hash": null,
+    "link": null
+  },
+  "hashOut": {
+    "hash": null,
+    "link": null
+  },
+  "rate": 125.63482979,
+  "rateType": "float",
+  "refundAddress": "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+  "refundExtraId": "",
+  "status": "wait"
+}

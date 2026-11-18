@@ -262,7 +262,7 @@ async function createSwapInvoice(req: Request, res: Response, merchant: Merchant
   const price = parsePrice(res, parsed.data);
   if (price === undefined) return res;
 
-  // XMR has no swap provider until ticket 24 (Exolix) adds one to the swap port.
+  // Pairs with XMR on one side are Exolix's, and only while EXOLIX_API_KEY is set.
   const deposits = depositAssets();
   const swappable = deposits.filter((coin) => coin !== receive && deps.swap.supports(coin, receive));
   if (adapterFor(receive) === undefined || swappable.length === 0) {
