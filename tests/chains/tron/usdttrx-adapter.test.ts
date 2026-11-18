@@ -143,28 +143,45 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
 
   /**
    * What the payout must have planned, from what the chain shows it really
-   * used: each transfer's fee limit is its energy plus 10% at the energy
-   * price, plus its bandwidth at the byte price; the gas wallet's spend is
-   * the top-up plus the activation fee (a new deposit) or its own bandwidth.
+   * used. The top-up covers each transfer's fee limit (its energy plus 10% at
+   * the energy price) plus its bandwidth at the byte price. The merchant is
+   * charged only the estimate (fix ticket F): the energy at its price, the
+   * bandwidth the deposit's free allowance does not cover, and the gas
+   * wallet's own cost (the activation for a new deposit, else its own
+   * bandwidth). TRE's energy estimate is exact and its free bandwidth (5,000
+   * bytes a day) covers both transfers, so the charge equals the real burn.
+   * What is left at the deposit goes back to the gas wallet (gas_sweep).
    */
-  async function expectedFromChain(paid: PayoutResult & { status: "paid" }, received: bigint, feeRate: bigint, depositTrx = 0n) {
+  async function expectedFromChain(
+    paid: PayoutResult & { status: "paid" },
+    received: bigint,
+    feeRate: bigint,
+    deposit: { trx: bigint; active: boolean } = { trx: 0n, active: false },
+  ) {
     const energyFee = await node.chainParameter("getEnergyFee");
     const bytesFee = await node.chainParameter("getTransactionFee");
     const activationFee = (await node.chainParameter("getCreateAccountFee")) + (await node.chainParameter("getCreateNewAccountFeeInSystemContract"));
     let needed = 0n;
-    for (const t of paid.transfers.filter((t) => t.kind !== "gas_top_up")) {
+    let burned = 0n;
+    for (const t of paid.transfers.filter((t) => t.kind !== "gas_top_up" && t.kind !== "gas_sweep")) {
       const cost = await node.costOf(t.txid);
       needed += ceilDivide(cost.energy * energyFee * 110n, 100n) + cost.netUsage * bytesFee;
+      burned += cost.fee;
     }
-    const topUp = needed > depositTrx ? needed - depositTrx : 0n;
-    // A deposit that already has an account costs the gas wallet only its own bandwidth.
+    const topUp = needed > deposit.trx ? needed - deposit.trx : 0n;
     const topUpTx = paid.transfers.find((t) => t.kind === "gas_top_up");
-    const ownBandwidth = depositTrx === 0n || topUpTx === undefined ? 0n : (await node.costOf(topUpTx.txid)).netUsage * bytesFee;
-    const spend = topUp === 0n ? 0n : topUp + (depositTrx === 0n ? activationFee : ownBandwidth);
-    const reimbursed = ceilDivide(spend * 3n, 10n);
+    const ownCost = !deposit.active ? activationFee : topUpTx === undefined ? 0n : (await node.costOf(topUpTx.txid)).netUsage * bytesFee;
+    const charged = topUp === 0n ? 0n : (burned > deposit.trx ? burned - deposit.trx : 0n) + ownCost;
+    const reimbursed = ceilDivide(charged * 3n, 10n);
     const fee = ceilDivide(received * feeRate, 10n ** 8n);
-    return { topUp, spend, reimbursed, fee, merchant: received - fee - reimbursed, platform: fee + reimbursed };
+    const sweep = topUp === 0n ? 0n : deposit.trx + topUp - burned;
+    // What the code before fix ticket F charged: the whole top-up and the gas wallet's own cost.
+    const oldCharge = topUp === 0n ? 0n : topUp + ownCost;
+    return { topUp, burned, charged, oldCharge, reimbursed, sweep, fee, merchant: received - fee - reimbursed, platform: fee + reimbursed };
   }
+
+  /** TRX the payout's sweep sent back to the gas wallet. */
+  const sweptBack = (paid: PayoutResult & { status: "paid" }) => paid.transfers.find((t) => t.kind === "gas_sweep")?.amount ?? 0n;
 
   // ---------- Payments ----------
 
@@ -208,7 +225,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
 
   // ---------- Payouts ----------
 
-  it("pays at 5% to a new merchant address: activation and both transfers' TRX topped up, exact USDT shares, the gas reimbursed in USDT", async () => {
+  it("pays at 5% to a new merchant address: the merchant charged the estimated burn only, the unused TRX swept back to the gas wallet", async (t) => {
     await freshAdapter();
     const received = 1_000n * ONE_USDT;
     const d = await fundedDeposit(received);
@@ -224,8 +241,10 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
         ["gas_top_up", d.deposit.address, "sun"],
         ["merchant_payout", d.destination, want.merchant],
         ["platform_fee", platform, want.platform],
+        ["gas_sweep", gasWallet.address, want.sweep],
       ],
     );
+    assert.ok(want.sweep > 0n);
     assert.equal(await tokens(d.destination), want.merchant);
     assert.equal(await tokens(platform), want.platform);
     assert.equal(await tokens(d.deposit.address), 0n);
@@ -234,11 +253,14 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     // The recorded gas_top_up is what really left the gas wallet: top-up plus the account creation it paid.
     const topUpCost = await node.costOf(paid.transfers[0]!.txid);
     assert.equal(paid.transfers[0]!.amount, want.topUp + topUpCost.fee);
-    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount);
     assert.equal(topUpCost.fee, (await node.chainParameter("getCreateAccountFee")) + (await node.chainParameter("getCreateNewAccountFeeInSystemContract")));
-    // Unused energy headroom (and bandwidth the node gave for free) stays at the deposit as TRX.
-    const burned = (await node.costOf(paid.transfers[1]!.txid)).fee + (await node.costOf(paid.transfers[2]!.txid)).fee;
-    assert.equal(await node.trxBalance(d.deposit.address), want.topUp - burned);
+    // Unused energy headroom (and bandwidth the node gave for free) goes back to the gas wallet.
+    assert.equal((await node.costOf(paid.transfers[3]!.txid)).fee, 0n, "the sweep's bandwidth was free");
+    assert.equal(await node.trxBalance(d.deposit.address), 0n);
+    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount - want.sweep);
+    const realSpend = topUpCost.fee + want.burned;
+    assert.equal(want.charged, realSpend, "on TRE the estimate is exact");
+    t.diagnostic(`tron payout, sun: old charge ${want.oldCharge}, new charge ${want.charged}, real spend ${realSpend}, swept back ${want.sweep}`);
   });
 
   it("pays at 0%: the platform transfer carries only the reimbursement", async () => {
@@ -250,7 +272,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     const want = await expectedFromChain(paid, received, 0n);
 
     assert.equal(want.fee, 0n);
-    assert.deepEqual(paid.transfers.map((t) => t.kind), ["gas_top_up", "merchant_payout", "platform_fee"]);
+    assert.deepEqual(paid.transfers.map((t) => t.kind), ["gas_top_up", "merchant_payout", "platform_fee", "gas_sweep"]);
     assert.equal(await tokens(d.destination), received - want.reimbursed);
     assert.equal(await tokens(platform), want.reimbursed);
   });
@@ -266,7 +288,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
 
     assert.equal(want.fee, 4n * ONE_USDT);
     assert.equal(d.saved.at(-1)!.plan.platformFee, want.fee);
-    assert.deepEqual(paid.transfers.map((t) => t.kind), ["gas_top_up", "refund_route", "platform_fee"]);
+    assert.deepEqual(paid.transfers.map((t) => t.kind), ["gas_top_up", "refund_route", "platform_fee", "gas_sweep"]);
     assert.equal(await tokens(d.destination), received - want.fee - want.reimbursed);
     assert.equal(await tokens(platform), want.fee + want.reimbursed);
   });
@@ -294,7 +316,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     await payUntilPaid(d.request);
     const merchantBefore = await tokens(d.destination);
     const leftover = await node.trxBalance(d.deposit.address);
-    assert.ok(leftover > 0n);
+    assert.equal(leftover, 0n, "the first payout swept the deposit's TRX back");
 
     const late = 40n * ONE_USDT;
     await node.payToken(contract, d.deposit.address, late);
@@ -304,16 +326,17 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     const gasBefore = await node.trxBalance(gasWallet.address);
 
     const paid = await payUntilPaid(route.request);
-    const want = await expectedFromChain(paid, late, FIVE_PERCENT, leftover);
+    const want = await expectedFromChain(paid, late, FIVE_PERCENT, { trx: leftover, active: true });
 
-    assert.deepEqual(paid.transfers.map((t) => t.kind), ["gas_top_up", "refund_route", "platform_fee"]);
+    assert.deepEqual(paid.transfers.map((t) => t.kind), ["gas_top_up", "refund_route", "platform_fee", "gas_sweep"]);
     assert.equal(await tokens(refund), want.merchant);
     assert.equal((await tokens(platform)) - platformBefore, want.platform);
     assert.equal(await tokens(d.destination), merchantBefore, "the merchant was not paid again");
     assert.equal(await tokens(d.deposit.address), 0n);
     const topUpCost = await node.costOf(paid.transfers[0]!.txid);
     assert.equal(paid.transfers[0]!.amount, want.topUp + topUpCost.fee);
-    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount);
+    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount - want.sweep);
+    assert.equal(await node.trxBalance(d.deposit.address), 0n);
   });
 
   /** A refund route from the same deposit: its own checkpoints, minimumAmount 1. */
@@ -371,10 +394,48 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
 
     assert.deepEqual(paidAgain, paid);
     assert.equal(counting.sent.length, sentAtPaid, "nothing sent after paid");
-    assert.equal(new Set(counting.sent.slice(sentBefore)).size, 3, "top-up, merchant and platform transfers: three distinct transactions");
+    assert.equal(new Set(counting.sent.slice(sentBefore)).size, 4, "top-up, merchant and platform transfers, sweep: four distinct transactions");
+    assert.equal(saved.length, 3, "the sweep was saved before it was sent");
     const want = await expectedFromChain(paid, 100n * ONE_USDT, FIVE_PERCENT);
     assert.equal(await tokens(d.destination), want.merchant);
-    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount, "one top-up only");
+    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount - want.sweep, "one top-up and one sweep only");
+  });
+
+  it("after a crash right after the sweep is saved, sends that sweep once and never a second one", async () => {
+    await freshAdapter();
+    const saved: PayoutCheckpoint[] = [];
+    const d = await fundedDeposit(100n * ONE_USDT, {
+      saveCheckpoint: async (next) => {
+        saved.push(next);
+        if (next.plan.transfers.some((t) => t.kind === "gas_sweep")) throw new Error("process killed after the save");
+        return true;
+      },
+    });
+    const again = (): PayoutRequest => ({ ...d.request(undefined), checkpoint: saved.at(-1) });
+    let crashed = false;
+    for (let round = 0; round < 40 && !crashed; round += 1) {
+      try {
+        assert.equal((await adapter.payout(again())).status, "pending");
+      } catch (error) {
+        assert.match(String(error), /process killed/);
+        crashed = true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.ok(crashed, "the sweep's checkpoint was reached");
+    const sweep = saved.at(-1)!.plan.transfers.find((t) => t.kind === "gas_sweep")!;
+    const sentBefore = counting.sent.length;
+    const depositTrx = await node.trxBalance(d.deposit.address);
+    assert.ok(depositTrx > 0n, "nothing was swept before the crash");
+
+    const paid = await payUntilPaid(again);
+    const paidAgain = await adapter.payout(again());
+
+    assert.deepEqual(paidAgain, paid);
+    assert.equal(paid.transfers.at(-1)!.txid, sweep.txid, "the saved sweep, not a new one");
+    assert.equal(paid.transfers.at(-1)!.amount, depositTrx);
+    assert.equal(new Set(counting.sent.slice(sentBefore)).size, 1, "only the saved sweep was sent");
+    assert.equal(await node.trxBalance(d.deposit.address), 0n);
   });
 
   it("while sent transfers wait to be solidified, re-sends the same signed bytes and never a second version", async () => {
@@ -394,8 +455,9 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     }
     const paid = await payUntilPaid(d.request);
 
-    assert.equal(d.saved.length, 2, "nothing rebuilt");
-    assert.deepEqual(paid.transfers.slice(1).map((t) => t.txid), signedTransfers);
+    assert.equal(d.saved.length, 3, "nothing rebuilt: the third save is the sweep");
+    assert.deepEqual(d.saved[2]!.plan.transfers.slice(1, 3).map((t) => t.txid), signedTransfers);
+    assert.deepEqual(paid.transfers.slice(1, 3).map((t) => t.txid), signedTransfers);
     const want = await expectedFromChain(paid, 100n * ONE_USDT, FIVE_PERCENT);
     assert.equal(await tokens(d.destination), want.merchant);
   });
@@ -427,7 +489,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
 
       const paid = await payUntilPaid(d.request);
       assert.equal(paid.transfers[0]!.txid, topUp);
-      assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount, "one top-up only");
+      assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount - sweptBack(paid), "one top-up only");
     });
 
     it("past the margin, looks the top-up up again and follows it instead of rebuilding", async () => {
@@ -450,7 +512,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
       assert.equal(d.saved[1]!.plan.transfers[0]!.txid, topUp);
 
       const paid = await payUntilPaid(d.request);
-      assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount, "one top-up only");
+      assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount - sweptBack(paid), "one top-up only");
     });
 
     it("past the margin, looks the transfers up again and proves them instead of rebuilding", async () => {
@@ -472,10 +534,14 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
         counting.state.hideInfoReads = 0;
         counting.state.solidHeadAheadMs = 0;
       }
-      assert.equal(result.status, "paid", show(result));
-      assert.equal(d.saved.length, 2, "nothing rebuilt");
-      assert.deepEqual(result.status === "paid" && result.transfers.slice(1).map((t) => t.txid), signedTransfers);
-      const want = await expectedFromChain(result as PayoutResult & { status: "paid" }, 100n * ONE_USDT, FIVE_PERCENT);
+      // Proven, so the sweep follows (the next save); the transfers are not rebuilt.
+      assert.equal(result.status, "pending", show(result));
+      assert.match((result as { reason: string }).reason, /gas sweep sent/);
+      assert.equal(d.saved.length, 3);
+      assert.deepEqual(d.saved[2]!.plan.transfers.slice(1, 3).map((t) => t.txid), signedTransfers);
+      const paid = await payUntilPaid(d.request);
+      assert.deepEqual(paid.transfers.slice(1, 3).map((t) => t.txid), signedTransfers);
+      const want = await expectedFromChain(paid, 100n * ONE_USDT, FIVE_PERCENT);
       assert.equal(await tokens(d.destination), want.merchant);
     });
   });
@@ -536,7 +602,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     const want = await expectedFromChain(paid, 100n * ONE_USDT, FIVE_PERCENT);
     assert.equal(await tokens(d.destination), want.merchant);
     assert.equal(await tokens(platform), want.platform);
-    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount, "one top-up only");
+    assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount - sweptBack(paid), "one top-up only");
   });
 
   it("says too small to forward, and sends nothing, when the network cost would eat the deposit", async () => {

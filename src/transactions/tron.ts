@@ -24,6 +24,11 @@ import { openSecret, type SealedSecret } from "../security/secret-envelope.js";
 //    platform (fee + reimbursement).
 // What the gas wallet spends is converted to USDT at the current TRX price,
 // rounded up, and rides on the platform's transfer, as on EVM.
+// Since fix ticket F (owner option A) the merchant is charged the estimated
+// burn only: the simulated energy at its price and the bandwidth the
+// deposit's free allowance does not cover. The top-up still carries the
+// energy headroom and every byte; once the transfers are solidified, what is
+// left at the deposit goes back to the gas wallet (gas_sweep), saved first.
 //
 // Tron has no nonce. A signed transaction can land until its expiration;
 // after that, once the solidified chain's head is past it, it never can.
@@ -83,6 +88,8 @@ type ChainFees = {
   bytesFee: bigint;
   /** Sun a TRX transfer to a new account costs its sender. */
   activationFee: bigint;
+  /** Bandwidth bytes each account may use free per day. */
+  freeNetLimit: bigint;
 };
 
 const parametersSchema = z.object({
@@ -101,7 +108,32 @@ async function chainFees(api: TronApi): Promise<ChainFees | undefined> {
   // bandwidth, plus getCreateNewAccountFeeInSystemContract (1 TRX on mainnet;
   // the local node has none).
   const activationFee = createAccountFee + (params.get("getCreateNewAccountFeeInSystemContract") ?? 0n);
-  return { energyFee, bytesFee, activationFee };
+  return { energyFee, bytesFee, activationFee, freeNetLimit: params.get("getFreeNetLimit") ?? 0n };
+}
+
+/** Free bandwidth bytes `address` has left today; a new account gets the whole allowance. undefined: the lookup failed. */
+async function freeBandwidth(api: TronApi, address: string, active: boolean, fees: ChainFees): Promise<bigint | undefined> {
+  if (!active) return fees.freeNetLimit;
+  const parsed = z
+    .object({ freeNetLimit: z.number().int().nonnegative().optional(), freeNetUsed: z.number().int().nonnegative().optional() })
+    .safeParse(await api.post("/wallet/getaccountnet", { address, visible: true }));
+  if (!parsed.success) return undefined;
+  const left = BigInt(parsed.data.freeNetLimit ?? 0) - BigInt(parsed.data.freeNetUsed ?? 0);
+  return left > 0n ? left : 0n;
+}
+
+/**
+ * Sun the bandwidth of transactions sent in this order burns. A transaction
+ * uses the free allowance only if all its bytes fit, else it burns them all.
+ */
+function bandwidthBurn(sizes: bigint[], free: bigint, fees: ChainFees): bigint {
+  let left = free;
+  let burn = 0n;
+  for (const size of sizes) {
+    if (left >= size) left -= size;
+    else burn += size * fees.bytesFee;
+  }
+  return burn;
 }
 
 type Account = { active: boolean; balance: bigint };
@@ -297,8 +329,12 @@ const feeLimitFor = (energy: bigint, fees: ChainFees) => ceilDivide(energy * fee
 
 /** Sun one deposit transfer may burn: its energy (with headroom) and all its bandwidth. */
 function transferBurn(call: Extract<TronCall, { kind: "trc20_transfer" }>, fees: ChainFees, ref: RefBlock, lifetime: number): bigint {
-  const probe = signTronTx(call, SIZE_PROBE_KEY, { ref, expiration: ref.timestamp + lifetime, now: ref.timestamp });
-  return call.feeLimit + bandwidthBytes(probe) * fees.bytesFee;
+  return call.feeLimit + transferSize(call, ref, lifetime) * fees.bytesFee;
+}
+
+/** Bandwidth bytes of a transaction, measured on a throwaway signed copy. */
+function transferSize(call: TronCall, ref: RefBlock, lifetime: number): bigint {
+  return bandwidthBytes(signTronTx(call, SIZE_PROBE_KEY, { ref, expiration: ref.timestamp + lifetime, now: ref.timestamp }));
 }
 
 /** Sun the gas wallet's own top-up transaction may burn. */
@@ -325,8 +361,9 @@ export async function estimateTronTokenNetworkCost(deps: Omit<TronPayoutDeps, "g
   const energy = await transferEnergy(api, token.contract, platformAddress, platformAddress, 0n);
   if (energy === undefined || energy === "reverted") return undefined;
   const call = { kind: "trc20_transfer", from: platformAddress, contract: token.contract, to: platformAddress, amount: 1n, feeLimit: feeLimitFor(energy, fees) } as const;
-  const spend = 2n * transferBurn(call, fees, head, lifetime) + fees.activationFee;
-  return await trxInTokenUnits(spend, deps);
+  const size = transferSize(call, head, lifetime);
+  const charged = 2n * energy * fees.energyFee + bandwidthBurn([size, size], fees.freeNetLimit, fees) + fees.activationFee;
+  return await trxInTokenUnits(charged, deps);
 }
 
 // ---------- Saved state ----------
@@ -341,8 +378,10 @@ const stateSchema = z.object({
   v: z.literal(1),
   mode: z.literal("trc20"),
   phase: z.enum(["top_up", "transfers"]),
-  /** Sun the merchant is charged for: the top-up plus the gas wallet's fee budget. */
+  /** Sun the gas wallet plans to spend: the top-up plus its own fee. */
   plannedGasSpend: u64,
+  /** Sun the merchant is charged for (fix ticket F); absent in payouts saved before it. */
+  charged: u64.optional(),
   topUp: z
     .object({
       gasWallet: z.string(),
@@ -364,6 +403,10 @@ const stateSchema = z.object({
       }),
     )
     .min(1),
+  /** The deposit's TRX left after the transfers, back to the gas wallet; "none": decided not to. */
+  sweep: z
+    .union([z.literal("none"), z.object({ to: z.string(), amount: u64, signed: signedSchema })])
+    .optional(),
 });
 type TronState = z.infer<typeof stateSchema>;
 type PlannedTransfer = TronState["transfers"][number];
@@ -390,6 +433,9 @@ function checkpointOf(state: TronState, depositAddress: string, platformFee: big
   }
   for (const t of state.transfers) {
     transfers.push({ kind: t.kind, to: t.to, amount: BigInt(t.amount), txid: t.signed?.txid ?? "" });
+  }
+  if (state.sweep !== undefined && state.sweep !== "none") {
+    transfers.push({ kind: "gas_sweep", to: state.sweep.to, amount: BigInt(state.sweep.amount), txid: state.sweep.signed.txid });
   }
   // networkCost in token units: the gas wallet's planned spend, converted.
   return { state: JSON.stringify(state), plan: { transfers, platformFee, networkCost: reimbursement } };
@@ -497,6 +543,8 @@ async function planPayout(request: PayoutRequest, deps: TronPayoutDeps, lifetime
 
   const [deposit, fees, head] = await Promise.all([accountOf(api, depositAddress), chainFees(api), nowBlock(api)]);
   if (deposit === undefined || fees === undefined || head === undefined) return pending("Tron node lookups failed");
+  const free = await freeBandwidth(api, depositAddress, deposit.active, fees);
+  if (free === undefined) return pending("Tron bandwidth lookup failed");
 
   const energies: bigint[] = [];
   for (const to of [destination, platform]) {
@@ -515,14 +563,21 @@ async function planPayout(request: PayoutRequest, deps: TronPayoutDeps, lifetime
     ({ kind: "trc20_transfer", from: depositAddress, contract: token.contract, to, amount: received, feeLimit: feeLimitFor(energy, fees) }) as const;
   const calls = [callTo(destination, energies[0]!), callTo(platform, energies[1]!)];
 
-  // TRX already at the deposit (unused TRX of an earlier payout) counts.
+  // TRX already at the deposit (a payer's, or what an earlier payout could
+  // not sweep) counts towards the burn and lowers the charge.
   const plan = async (transferCount: 1 | 2) => {
-    const needed = calls.slice(0, transferCount).reduce((sum, call) => sum + transferBurn(call, fees, head, lifetime), 0n);
+    const used = calls.slice(0, transferCount);
+    const needed = used.reduce((sum, call) => sum + transferBurn(call, fees, head, lifetime), 0n);
     const topUp = needed > deposit.balance ? needed - deposit.balance : 0n;
-    const gasSpend = topUp === 0n ? 0n : topUp + topUpFee(deposit.active, fees, { from: gas.address, to: depositAddress, amount: topUp }, head, lifetime);
-    const reimbursement = await trxInTokenUnits(gasSpend, deps);
+    const ownFee = topUp === 0n ? 0n : topUpFee(deposit.active, fees, { from: gas.address, to: depositAddress, amount: topUp }, head, lifetime);
+    const gasSpend = topUp + ownFee;
+    const estimatedBurn =
+      energies.slice(0, transferCount).reduce((sum, energy) => sum + energy * fees.energyFee, 0n) +
+      bandwidthBurn(used.map((call) => transferSize(call, head, lifetime)), free, fees);
+    const charged = topUp === 0n ? 0n : (estimatedBurn > deposit.balance ? estimatedBurn - deposit.balance : 0n) + ownFee;
+    const reimbursement = await trxInTokenUnits(charged, deps);
     if (reimbursement === undefined) return undefined;
-    return { topUp, gasSpend, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n }) };
+    return { topUp, gasSpend, charged, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n }) };
   };
   const tooSmall: PayoutResult = { status: "too_small", reason: `${token.asset} payout is too small after the fee and the TRX network cost` };
   let planned = await plan(2);
@@ -534,7 +589,7 @@ async function planPayout(request: PayoutRequest, deps: TronPayoutDeps, lifetime
     if (planned === undefined) return pending(`no TRX/${token.asset} price to convert the network cost`);
     if (planned.split === undefined) return tooSmall;
   }
-  const { topUp, gasSpend, reimbursement } = planned;
+  const { topUp, gasSpend, charged, reimbursement } = planned;
   const split = planned.split!;
   const platformAmount = split.platformFee + reimbursement;
 
@@ -545,7 +600,7 @@ async function planPayout(request: PayoutRequest, deps: TronPayoutDeps, lifetime
     transfers.push({ kind: "platform_fee", to: platform, amount: platformAmount.toString(), feeLimit: calls[1]!.feeLimit.toString() });
   }
   const ctx: Context = { request, deps, lifetime, platformFee: split.platformFee, reimbursement };
-  const base: TronState = { v: 1, mode: "trc20", phase: "transfers", plannedGasSpend: gasSpend.toString(), transfers };
+  const base: TronState = { v: 1, mode: "trc20", phase: "transfers", plannedGasSpend: gasSpend.toString(), charged: charged.toString(), transfers };
 
   if (topUp === 0n) return await sendTransfers(ctx, base, depositKey);
 
@@ -741,5 +796,64 @@ async function followTransfers(ctx: Context, state: TronState): Promise<PayoutRe
       transfers: moved,
     };
   }
-  return { status: "paid", transfers: moved, ...(notes.length > 0 && { note: notes.join(" ") }) };
+  const paid: PayoutResult = { status: "paid", transfers: moved, ...(notes.length > 0 && { note: notes.join(" ") }) };
+  return await sweepThenPaid(ctx, state, paid);
+}
+
+// A sweep must land soon or be given up: completion waits for it.
+const SWEEP_LIFETIME_MS = 2 * 60_000;
+
+/**
+ * After the transfers are solidified: sends what is left of the top-up at
+ * the deposit back to the gas wallet, saved before it is sent. Only a payout
+ * that topped up sweeps (other TRX at the deposit is not the platform's),
+ * and only when the sweep brings back more than its bandwidth would burn.
+ * It never fails the payout: a sweep that can never land is left out, and
+ * the TRX stays at the deposit.
+ */
+async function sweepThenPaid(ctx: Context, state: TronState, paid: PayoutResult & { status: "paid" }): Promise<PayoutResult> {
+  const { api } = ctx.deps;
+  const { request } = ctx;
+  if (state.topUp === undefined || state.sweep === "none") return paid;
+  const withSweep = (transfer: Transfer): PayoutResult => ({ ...paid, transfers: [...paid.transfers, transfer] });
+
+  if (state.sweep !== undefined) {
+    const sweep = state.sweep;
+    const found = await savedTxFate(api, sweep.signed, ctx.deps.lostMarginMs ?? DEFAULT_LOST_MARGIN_MS);
+    if (found.fate === "wait") return pending(found.reason);
+    if (found.fate === "lost") return paid;
+    if (found.fate === "can_land") {
+      await broadcast(api, sweep.signed);
+      return pending("gas sweep sent; waiting for it to be solidified");
+    }
+    return withSweep({ kind: "gas_sweep", to: sweep.to, amount: BigInt(sweep.amount), txid: sweep.signed.txid });
+  }
+
+  const to = state.topUp.gasWallet;
+  const [account, fees, head] = await Promise.all([accountOf(api, request.depositAddress), chainFees(api), nowBlock(api)]);
+  if (account === undefined || fees === undefined || head === undefined) return pending("Tron node lookups failed");
+  const free = await freeBandwidth(api, request.depositAddress, account.active, fees);
+  if (free === undefined) return pending("Tron bandwidth lookup failed");
+  const lifetime = Math.min(ctx.lifetime, SWEEP_LIFETIME_MS);
+  // The size with the whole balance as the amount: no smaller amount is longer.
+  const size = transferSize({ kind: "trx", from: request.depositAddress, to, amount: account.balance }, head, lifetime);
+  const amount = account.balance - bandwidthBurn([size], free, fees);
+  const save = async (next: TronState) =>
+    await request.saveCheckpoint(checkpointOf(next, request.depositAddress, ctx.platformFee, ctx.reimbursement));
+
+  if (amount <= size * fees.bytesFee) {
+    // The decision is saved, so a call after paid answers the same.
+    if (!(await save({ ...state, sweep: "none" }))) return pending("another run saved this payout first");
+    return paid;
+  }
+  const depositKey = depositKeyOf(request);
+  if (typeof depositKey !== "string") return paid;
+  const signed = signTronTx({ kind: "trx", from: request.depositAddress, to, amount }, depositKey, {
+    ref: head,
+    expiration: head.timestamp + lifetime,
+    now: Date.now(),
+  });
+  if (!(await save({ ...state, sweep: { to, amount: amount.toString(), signed } }))) return pending("another run saved this payout first");
+  await broadcast(api, signed);
+  return pending("gas sweep sent; waiting for it to be solidified");
 }
