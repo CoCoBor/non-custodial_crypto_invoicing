@@ -60,6 +60,13 @@ import {
 //    and a later payout from it tops up only what is missing (as on EVM).
 // "Paid" is proven by the receivers' jetton wallets: the transaction in
 // which each one credited the planned amount.
+//
+// Since fix ticket F (owner option A), a payout that topped up the deposit
+// names the gas wallet as response_destination, and its last transfer
+// carries all the TON left at the deposit: every nanoton the jetton
+// transfers do not use returns to the gas wallet as `excesses` in the same
+// cascade of messages (the sweep, recorded as gas_sweep). The merchant is
+// charged the measured cost of the payout, not the TON sent along.
 
 // TON attached to each jetton transfer. The emulator's mainnet config used
 // about 2,000,000 per transfer to a receiver with no jetton wallet yet; the
@@ -70,12 +77,26 @@ export const JETTON_TRANSFER_TON = 20_000_000n;
 export const JETTON_DEPOSIT_FEE_BUDGET = 5_000_000n;
 // The gas wallet's own top-up transaction: about 513,000 on the emulator.
 export const GAS_WALLET_FEE_BUDGET = 2_000_000n;
+// What a payout really costs, measured on @ton/sandbox 0.45.0 (its default
+// config, a mainnet snapshot) for fix ticket F, 2026-11-19. The merchant is
+// charged these; the TON sent along beyond them comes back to the gas wallet.
+// - the gas wallet's own share: its top-up transaction (513,003) and taking
+//   in the two excesses (103,736);
+export const JETTON_GAS_WALLET_COST = 616_739n;
+// - the deposit's transaction with two jetton transfers, both jetton hops and
+//   the excesses sent back, to receivers whose jetton wallets exist;
+export const JETTON_TRANSFERS_COST = 1_797_748n;
+// - more when the deposit deploys itself in that transaction;
+export const JETTON_DEPOSIT_DEPLOY_COST = 430_599n;
+// - more per receiver whose jetton wallet the transfer deploys.
+export const JETTON_NEW_WALLET_COST = 974_433n;
 // The destination gets a transfer notification; services that credit
 // incoming jettons only on that notification would miss a transfer without it.
 const DESTINATION_FORWARD_TON = 1n;
 
 const OP_TRANSFER = 0x0f8a7ea5;
 const OP_INTERNAL_TRANSFER = 0x178d4519;
+const OP_EXCESSES = 0xd53276db;
 
 // A full page is treated as a listing that may be missing some.
 const PAYMENT_LIST_LIMIT = 100;
@@ -297,11 +318,24 @@ const depositNeeds = (transferCount: number) =>
 const gasWalletSpend = (topUp: bigint) => (topUp === 0n ? 0n : topUp + GAS_WALLET_FEE_BUDGET);
 
 /**
- * Payer-pays estimate, in jetton units: the gas wallet's spend for a deposit
- * that holds no TON (two transfers), at today's prices.
+ * Nanoton the merchant is charged for a payout that tops up (fix ticket F):
+ * the measured cost, less the TON already at the deposit, which the last
+ * transfer sends back with the rest. The gas wallet's own share is always
+ * charged.
+ */
+export function jettonPayoutCharge(input: { depositDeployed: boolean; newJettonWallets: number; depositTon: bigint }): bigint {
+  const atDeposit =
+    JETTON_TRANSFERS_COST + (input.depositDeployed ? 0n : JETTON_DEPOSIT_DEPLOY_COST) + BigInt(input.newJettonWallets) * JETTON_NEW_WALLET_COST;
+  return (atDeposit > input.depositTon ? atDeposit - input.depositTon : 0n) + JETTON_GAS_WALLET_COST;
+}
+
+/**
+ * Payer-pays estimate, in jetton units: a new deposit holding no TON, two
+ * transfers to receivers that already hold the jetton, at today's prices.
  */
 export async function estimateTonJettonNetworkCost(deps: { jetton: TonJetton; getPrice: PricePort }) {
-  return await tonInTokenUnits(gasWalletSpend(depositNeeds(2)), deps.jetton, deps.getPrice);
+  const charged = jettonPayoutCharge({ depositDeployed: false, newJettonWallets: 0, depositTon: 0n });
+  return await tonInTokenUnits(charged, deps.jetton, deps.getPrice);
 }
 
 // ---------- Saved state ----------
@@ -316,7 +350,7 @@ const stateSchema = z.object({
   v: z.literal(1),
   mode: z.literal("jetton"),
   phase: z.enum(["top_up", "transfers"]),
-  /** Nanoton the merchant is charged for: the top-up plus the gas wallet's fee budget. */
+  /** Nanoton the gas wallet plans to spend: the top-up plus its fee budget (what the merchant was charged before fix ticket F). */
   plannedGasSpend: u64String,
   /** The deposit's seqno when the payout was planned: its transfers must use it. */
   depositSeqno: z.number().int().nonnegative(),
@@ -332,6 +366,15 @@ const stateSchema = z.object({
     .optional(),
   /** Phase transfers: the deposit's signed message. */
   deposit: signedSchema.optional(),
+  /**
+   * The gas wallet (raw form) the jetton transfers send unused TON to, the
+   * last transfer carrying all the deposit's TON (fix ticket F). Absent: the
+   * deposit is the response destination and keeps it (no top-up, or a payout
+   * saved before fix ticket F).
+   */
+  sweepTo: z.string().regex(/^0:[0-9a-f]{64}$/).optional(),
+  /** Nanoton the merchant is charged for (fix ticket F); absent in payouts saved before it. */
+  charged: u64String.optional(),
   /** Destination first, then the platform (if it gets anything). */
   transfers: z
     .array(
@@ -404,15 +447,20 @@ function signTransfers(input: {
   validUntil: number;
   depositJettonWallet: Address;
   transfers: JettonState["transfers"];
+  sweepTo: string | undefined;
 }): Signed {
-  const response = input.wallet.contract.address;
+  const response = input.sweepTo === undefined ? input.wallet.contract.address : Address.parseRaw(input.sweepTo);
+  const last = input.transfers.length - 1;
   const signed = signW5External({
     wallet: input.wallet,
     seqno: input.seqno,
     deploy: input.deploy,
     validUntil: input.validUntil,
     messages: input.transfers.map((t, index) => ({
-      mode: SendMode.PAY_GAS_SEPARATELY | SendMode.IGNORE_ERRORS,
+      mode:
+        input.sweepTo !== undefined && index === last
+          ? SendMode.CARRY_ALL_REMAINING_BALANCE | SendMode.IGNORE_ERRORS
+          : SendMode.PAY_GAS_SEPARATELY | SendMode.IGNORE_ERRORS,
       message: internal({
         to: input.depositJettonWallet,
         value: JETTON_TRANSFER_TON,
@@ -442,6 +490,8 @@ type Context = {
   depositWallet: TonWallet;
   master: Address;
   what: string;
+  /** The saved payout's sweep destination, once known (see JettonState.sweepTo). */
+  sweepTo?: Address;
 };
 
 const pending = (reason: string, review?: string): PayoutResult => ({ status: "pending", reason, ...(review ? { review } : {}) });
@@ -574,14 +624,25 @@ async function start(ctx: Context): Promise<PayoutResult> {
       return pending("the deposit holds less than the payout minimum");
     }
 
-    // TON already at the deposit (unused TON of an earlier payout) counts.
+    // Receivers whose jetton wallet this payout deploys cost more.
+    let newJettonWallets = 0;
+    for (const owner of [destination, platform]) {
+      const wallet = await jettonWalletOf(api, ctx.master, owner);
+      const walletAccount = wallet === undefined ? undefined : await getTonAccount(api, wallet);
+      if (walletAccount === undefined) return pending("jetton wallet lookup failed");
+      if (walletAccount.state !== "active") newJettonWallets += 1;
+    }
+
+    // TON already at the deposit (a payer's, or left by an earlier payout) counts.
     const plan = async (transferCount: number) => {
       const needed = depositNeeds(transferCount);
       const topUp = needed > account.balance ? needed - account.balance : 0n;
       const gasSpend = gasWalletSpend(topUp);
-      const reimbursement = await tonInTokenUnits(gasSpend, jetton, deps.getPrice);
+      const charged =
+        topUp === 0n ? 0n : jettonPayoutCharge({ depositDeployed: walletState.deployed, newJettonWallets, depositTon: account.balance });
+      const reimbursement = await tonInTokenUnits(charged, jetton, deps.getPrice);
       if (reimbursement === undefined) return undefined;
-      return { topUp, gasSpend, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n }) };
+      return { topUp, gasSpend, charged, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n }) };
     };
     let planned = await plan(2);
     if (planned === undefined) return pending(`no TON/${jetton.asset} price to convert the network cost`);
@@ -596,7 +657,7 @@ async function start(ctx: Context): Promise<PayoutResult> {
         return { status: "too_small", reason: `${jetton.asset} payout is too small after the fee and the TON network cost` };
       }
     }
-    const { topUp, gasSpend, reimbursement } = planned;
+    const { topUp, gasSpend, charged, reimbursement } = planned;
     const split = planned.split!;
     const platformAmount = split.platformFee + reimbursement;
 
@@ -616,6 +677,7 @@ async function start(ctx: Context): Promise<PayoutResult> {
       mode: "jetton",
       phase: "transfers",
       plannedGasSpend: gasSpend.toString(),
+      charged: charged.toString(),
       depositSeqno: walletState.seqno,
       transfers,
     };
@@ -642,6 +704,7 @@ async function start(ctx: Context): Promise<PayoutResult> {
       ...base,
       phase: "top_up",
       topUp: { gasWallet: gasAddress.toRawString(), value: topUp.toString(), signed },
+      sweepTo: gasAddress.toRawString(),
     };
     if (!(await request.saveCheckpoint(checkpointOf(state, request.depositAddress, split.platformFee, reimbursement)))) {
       return pending("another run saved this payout first");
@@ -676,6 +739,7 @@ async function sendTransfers(ctx: Context, state: JettonState, platformFee: bigi
     validUntil: account.chainTime + TX_LIFETIME_SECONDS,
     depositJettonWallet,
     transfers: state.transfers,
+    sweepTo: state.sweepTo,
   });
   const next: JettonState = { ...state, phase: "transfers", deposit: signed };
   if (!(await ctx.request.saveCheckpoint(checkpointOf(next, ctx.request.depositAddress, platformFee, reimbursement)))) {
@@ -830,6 +894,7 @@ async function followTransfers(
     validUntil: account.chainTime + TX_LIFETIME_SECONDS,
     depositJettonWallet,
     transfers: state.transfers,
+    sweepTo: state.sweepTo,
   });
   const next: JettonState = { ...state, deposit: signed };
   if (!(await ctx.request.saveCheckpoint(checkpointOf(next, ctx.request.depositAddress, platformFee, reimbursement)))) {
@@ -840,7 +905,7 @@ async function followTransfers(
 }
 
 type Delivery =
-  | { kind: "delivered"; amount: bigint; txid: string }
+  | { kind: "delivered"; amount: bigint; txid: string; excess?: { from: Address; value: bigint; createdLt: bigint } }
   | { kind: "in_flight" }
   | { kind: "problem"; problem: string };
 
@@ -890,7 +955,28 @@ async function deliveryOf(
       problem: `the receiver's jetton wallet ${text(receiverWallet)} refused ${amountText} (exit code ${atReceiver.exitCode ?? "none"}); the jetton bounces them back to the deposit's jetton wallet ${text(depositJettonWallet)}`,
     };
   }
-  return { kind: "delivered", amount: credited.amount, txid: atReceiver.hash };
+  const sweepTo = ctx.sweepTo;
+  const excess =
+    sweepTo === undefined
+      ? undefined
+      : [...atReceiver.tx.outMessages.values()].find(
+          (m) => m.info.type === "internal" && m.info.dest.equals(sweepTo) && readExcesses(m.body),
+        );
+  return {
+    kind: "delivered",
+    amount: credited.amount,
+    txid: atReceiver.hash,
+    ...(excess?.info.type === "internal" && { excess: { from: receiverWallet, value: excess.info.value.coins, createdLt: excess.info.createdLt } }),
+  };
+}
+
+function readExcesses(body: Cell): boolean {
+  try {
+    const slice = body.beginParse();
+    return slice.remainingBits >= 32 && slice.loadUint(32) === OP_EXCESSES;
+  } catch {
+    return false;
+  }
 }
 
 async function prove(
@@ -905,10 +991,11 @@ async function prove(
   }
   const depositJettonWallet = await jettonWalletOf(ctx.deps.api, ctx.master, ctx.deposit);
   if (depositJettonWallet === undefined) return pending("jetton wallet lookup failed");
+  const sweepCtx: Context = state.sweepTo === undefined ? ctx : { ...ctx, sweepTo: Address.parseRaw(state.sweepTo) };
 
   const deliveries: Delivery[] = [];
   for (const [index, planned] of state.transfers.entries()) {
-    const delivery = await deliveryOf(ctx, depositJettonWallet, landed.outgoing, queryIdOf(saved.seqno, index), planned);
+    const delivery = await deliveryOf(sweepCtx, depositJettonWallet, landed.outgoing, queryIdOf(saved.seqno, index), planned);
     if (delivery === undefined) return pending("jetton wallet lookup failed");
     deliveries.push(delivery);
   }
@@ -942,6 +1029,13 @@ async function prove(
       const why = delivery.kind === "problem" ? delivery.problem : `credited ${delivery.kind === "delivered" ? delivery.amount : 0}`;
       notes.push(`Platform share of ${planned.amount} was not delivered as planned: ${why}. Deposit address ${ctx.request.depositAddress}.`);
     }
+  }
+  // The unused TON each receiver's jetton wallet sent back to the gas wallet.
+  for (const delivery of deliveries) {
+    if (delivery.kind !== "delivered" || delivery.excess === undefined || sweepCtx.sweepTo === undefined) continue;
+    const arrived = await locateResultTx(ctx.deps.api, delivery.excess.from, sweepCtx.sweepTo, delivery.excess.createdLt);
+    if (arrived === undefined) return pending("the unused TON is on its way back to the gas wallet");
+    moved.push({ kind: "gas_sweep", to: text(sweepCtx.sweepTo), amount: delivery.excess.value, txid: arrived.hash });
   }
   return { status: "paid", transfers: moved, ...(notes.length ? { note: notes.join(" ") } : {}) };
 }

@@ -16,7 +16,15 @@ Object.assign(process.env, fakeAppEnv());
 const { createTonJettonAdapter } = await import("../../../src/chains/ton.js");
 const { parseFeeRate, payerPaysAskedAmount } = await import("../../../src/money/payout-split.js");
 const { sealSecret } = await import("../../../src/security/secret-envelope.js");
-const { GAS_WALLET_FEE_BUDGET, JETTON_DEPOSIT_FEE_BUDGET, JETTON_TRANSFER_TON } = await import(
+const {
+  GAS_WALLET_FEE_BUDGET,
+  JETTON_DEPOSIT_DEPLOY_COST,
+  JETTON_DEPOSIT_FEE_BUDGET,
+  JETTON_GAS_WALLET_COST,
+  JETTON_TRANSFER_TON,
+  JETTON_TRANSFERS_COST,
+  jettonPayoutCharge,
+} = await import(
   "../../../src/transactions/ton-jetton.js"
 );
 const { accountOf, createTonEmulator } = await import("./emulator.js");
@@ -35,6 +43,9 @@ const usdt = await em.deployJetton(admin, USDT_MASTER);
 
 const text = (address: Address) => address.toString({ bounceable: false });
 const platform = await em.deployedWallet(payer);
+// The platform already holds USDT, as it will after its first fee.
+await usdt.mint(payer.address, 1n);
+await usdt.transfer(payer, platform.address, 1n);
 
 // The gas wallet starts funded but not deployed: its first top-up deploys it.
 const gas = await em.newWallet();
@@ -64,7 +75,12 @@ const usdtFor = (nanoton: bigint) => (nanoton * 3n * 10n ** 6n + 10n ** 9n - 1n)
 // A payer's wallet sends 1 nanoton with its notification, so a fresh deposit
 // holds 1 nanoton of TON when the payout starts.
 const FULL_TOP_UP = 2n * JETTON_TRANSFER_TON + JETTON_DEPOSIT_FEE_BUDGET - 1n;
-const FULL_REIMBURSEMENT = usdtFor(FULL_TOP_UP + GAS_WALLET_FEE_BUDGET);
+// What a first payout to a merchant with no USDT yet is charged (fix ticket
+// F): its measured cost, less that 1 nanoton.
+const NEW_MERCHANT_CHARGE = jettonPayoutCharge({ depositDeployed: false, newJettonWallets: 1, depositTon: 1n });
+const FULL_REIMBURSEMENT = usdtFor(NEW_MERCHANT_CHARGE);
+// What the code before fix ticket F charged: the gas wallet's whole planned spend.
+const OLD_CHARGE = FULL_TOP_UP + GAS_WALLET_FEE_BUDGET;
 
 /** A deposit made by the adapter, paid `amount` USDT by the payer, and a payout request for it. */
 async function paidDeposit(amount: bigint, destination: Address, feeRate = FIVE_PERCENT, fields: Partial<Request> = {}) {
@@ -183,8 +199,8 @@ describe("USDT on TON deposits and payments", () => {
     }
   });
 
-  it("estimates the network cost as the gas wallet's spend for an empty deposit, in USDT units", async () => {
-    assert.equal(await adapter.estimateNetworkCost(), usdtFor(2n * JETTON_TRANSFER_TON + JETTON_DEPOSIT_FEE_BUDGET + GAS_WALLET_FEE_BUDGET));
+  it("estimates the network cost as a new deposit's measured payout cost to receivers holding USDT, in USDT units", async () => {
+    assert.equal(await adapter.estimateNetworkCost(), usdtFor(JETTON_GAS_WALLET_COST + JETTON_TRANSFERS_COST + JETTON_DEPOSIT_DEPLOY_COST));
   });
 
   it("keeps TON's confirmation count", () => {
@@ -193,11 +209,12 @@ describe("USDT on TON deposits and payments", () => {
 });
 
 describe("a USDT-on-TON payout", () => {
-  it("at 5%: the gas wallet tops up the deposit, the merchant and the platform get exact USDT, and the gas is charged to the merchant", async () => {
+  it("at 5%: the merchant is charged the payout's real cost, not the TON sent along, which all comes back to the gas wallet", async (t) => {
     const merchant = await em.newWallet();
     const d = await paidDeposit(100_000_000n, merchant.address);
     const platformBefore = await usdt.balanceOf(platform.address);
     const gasBefore = await em.balanceOf(gas.address);
+    const gasWasNew = (await chain.getContract(gas.address)).accountState?.type !== "active";
     // F1: fee = 5% of 100 USDT; the gas wallet's planned spend, in USDT, comes off the merchant's share.
     const fee = 5_000_000n;
     const merchantAmount = 100_000_000n - fee - FULL_REIMBURSEMENT;
@@ -224,24 +241,39 @@ describe("a USDT-on-TON payout", () => {
     if (result.status !== "paid") return;
     assert.deepEqual(
       result.transfers.map((t) => [t.kind, t.to]),
-      [["gas_top_up", d.text], ["merchant_payout", text(merchant.address)], ["platform_fee", text(platform.address)]],
+      [
+        ["gas_top_up", d.text],
+        ["merchant_payout", text(merchant.address)],
+        ["platform_fee", text(platform.address)],
+        ["gas_sweep", text(gas.address)],
+        ["gas_sweep", text(gas.address)],
+      ],
     );
     assert.equal(await usdt.balanceOf(merchant.address), merchantAmount);
     assert.equal((await usdt.balanceOf(platform.address)) - platformBefore, fee + FULL_REIMBURSEMENT);
     assert.equal(await usdt.balanceOf(d.address), 0n);
-    assert.deepEqual(result.transfers.slice(1).map((t) => t.amount), [merchantAmount, fee + FULL_REIMBURSEMENT]);
-    const gasSpent = gasBefore - (await em.balanceOf(gas.address));
-    assert.equal(result.transfers[0]!.amount, gasSpent, "gas_top_up is what the gas wallet really spent");
-    assert.ok(gasSpent > FULL_TOP_UP && gasSpent <= FULL_TOP_UP + GAS_WALLET_FEE_BUDGET, `spent ${gasSpent}`);
-    assert.ok((await em.balanceOf(d.address)) > 0n, "unused TON stays at the deposit");
+    assert.deepEqual(result.transfers.slice(1, 3).map((t) => t.amount), [merchantAmount, fee + FULL_REIMBURSEMENT]);
+    const topUpSpent = result.transfers[0]!.amount;
+    assert.ok(topUpSpent > FULL_TOP_UP && topUpSpent <= FULL_TOP_UP + GAS_WALLET_FEE_BUDGET, `top-up spent ${topUpSpent}`);
+    const swept = result.transfers.slice(3).reduce((sum, t) => sum + t.amount, 0n);
+    const realSpend = gasBefore - (await em.balanceOf(gas.address));
+    assert.equal(await em.balanceOf(d.address), 0n, "the deposit keeps no TON");
+    assert.ok(topUpSpent - swept < realSpend, "the gas wallet paid a little to take the excesses in");
+    // The payer's 1 nanoton at the deposit was credited, then swept along. The
+    // suite's first top-up also deploys the gas wallet, once: the platform's cost.
+    const extra = realSpend - (NEW_MERCHANT_CHARGE + 1n);
+    assert.ok(extra === 0n || (gasWasNew && extra > 0n && extra < 1_000_000n), `real ${realSpend}, charged ${NEW_MERCHANT_CHARGE}`);
+    t.diagnostic(`ton jetton payout, nanoton: old charge ${OLD_CHARGE}, new charge ${NEW_MERCHANT_CHARGE}, real spend ${realSpend} (gas wallet deployed by it: ${gasWasNew}), swept back ${swept}`);
   });
 
-  it("sends the top-up non-bounceable, the deposit's commands bounceable, unused TON back to the deposit, and 1 nanoton forward to the destination", async () => {
+  it("sends the top-up non-bounceable, the deposit's commands bounceable, unused TON to the gas wallet, and 1 nanoton forward to the destination", async () => {
     const merchant = await em.deployedWallet(payer);
     const d = await paidDeposit(20_000_000n, merchant.address);
     const from = history.length;
+    const gasBefore = await em.balanceOf(gas.address);
 
     assert.equal((await payToEnd(d)).status, "paid");
+    assert.equal(gasBefore - (await em.balanceOf(gas.address)), NEW_MERCHANT_CHARGE + 1n, "the gas wallet's real spend is the charge");
 
     const [topUp] = sentBy(gas.address, from);
     assert.ok(topUp);
@@ -262,10 +294,12 @@ describe("a USDT-on-TON payout", () => {
       body.loadUintBig(64);
       body.loadCoins();
       body.loadAddress();
-      assert.ok(body.loadAddress().equals(d.address), "response_destination is the deposit");
+      assert.ok(body.loadAddress().equals(gas.address), "response_destination is the gas wallet");
       body.loadMaybeRef();
       assert.equal(body.loadCoins(), index === 0 ? 1n : 0n);
     }
+    assert.ok(commands[1]!.info.value.coins > JETTON_TRANSFER_TON, "the last command carries all the deposit's TON");
+    assert.equal(await em.balanceOf(d.address), 0n);
   });
 
   it("at 0%: the only platform transfer is the gas reimbursement", async () => {
@@ -306,12 +340,13 @@ describe("a USDT-on-TON payout", () => {
     const listed = await adapter.getPayments(d.text);
     assert.deepEqual(listed?.map((p) => p.amount).sort(), [10_000_000n, 40_000_000n]);
 
-    // Unused TON from the first payout is at the deposit; the top-up covers only the rest.
+    // The first payout swept the deposit's TON; only the late payer's notification is there.
     const leftover = await em.balanceOf(d.address);
+    assert.ok(leftover <= 1n, `left ${leftover}`);
     const needed = 2n * JETTON_TRANSFER_TON + JETTON_DEPOSIT_FEE_BUDGET;
-    const topUp = needed > leftover ? needed - leftover : 0n;
-    assert.ok(topUp > 0n && topUp < FULL_TOP_UP, `top-up ${topUp}`);
-    const reimbursement = topUp === 0n ? 0n : usdtFor(topUp + GAS_WALLET_FEE_BUDGET);
+    const topUp = needed - leftover;
+    // The deposit is deployed now; the refund address has no USDT yet.
+    const reimbursement = usdtFor(jettonPayoutCharge({ depositDeployed: true, newJettonWallets: 1, depositTon: leftover }));
     const fee = 500_000n;
     const refundAmount = 10_000_000n - fee - reimbursement;
     const route = { saved: [] as Checkpoint[] };
@@ -334,7 +369,8 @@ describe("a USDT-on-TON payout", () => {
     assert.equal(route.saved[0]!.plan.networkCost, reimbursement);
     assert.equal(route.saved[0]!.plan.transfers[0]!.amount, topUp + GAS_WALLET_FEE_BUDGET);
     const kinds = result.transfers.map((t) => t.kind);
-    assert.deepEqual(kinds, topUp === 0n ? ["refund_route", "platform_fee"] : ["gas_top_up", "refund_route", "platform_fee"]);
+    assert.deepEqual(kinds, ["gas_top_up", "refund_route", "platform_fee", "gas_sweep", "gas_sweep"]);
+    assert.equal(await em.balanceOf(d.address), 0n);
     assert.equal(await usdt.balanceOf(refund.address), refundAmount);
     assert.equal(await usdt.balanceOf(merchant.address), merchantPaid, "the merchant was paid again");
     assert.equal(await usdt.balanceOf(d.address), 0n);
@@ -448,8 +484,10 @@ describe("a USDT-on-TON payout", () => {
     assert.equal(await em.balanceOf(gas.address), gasBefore);
   });
 
-  it("payer-pays: paying exactly the asked amount leaves the merchant exactly the invoice amount", async () => {
+  it("payer-pays: paying exactly the asked amount leaves a merchant who holds USDT exactly the invoice amount", async () => {
     const merchant = await em.deployedWallet(payer);
+    await usdt.mint(payer.address, 1n);
+    await usdt.transfer(payer, merchant.address, 1n);
     const invoiceAmount = 25_000_000n;
     const estimate = await adapter.estimateNetworkCost();
     assert.ok(typeof estimate === "bigint");
@@ -459,7 +497,7 @@ describe("a USDT-on-TON payout", () => {
     const result = await payToEnd(d);
 
     assert.equal(result.status, "paid");
-    assert.equal(await usdt.balanceOf(merchant.address), invoiceAmount);
+    assert.equal(await usdt.balanceOf(merchant.address), 1n + invoiceAmount);
   });
 
   it("waits, with a review note and nothing sent, while the gas wallet key is missing; payments are still seen", async () => {
