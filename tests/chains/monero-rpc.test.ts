@@ -39,6 +39,7 @@ let url: string;
 let nonce = randomBytes(8).toString("hex");
 const seen: { authorized: boolean; nc?: string }[] = [];
 let answer: (method: string) => { status: number; body: unknown } = () => ({ status: 200, body: {} });
+let lastBody = "";
 
 function authorized(req: IncomingMessage): { ok: boolean; nc?: string } {
   const header = req.headers.authorization;
@@ -67,10 +68,11 @@ before(async () => {
         });
         return res.end();
       }
+      lastBody = body;
       const { method } = JSON.parse(body) as { method: string };
       const reply = answer(method);
       res.writeHead(reply.status, { "content-type": "application/json" });
-      res.end(JSON.stringify(reply.body));
+      res.end(typeof reply.body === "string" ? reply.body : JSON.stringify(reply.body));
     });
   }).listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -121,6 +123,16 @@ describe("the Monero JSON-RPC client", () => {
 
     answer = () => ({ status: 200, body: { jsonrpc: "2.0", id: "0" } });
     assert.equal(await rpc.call("get_version"), undefined);
+  });
+
+  it("keeps amounts above 2^53 exact, both ways", async () => {
+    const rpc = createMoneroRpc({ url, login: { username: "alice", password: "s3cret" } });
+    answer = () => ({ status: 200, body: '{"jsonrpc":"2.0","id":"0","result":{"balance":18446744073709551615,"blocks":7,"rate":0.5}}' });
+
+    const reply = await rpc.call("transfer", { destinations: [{ amount: 9007199254740993n, address: "x" }] });
+
+    assert.deepEqual(reply, { result: { balance: 18446744073709551615n, blocks: 7, rate: 0.5 } });
+    assert.match(lastBody, /"amount":9007199254740993,/);
   });
 
   it("answers undefined when nothing listens", async () => {

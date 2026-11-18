@@ -81,6 +81,25 @@ function pickChallenge(header: string | null): DigestChallenge | undefined {
   };
 }
 
+// Amounts are piconero (10^-12 XMR) sent as bare JSON integers, which can
+// pass 2^53. They travel as bigint here, both ways.
+const BIGINT_MARK = `bigint-${randomBytes(8).toString("hex")}:`;
+
+function stringifyWithBigints(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    typeof item === "bigint" ? `${BIGINT_MARK}${item}` : item,
+  ).replace(new RegExp(`"${BIGINT_MARK}(-?[0-9]+)"`, "g"), "$1");
+}
+
+/** Integers beyond Number's exact range come back as bigint; everything else as JSON.parse gives it. */
+function parseWithBigints(text: string): unknown {
+  return JSON.parse(text, (_key, value: unknown, context?: { source?: string }) =>
+    typeof value === "number" && !Number.isSafeInteger(value) && context?.source !== undefined && /^-?\d+$/.test(context.source)
+      ? BigInt(context.source)
+      : value,
+  );
+}
+
 const replySchema = z.union([
   z.object({ error: z.object({ code: z.number(), message: z.string() }) }),
   z.object({ result: z.unknown().refine((value) => value !== undefined) }),
@@ -127,7 +146,7 @@ export function createMoneroRpc(options: {
 
   async function callNow(method: string, params: Record<string, unknown>): Promise<MoneroRpcAnswer | undefined> {
     // Params can hold signed transactions and tx keys: never logged.
-    const body = JSON.stringify({ jsonrpc: "2.0", id: "0", method, params });
+    const body = stringifyWithBigints({ jsonrpc: "2.0", id: "0", method, params });
     try {
       let res = await post(body);
       if (res.status === 401 && login) {
@@ -144,7 +163,7 @@ export function createMoneroRpc(options: {
         console.warn(`${label} HTTP failed:`, method, res.status);
         return undefined;
       }
-      const parsed = replySchema.safeParse(await res.json());
+      const parsed = replySchema.safeParse(parseWithBigints(await res.text()));
       if (!parsed.success) {
         console.warn(`${label}: not a JSON-RPC reply:`, method);
         return undefined;
