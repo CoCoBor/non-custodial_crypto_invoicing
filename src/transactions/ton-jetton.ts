@@ -581,7 +581,7 @@ async function start(ctx: Context): Promise<PayoutResult> {
       const gasSpend = gasWalletSpend(topUp);
       const reimbursement = await tonInTokenUnits(gasSpend, jetton, deps.getPrice);
       if (reimbursement === undefined) return undefined;
-      return { topUp, gasSpend, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate }) };
+      return { topUp, gasSpend, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n }) };
     };
     let planned = await plan(2);
     if (planned === undefined) return pending(`no TON/${jetton.asset} price to convert the network cost`);

@@ -76,6 +76,12 @@ export type PayoutRequest = {
   receiveAsset: AssetId;
   /** The invoice's fee rate in FEE_RATE_SCALE units (src/money/payout-split.ts). */
   feeRate: bigint;
+  /**
+   * Money at the deposit that already paid its platform fee (a refunded
+   * swap's money, routed again): the fee is charged only on the rest.
+   * Omitted: 0. See splitPayout in src/money/payout-split.ts.
+   */
+  feeExempt?: bigint;
   /** Pay out only once the deposit holds at least this much. */
   minimumAmount: bigint;
   /** The last checkpoint this adapter saved for this payout, if any. */

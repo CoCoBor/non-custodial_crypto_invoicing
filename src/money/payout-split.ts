@@ -16,10 +16,14 @@ export function parseFeeRate(text: string): bigint | undefined {
  * everything received, rounded up; every network cost comes out of the
  * merchant's share:
  *
- *   platformFee    = ceil(received × feeRate / FEE_RATE_SCALE)
+ *   platformFee    = ceil((received − feeExempt) × feeRate / FEE_RATE_SCALE)
  *   merchantAmount = received − platformFee − networkCost
  *
  * so platformFee + merchantAmount + networkCost = received, always.
+ *
+ * `feeExempt` is money among `received` that already paid its fee: a swap's
+ * refund that came back to the deposit. The fee is charged once per piece of
+ * money (owner decision 2026-11-19); 0 for money that never paid it.
  *
  * undefined means "too small to forward": the fee plus the network cost
  * leave the merchant 0 or less. A result always has merchantAmount ≥ 1.
@@ -30,13 +34,16 @@ export function splitPayout(input: {
   received: bigint;
   networkCost: bigint;
   feeRate: bigint;
+  feeExempt?: bigint;
 }): { platformFee: bigint; merchantAmount: bigint } | undefined {
   const { received, networkCost, feeRate } = input;
-  if (received < 0n || networkCost < 0n || feeRate < 0n || feeRate >= FEE_RATE_SCALE) {
+  const feeExempt = input.feeExempt ?? 0n;
+  if (received < 0n || networkCost < 0n || feeRate < 0n || feeRate >= FEE_RATE_SCALE || feeExempt < 0n) {
     throw new RangeError("invalid payout split input");
   }
 
-  const platformFee = ceilDivide(received * feeRate, FEE_RATE_SCALE);
+  const charged = received > feeExempt ? received - feeExempt : 0n;
+  const platformFee = ceilDivide(charged * feeRate, FEE_RATE_SCALE);
   const merchantAmount = received - platformFee - networkCost;
   if (merchantAmount <= 0n) return undefined;
   return { platformFee, merchantAmount };

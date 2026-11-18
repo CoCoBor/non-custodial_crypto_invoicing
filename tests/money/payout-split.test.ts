@@ -81,7 +81,22 @@ describe("splitPayout", () => {
     }
   });
 
+  it("takes no fee on money that already paid it (a refunded swap's money), and the rate on the rest", () => {
+    // fee = ceil(5% × (100,000 − 60,000)) = 2,000; merchant = 100,000 − 2,000 − 1,000 = 97,000
+    assert.deepEqual(
+      splitPayout({ received: 100_000n, networkCost: 1_000n, feeRate: FIVE_PERCENT, feeExempt: 60_000n }),
+      { platformFee: 2_000n, merchantAmount: 97_000n },
+    );
+    // All of it already paid: no fee, the network cost still comes out.
+    assert.deepEqual(
+      splitPayout({ received: 92_000n, networkCost: 1_000n, feeRate: FIVE_PERCENT, feeExempt: 94_000n }),
+      { platformFee: 0n, merchantAmount: 91_000n },
+    );
+    assert.equal(splitPayout({ received: 1_000n, networkCost: 1_000n, feeRate: FIVE_PERCENT, feeExempt: 1_000n }), undefined);
+  });
+
   it("refuses impossible input as a programming error", () => {
+    assert.throws(() => splitPayout({ received: 1n, networkCost: 0n, feeRate: 0n, feeExempt: -1n }), RangeError);
     assert.throws(() => splitPayout({ received: -1n, networkCost: 0n, feeRate: 0n }), RangeError);
     assert.throws(() => splitPayout({ received: 1n, networkCost: -1n, feeRate: 0n }), RangeError);
     assert.throws(() => splitPayout({ received: 1n, networkCost: 0n, feeRate: 100_000_000n }), RangeError);

@@ -190,6 +190,19 @@ describe("a BTC payout through the adapter", () => {
     assert.equal(d.saved[0]!.plan.platformFee, 0n);
   });
 
+  it("charges the fee only on money that has not paid it yet, and sends no platform transfer when none is due", async () => {
+    // 5% of (100,000 − 60,000) = 2,000; merchant 100,000 − 2,000 − 2,230 = 95,770.
+    const part = await fundedDeposit([RECEIVED], { destinationKind: "refund_route", feeExempt: 60_000n });
+    await btc.payout(part.request());
+    assert.equal(part.saved[0]!.plan.platformFee, 2_000n);
+    assert.equal(part.saved[0]!.plan.transfers[0]!.amount, 95_770n);
+
+    const all = await fundedDeposit([RECEIVED], { destinationKind: "refund_route", feeExempt: RECEIVED });
+    await btc.payout(all.request());
+    assert.deepEqual(all.saved[0]!.plan.transfers.map((t) => t.kind), ["refund_route"]);
+    assert.equal(all.saved[0]!.plan.platformFee, 0n);
+  });
+
   it("waits while the spendable outputs are below the minimum", async () => {
     const d = await fundedDeposit([RECEIVED]);
 

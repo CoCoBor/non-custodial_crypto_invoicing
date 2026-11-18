@@ -223,6 +223,7 @@ async function buildAndSend(
 ): Promise<PayoutResult> {
   const { wallet, platformAddress } = deps;
   const { depositAddress, destination, destinationKind, feeRate } = request;
+  const feeExempt = request.feeExempt ?? 0n;
   const pending = (reason: string, review?: string): PayoutResult => ({
     status: "pending",
     reason,
@@ -324,7 +325,7 @@ async function buildAndSend(
   if (received !== unlocked) return pending("the deposit's outputs changed while they were read");
 
   // The platform's share comes first; the fee comes off the destination's output.
-  const share = splitPayout({ received, networkCost: 0n, feeRate });
+  const share = splitPayout({ received, networkCost: 0n, feeRate, feeExempt });
   if (share === undefined) return { status: "too_small", reason: "XMR payout is too small after the platform fee" };
   const platformFee = share.platformFee;
   if (platformFee > 0n && (platformAddress === undefined || !isValidMoneroAddress(platformAddress))) {
@@ -369,7 +370,7 @@ async function buildAndSend(
   // subaddress's outputs, and pays F1 with its own fee as the network cost.
   const spentImages = [...tx.spent_key_images.key_images].sort();
   const ownImages = spendable.map((output) => output.key_image).sort();
-  const split = splitPayout({ received, networkCost: tx.fee, feeRate });
+  const split = splitPayout({ received, networkCost: tx.fee, feeRate, feeExempt });
   const [destinationAmount, platformAmount] = tx.amounts_by_dest.amounts;
   if (
     spentImages.join() !== ownImages.join() ||

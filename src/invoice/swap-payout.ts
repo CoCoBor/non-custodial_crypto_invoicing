@@ -50,7 +50,7 @@ export async function payIntoSwap(input: {
   recipient: string;
   maxLossBps: number;
   received: bigint;
-  request: Pick<PayoutRequest, "depositAddress" | "depositKey" | "feeRate" | "minimumAmount">;
+  request: Pick<PayoutRequest, "depositAddress" | "depositKey" | "feeRate" | "feeExempt" | "minimumAmount">;
   save: (next: PayoutCheckpoint, quote: SwapQuote) => Promise<boolean>;
 }): Promise<SwapPayout> {
   const { adapter, request } = input;
@@ -61,6 +61,7 @@ export async function payIntoSwap(input: {
     received: input.received,
     networkCost: typeof estimate === "bigint" ? estimate : 0n,
     feeRate: request.feeRate,
+    feeExempt: request.feeExempt ?? 0n,
   });
   if (split === undefined) return { kind: "too_small", reason: "fees and network cost would take it all" };
 

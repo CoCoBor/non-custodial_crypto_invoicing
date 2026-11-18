@@ -135,7 +135,7 @@ const ton = createTonAdapter({ platformAddress: text(platform.address), api: emu
 const FEE_RATE = parseFeeRate("0.05")!;
 
 /** A funded deposit made by the adapter, and a payout request for it. */
-async function fundedDeposit(funded: bigint, destination: Address) {
+async function fundedDeposit(funded: bigint, destination: Address, fields: Partial<Request> = {}) {
   const deposit = await ton.newDeposit();
   await pay(Address.parse(deposit.address), funded);
   const saved: Checkpoint[] = [];
@@ -154,6 +154,7 @@ async function fundedDeposit(funded: bigint, destination: Address) {
       saved.push(next);
       return true;
     },
+    ...fields,
   });
   return {
     deposit: Address.parse(deposit.address),
@@ -263,6 +264,25 @@ describe("a TON payout through the adapter", () => {
     assert.equal(credit.inMessage.info.value.coins, MERCHANT_AMOUNT);
     assert.equal(credit.inMessage.info.bounce, false);
     assert.equal(await balanceOf(d.deposit), 0n);
+  });
+
+  it("charges the fee only on the part that has not paid it yet (a refunded swap's money)", async () => {
+    const refund = await deployedWallet();
+    // 5% of (3 − 2) TON = 0.05 TON; the receiver gets 3 − 0.05 − 0.005 TON.
+    const d = await fundedDeposit(FUNDED, refund.address, { destinationKind: "refund_route", feeExempt: toNano("2") });
+
+    await ton.payout(d.request());
+
+    assert.equal(d.saved[0]!.plan.platformFee, 50_000_000n);
+    assert.deepEqual(
+      d.saved[0]!.plan.transfers.map((t) => [t.kind, t.amount]),
+      [["refund_route", 2_945_000_000n], ["platform_fee", 50_000_000n]],
+    );
+    const second = await ton.payout(d.request(d.saved[0]));
+    assert.equal(second.status, "paid");
+    const [credit] = creditsFrom(d.deposit, refund.address);
+    assert.ok(credit && credit.inMessage?.info.type === "internal");
+    assert.equal(credit.inMessage.info.value.coins, 2_945_000_000n);
   });
 
   it("delivers to a brand-new merchant wallet with no code, non-bounceable (ADR 0001)", async () => {

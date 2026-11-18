@@ -255,6 +255,22 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     assert.equal(await tokens(platform), want.reimbursed);
   });
 
+  it("charges the fee only on the part that has not paid it yet (a refunded swap's money); the TRX is still reimbursed", async () => {
+    await freshAdapter();
+    const received = 200n * ONE_USDT;
+    const exempt = 120n * ONE_USDT;
+    const d = await fundedDeposit(received, { destinationKind: "refund_route", feeExempt: exempt });
+
+    const paid = await payUntilPaid(d.request);
+    const want = await expectedFromChain(paid, received - exempt, FIVE_PERCENT);
+
+    assert.equal(want.fee, 4n * ONE_USDT);
+    assert.equal(d.saved.at(-1)!.plan.platformFee, want.fee);
+    assert.deepEqual(paid.transfers.map((t) => t.kind), ["gas_top_up", "refund_route", "platform_fee"]);
+    assert.equal(await tokens(d.destination), received - want.fee - want.reimbursed);
+    assert.equal(await tokens(platform), want.fee + want.reimbursed);
+  });
+
   it("charges less when the merchant address already holds USDT (no new storage slot)", async () => {
     await freshAdapter({ platformHolds: true });
     const holder = newAddress();

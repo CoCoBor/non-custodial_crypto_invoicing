@@ -191,6 +191,7 @@ function calculateLtcPayout(
   txSize: number,
   feePerKb: bigint,
   feeRate: bigint,
+  feeExempt: bigint,
 ): { networkFee: bigint; platformFee: bigint; merchantAmount: bigint } | undefined {
   if (!Number.isSafeInteger(txSize) || txSize < 1) {
     throw new RangeError("txSize must be a positive integer");
@@ -202,7 +203,7 @@ function calculateLtcPayout(
   }
 
   const networkFee = ceilDivide(BigInt(txSize) * feePerKb, 1000n);
-  const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
+  const split = splitPayout({ received: total, networkCost: networkFee, feeRate, feeExempt });
   if (split === undefined) return undefined;
 
   return { networkFee, ...split };
@@ -216,6 +217,7 @@ function prepareLtcPayout(input: {
   merchantAddress: string;
   feePerKb: bigint;
   feeRate: bigint;
+  feeExempt: bigint;
   utxos: { txid: string; vout: number; amount: bigint }[];
 }):
   | {
@@ -226,7 +228,7 @@ function prepareLtcPayout(input: {
       outputs: { address: string; amount: bigint }[];
     }
   | undefined {
-  const { platformAddress, merchantAddress, feePerKb, feeRate, utxos } = input;
+  const { platformAddress, merchantAddress, feePerKb, feeRate, feeExempt, utxos } = input;
   if (utxos.length === 0) return undefined;
 
   const total = utxos.reduce((sum, u) => sum + u.amount, 0n);
@@ -234,7 +236,7 @@ function prepareLtcPayout(input: {
   const payoutFor = (outputAddresses: string[], rate: bigint) => {
     const txSize = estimateLtcTxSize(utxos.length, outputAddresses);
     if (txSize === undefined) return undefined;
-    const payout = calculateLtcPayout(total, txSize, feePerKb, rate);
+    const payout = calculateLtcPayout(total, txSize, feePerKb, rate, feeExempt);
     if (payout === undefined) return undefined;
     return { ...payout, txSize };
   };
@@ -428,6 +430,7 @@ export async function payOutLtc(
       merchantAddress: destination,
       feePerKb,
       feeRate: request.feeRate,
+      feeExempt: request.feeExempt ?? 0n,
       utxos,
     });
     if (payout === undefined) return { status: "too_small", reason: "LTC payout is too small after fees" };

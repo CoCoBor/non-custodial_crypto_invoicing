@@ -219,6 +219,18 @@ for (const spec of CHAINS) {
       assert.equal(await node.balance(d.deposit.address), 0n);
     });
 
+    it("routes native money that already paid its fee as one transfer: no platform transfer and one transfer's gas", async () => {
+      await freshAdapters();
+      const received = 10n ** 17n;
+      const d = await fundedDeposit(native, received, { destinationKind: "refund_route", feeExempt: received });
+
+      const result = await payUntilPaid(native, d.request);
+
+      assert.deepEqual(result.transfers.map((t) => [t.kind, t.amount]), [["refund_route", received - GAS_PRICE * 21_000n]]);
+      assert.equal(await node.balance(platform), 0n);
+      assert.equal(await node.balance(d.deposit.address), 0n);
+    });
+
     it("routes late native money after the merchant payout, with nonces from the chain, without paying the merchant again", async () => {
       await freshAdapters();
       const d = await fundedDeposit(native, 10n ** 18n);
@@ -383,6 +395,27 @@ for (const spec of CHAINS) {
       );
       assert.equal(await tokens(d.destination), received - want.reimbursed);
       assert.equal(await tokens(platform), want.reimbursed);
+    });
+
+    it("charges a token's fee only on the part that has not paid it yet; the gas is still reimbursed", async () => {
+      await freshAdapters();
+      const received = 1_000n * oneToken;
+      const exempt = 600n * oneToken;
+      const d = await fundedDeposit(token, received, { destinationKind: "refund_route", feeExempt: exempt });
+      const want = expectedTokenPayout(received - exempt, FIVE_PERCENT);
+
+      const result = await payUntilPaid(token, d.request);
+
+      assert.deepEqual(
+        result.transfers.map((t) => [t.kind, t.amount]),
+        [
+          ["gas_top_up", want.topUp],
+          ["refund_route", received - want.fee - want.reimbursed],
+          ["platform_fee", want.fee + want.reimbursed],
+        ],
+      );
+      assert.equal(d.saved.at(-1)!.plan.platformFee, want.fee);
+      assert.equal(await tokens(platform), want.fee + want.reimbursed);
     });
 
     it("routes late token money after the merchant payout, topping up only what the deposit lacks", async () => {

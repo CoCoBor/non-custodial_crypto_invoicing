@@ -256,6 +256,27 @@ describe("XMR adapter on a regtest chain", { skip }, () => {
     assert.equal(await unlockedAt(chain.wallets.fee), feeBefore);
   });
 
+  it("charges the fee only on the part that has not paid it yet (a refunded swap's money)", async () => {
+    const deposit = await fundedDeposit([XMR]);
+    const feeBefore = await unlockedAt(chain.wallets.fee);
+
+    const { result, store } = await payOut(deposit, {
+      destinationKind: "refund_route",
+      feeExempt: (XMR * 3n) / 5n,
+      destination: chain.addresses.merchant,
+    });
+
+    assert.equal(result.status, "paid", show(result));
+    // 5% of the 0.4 XMR that has not paid its fee.
+    assert.equal(store.checkpoint!.plan.platformFee, XMR / 50n);
+    const paid = result as Extract<PayoutResult, { status: "paid" }>;
+    assert.deepEqual(paid.transfers.map((t) => [t.kind, t.amount]), [
+      ["refund_route", XMR - XMR / 50n - store.checkpoint!.plan.networkCost],
+      ["platform_fee", XMR / 50n],
+    ]);
+    assert.equal((await unlockedAt(chain.wallets.fee)) - feeBefore, XMR / 50n);
+  });
+
   it("never spends another invoice's outputs: two subaddresses funded at once, one paid out", async () => {
     const a = await adapter.newDeposit();
     const b = await adapter.newDeposit();

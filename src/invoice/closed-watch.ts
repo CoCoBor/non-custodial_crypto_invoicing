@@ -30,7 +30,16 @@ import {
   type LedgerPayment,
   type Sweep,
 } from "./payment-ledger.js";
-import { hintSwapStart, maxLossOf, payIntoSwap, quoteRef, seenDelivery, swapRecord, swapRefOf } from "./swap-payout.js";
+import {
+  hintSwapStart,
+  maxLossOf,
+  payIntoSwap,
+  quoteRef,
+  refundToOf,
+  seenDelivery,
+  swapRecord,
+  swapRefOf,
+} from "./swap-payout.js";
 import { ROUTE_GRACE_MS } from "./watch-window.js";
 
 export { watchUntil } from "./watch-window.js";
@@ -81,6 +90,11 @@ type StoredSwap = {
   receive_crypto: string;
   status: string;
   deadline?: string | null;
+  /** In the deposit coin. */
+  amount_in?: string | null;
+  /** In the deposit coin; "0" when the provider named none (Exolix). */
+  amount_refunded?: string | null;
+  quote_response?: unknown;
 };
 
 type StoredRoute = {
@@ -109,6 +123,8 @@ type ClosedInvoice = {
   address: string;
   crypto: string;
   to_crypto?: string | null;
+  /** The merchant payout's swap, for a swap invoice. */
+  swap?: StoredSwap | null;
   swap_max_loss_bps?: number | null;
   fee_rate?: string | null;
   platform_fee?: string | null;
@@ -137,7 +153,7 @@ type Watch = {
 
 async function loadClosed(invoiceId: string): Promise<ClosedInvoice | undefined> {
   const found = await Invoice.findOne({ invoice_id: invoiceId, status: { $in: CLOSED } })
-    .select("+private.private_key +refund_routes.raw")
+    .select("+private.private_key +refund_routes.raw +swap.quote_response")
     .exec();
   if (!found) return undefined;
   // From the document itself: toObject() hands back the key's bytes as BSON
@@ -266,6 +282,58 @@ function baseOutcome(watch: Watch): string {
   return watch.invoice.status === "expired" && watch.payments.some((p) => p.on_time) ? "partially_paid" : "";
 }
 
+// ---------- Money that already paid its fee ----------
+
+const amountOf = (text: string | null | undefined) => (text && /^[0-9]+$/.test(text) ? BigInt(text) : 0n);
+
+/**
+ * What a swap of this deposit sent back to it: on a refund or failure all it
+ * took in (or less, when the provider names a smaller refund); on success the
+ * part the provider names as refunded. That money paid its platform fee when
+ * it went into the swap.
+ */
+function cameBack(swap: StoredSwap | null | undefined): bigint {
+  if (!swap) return 0n;
+  const amountIn = amountOf(swap.amount_in);
+  const refunded = amountOf(swap.amount_refunded);
+  switch (swap.status) {
+    case "REFUNDED":
+    case "FAILED":
+      return refunded > 0n && refunded < amountIn ? refunded : amountIn;
+    case "SUCCESS":
+      return refunded < amountIn ? refunded : amountIn;
+    default:
+      return 0n;
+  }
+}
+
+/**
+ * The money at the deposit that route `n` forwards with no platform fee: what
+ * swaps sent back (the merchant payout's swap, and earlier fallback swaps),
+ * less what earlier routes already forwarded fee-free. The fee is charged once
+ * on every piece of money (owner decision 2026-11-19); money that never paid
+ * it still does. Counted as amounts, not payments: a refund can't be told
+ * apart from new money on chain.
+ */
+function feePaidMoney(invoice: ClosedInvoice, n: number): bigint {
+  // A swap saved before ticket 15 refunded elsewhere, not to this deposit.
+  const main = invoice.swap && refundToOf(invoice.swap.quote_response) === invoice.address ? cameBack(invoice.swap) : 0n;
+  let left = main;
+  for (const route of [...invoice.refund_routes].sort((a, b) => a.n - b.n)) {
+    if (route.n >= n) break;
+    if (SWEPT.includes(route.state)) {
+      // From its transfers, not its stored `swept`, which leaves out a swap deposit.
+      const sentOn = invoice.transfers
+        .filter((t) => t.payout === route.n && DESTINATION_KINDS.has(t.kind))
+        .reduce((sum, t) => sum + BigInt(t.amount), 0n);
+      const taken = sentOn + amountOf(route.platform_fee) + amountOf(route.network_fee);
+      left -= taken < left ? taken : left;
+    }
+    left += cameBack(route.swap);
+  }
+  return left;
+}
+
 // ---------- Where the money goes ----------
 
 async function refundDestination(watch: Watch): Promise<Destination | undefined> {
@@ -332,19 +400,20 @@ async function startRoute(watch: Watch, ready: LedgerPayment[]): Promise<void> {
     });
   }
 
+  const n = nextRouteNumber(invoice);
+  const feeExempt = feePaidMoney(invoice, n);
   if (destination.source === "swap_to_receive_coin") {
-    return await startSwapRoute(watch, ready, destination, depositKey, feeRate);
+    return await startSwapRoute(watch, ready, destination, depositKey, feeRate, feeExempt);
   }
 
   // F1 with the expected network cost first; the chain's own dust or rent
   // limit is the adapter's too_small below.
   const estimate = await adapter.estimateNetworkCost();
-  if (typeof estimate === "bigint" && splitPayout({ received: totalOf(ready), networkCost: estimate, feeRate }) === undefined) {
+  if (typeof estimate === "bigint" && splitPayout({ received: totalOf(ready), networkCost: estimate, feeRate, feeExempt }) === undefined) {
     return await save(watch, { outcome: "too_small_to_forward" });
   }
 
-  const n = nextRouteNumber(invoice);
-  const route = routeRequest(watch, { n, ...destination }, undefined, depositKey, feeRate);
+  const route = routeRequest(watch, { n, ...destination }, undefined, depositKey, feeRate, feeExempt);
   const result = await adapter.payout(route.request);
   await recordRouteResult(watch, route, result);
 }
@@ -360,6 +429,7 @@ async function startSwapRoute(
   destination: Extract<Destination, { source: "swap_to_receive_coin" }>,
   depositKey: PayoutRequest["depositKey"],
   feeRate: bigint,
+  feeExempt: bigint,
 ): Promise<void> {
   const { invoice, adapter } = watch;
   const n = nextRouteNumber(invoice);
@@ -371,7 +441,7 @@ async function startSwapRoute(
     recipient: destination.recipient,
     maxLossBps: await maxLossOf(invoice),
     received: totalOf(ready),
-    request: { depositAddress: invoice.address, depositKey, feeRate, minimumAmount: 1n },
+    request: { depositAddress: invoice.address, depositKey, feeRate, feeExempt, minimumAmount: 1n },
     save: async (next, quote) =>
       await saver.save(next, {
         destination: quote.depositAddress,
@@ -419,7 +489,7 @@ async function followRoute(watch: Watch, stored: StoredRoute): Promise<void> {
       networkCost: BigInt(stored.network_fee || "0"),
     },
   };
-  const route = routeRequest(watch, stored, checkpoint, depositKey, feeRate);
+  const route = routeRequest(watch, stored, checkpoint, depositKey, feeRate, feePaidMoney(invoice, stored.n));
   const result = await watch.adapter.payout(route.request);
   await recordRouteResult(watch, route, result);
 }
@@ -537,6 +607,7 @@ function routeRequest(
   checkpoint: PayoutCheckpoint | undefined,
   depositKey: PayoutRequest["depositKey"],
   feeRate: bigint,
+  feeExempt: bigint,
 ): RouteRun & { request: PayoutRequest } {
   const saver = routeSaver(watch, route, checkpoint);
   const request: PayoutRequest = {
@@ -546,6 +617,7 @@ function routeRequest(
     destinationKind: route.source === "swap_to_receive_coin" ? "swap_deposit" : "refund_route",
     receiveAsset: watch.adapter.asset,
     feeRate,
+    feeExempt,
     // Forward whatever the deposit holds: a fixed minimum could never be met
     // once a storage fee (TON) has taken part of it.
     minimumAmount: 1n,

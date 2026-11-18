@@ -177,7 +177,7 @@ function fakeChain(options: FakeChainOptions = {}) {
     if (total <= 0n || total < request.minimumAmount) {
       return { status: "pending", reason: "the deposit holds less than the minimum" };
     }
-    const split = splitPayout({ received: total, networkCost: NETWORK_COST, feeRate: request.feeRate });
+    const split = splitPayout({ received: total, networkCost: NETWORK_COST, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n });
     if (split === undefined || split.merchantAmount < (options.dustLimit ?? 0n)) {
       return { status: "too_small", reason: "fake chain: too small" };
     }

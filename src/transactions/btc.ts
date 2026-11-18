@@ -60,6 +60,7 @@ function calculateBtcPayout(
   txSize: number,
   networkFeeRate: bigint,
   feeRate: bigint,
+  feeExempt: bigint,
 ):
   | {
       networkFee: bigint;
@@ -79,7 +80,7 @@ function calculateBtcPayout(
 
   const networkFee = btcNetworkFee(txSize, networkFeeRate);
 
-  const split = splitPayout({ received: total, networkCost: networkFee, feeRate });
+  const split = splitPayout({ received: total, networkCost: networkFee, feeRate, feeExempt });
   if (split === undefined) return undefined;
   const { platformFee, merchantAmount } = split;
 
@@ -162,6 +163,7 @@ function prepareBtcPayout(input: {
   merchantAddress: string;
   networkFeeRate: bigint;
   merchantFeeRate: bigint;
+  feeExempt: bigint;
   utxos: { txid: string; vout: number; amount: bigint }[];
 }):
   | {
@@ -177,6 +179,7 @@ function prepareBtcPayout(input: {
     merchantAddress,
     networkFeeRate,
     merchantFeeRate,
+    feeExempt,
     utxos,
   } = input;
   const inputCount = utxos.length;
@@ -185,7 +188,7 @@ function prepareBtcPayout(input: {
   const payoutFor = (outputAddresses: string[], feeRate: bigint) => {
     const txSize = estimateBtcTxSize(inputCount, outputAddresses);
     if (txSize === undefined) return undefined;
-    const payout = calculateBtcPayout(total, txSize, networkFeeRate, feeRate);
+    const payout = calculateBtcPayout(total, txSize, networkFeeRate, feeRate, feeExempt);
     if (payout === undefined) return undefined;
     return { ...payout, txSize };
   };
@@ -407,6 +410,7 @@ export async function payOutBtc(
       merchantAddress: request.destination,
       networkFeeRate,
       merchantFeeRate: request.feeRate,
+      feeExempt: request.feeExempt ?? 0n,
       utxos,
     });
 

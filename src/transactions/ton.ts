@@ -402,11 +402,11 @@ export async function getTonPayments(
 // The receiver gets merchantAmount exactly. The fee budget and the platform
 // fee stay behind and go to the platform in message 2, minus what the chain
 // really charges.
-function planTonPayout(total: bigint, feeRate: bigint) {
+function planTonPayout(total: bigint, feeRate: bigint, feeExempt: bigint) {
   if (total < 0n || feeRate < 0n || feeRate >= FEE_RATE_SCALE) {
     throw new RangeError("invalid TON payout input");
   }
-  const split = splitPayout({ received: total, networkCost: TON_PAYOUT_FEE, feeRate });
+  const split = splitPayout({ received: total, networkCost: TON_PAYOUT_FEE, feeRate, feeExempt });
   if (split === undefined) return undefined;
 
   return { networkFee: TON_PAYOUT_FEE, ...split };
@@ -511,6 +511,7 @@ async function prepareTonPayout(input: {
   merchantAddress: string;
   platformAddress: string;
   feeRate: bigint;
+  feeExempt: bigint;
   toCrypto: string;
   sealedDepositKey: SealedSecret | null | undefined;
   // The deposit must hold at least this much (the invoice amount).
@@ -518,7 +519,7 @@ async function prepareTonPayout(input: {
   // The invoice lifetime, for the storage-fee allowance.
   lifetimeMinutes: number;
 }): Promise<PreparedPayout> {
-  const { api, depositAddress, merchantAddress, platformAddress, feeRate } = input;
+  const { api, depositAddress, merchantAddress, platformAddress, feeRate, feeExempt } = input;
   const fundsAt = `All funds are still at deposit address ${depositAddress}.`;
 
   function wait(why: string): PreparedPayout {
@@ -587,7 +588,7 @@ async function prepareTonPayout(input: {
     return wait("the deposit holds less than expected");
   }
 
-  const plan = planTonPayout(account.balance, feeRate);
+  const plan = planTonPayout(account.balance, feeRate, feeExempt);
   if (plan === undefined) return { kind: "too_small" };
 
   // Who receives: the merchant, or NEAR's deposit address for a swap.
@@ -881,6 +882,7 @@ export async function payOutTon(
       merchantAddress: request.destination,
       platformAddress,
       feeRate: request.feeRate,
+      feeExempt: request.feeExempt ?? 0n,
       toCrypto: request.receiveAsset,
       sealedDepositKey,
       // The same minimum the watcher confirmed at, tolerance included.

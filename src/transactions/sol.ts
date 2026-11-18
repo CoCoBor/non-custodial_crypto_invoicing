@@ -537,12 +537,13 @@ function planSol(input: {
   total: bigint;
   priorityFee: bigint;
   feeRate: bigint;
+  feeExempt: bigint;
   platformLamports: bigint;
   destinationLamports: bigint;
   rentMinimum: bigint;
 }) {
   const cost = networkFee(1n, SOL_PAYOUT_COMPUTE_UNITS, input.priorityFee);
-  const split = splitPayout({ received: input.total, networkCost: cost, feeRate: input.feeRate });
+  const split = splitPayout({ received: input.total, networkCost: cost, feeRate: input.feeRate, feeExempt: input.feeExempt });
   if (split === undefined) return undefined;
   let { platformFee, merchantAmount } = split;
   if (platformFee > 0n && input.platformLamports + platformFee < input.rentMinimum) {
@@ -618,6 +619,7 @@ async function startSol(request: PayoutRequest, deps: SolPayoutDeps): Promise<Pa
     total,
     priorityFee,
     feeRate: request.feeRate,
+    feeExempt: request.feeExempt ?? 0n,
     platformLamports: platformWallet.lamports,
     destinationLamports: receiver.lamports,
     rentMinimum,
@@ -826,7 +828,7 @@ async function startSplToken(request: PayoutRequest, deps: SplPayoutDeps): Promi
   const gasSpend = tokenPayoutFee(priorityFee) + accountsToCreate * tokenRent;
   const reimbursement = await lamportsInTokenUnits(gasSpend, token, deps.getPrice);
   if (reimbursement === undefined) return { status: "pending", reason: `no SOL/${token.asset} price to convert the network cost` };
-  const split = splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate });
+  const split = splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n });
   if (split === undefined) return { status: "too_small", reason: `${token.asset} payout is too small after the fee, the network cost and the rent` };
   const platformAmount = split.platformFee + reimbursement;
 

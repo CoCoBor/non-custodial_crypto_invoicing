@@ -140,14 +140,15 @@ function fakeChains(options: { cost?: bigint; estimate?: bigint } = {}) {
     const unspent = held.payments.filter((p) => p.confirmations >= 1 && !held.spent.has(p.txid));
     const total = unspent.reduce((sum, p) => sum + p.amount, 0n);
     if (total <= 0n || total < request.minimumAmount) return { status: "pending", reason: "deposit below the minimum" };
-    const split = splitPayout({ received: total, networkCost: cost, feeRate: request.feeRate });
+    const split = splitPayout({ received: total, networkCost: cost, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n });
     if (split === undefined) return { status: "too_small", reason: "fake: too small" };
     counter += 1;
     const txid = `btc-tx-${counter}`;
     const plan = {
       transfers: [
         { kind: request.destinationKind, to: request.destination, amount: split.merchantAmount, txid },
-        { kind: "platform_fee" as const, to: PLATFORM, amount: split.platformFee, txid },
+        // Like the real adapters: no platform transfer when no fee is due.
+        ...(split.platformFee > 0n ? [{ kind: "platform_fee" as const, to: PLATFORM, amount: split.platformFee, txid }] : []),
       ],
       platformFee: split.platformFee,
       networkCost: cost,
@@ -454,7 +455,7 @@ describe("a refunded swap", () => {
     assert.match(invoice?.review_reason ?? "", /Refund routing forwards it/);
   });
 
-  it("sends the refunded BTC to the merchant's BTC refund address, F1 fees taken, and never re-routes the original payment", async () => {
+  it("sends the refunded BTC to the merchant's BTC refund address with no second platform fee, and never re-routes the original payment", async () => {
     const t = setUp();
     const { invoiceId, address } = await refundedSwap(t, await merchant({ refund: { btc: REFUND_BTC } }));
 
@@ -462,11 +463,9 @@ describe("a refunded swap", () => {
     await t.pass();
 
     const invoice = await invoiceNow(invoiceId);
-    // 92,000 − ceil(92,000 × 5%) − 1,000 = 86,400
-    assert.deepEqual(transfers(invoice, 1), [
-      ["refund_route", REFUND_BTC, "86400", "confirmed"],
-      ["platform_fee", PLATFORM, "4600", "confirmed"],
-    ]);
+    // The fee was taken before the swap (owner decision 2026-11-19): 92,000 − 1,000 network cost.
+    assert.deepEqual(transfers(invoice, 1), [["refund_route", REFUND_BTC, "91000", "confirmed"]]);
+    assert.equal(invoice?.refund_routes?.[0]?.platform_fee, "0");
     assert.equal(invoice?.refund_routes?.[0]?.source, "refund_address");
     assert.equal(invoice?.refund_routes?.[0]?.state, "paid");
     assert.deepEqual(
@@ -486,7 +485,7 @@ describe("a refunded swap", () => {
     assert.deepEqual(t.swap.quotes[1], {
       from: "btc",
       to: "usdceth",
-      amountIn: 86_400n,
+      amountIn: 91_000n,
       recipient: MERCHANT_USDC,
       refundTo: address,
       maxLossBps: 250,
@@ -495,15 +494,12 @@ describe("a refunded swap", () => {
     assert.equal(route?.source, "swap_to_receive_coin");
     assert.equal(route?.destination, "swap-deposit-2");
     assert.equal(route?.swap?.deposit_address, "swap-deposit-2");
-    assert.equal(route?.swap?.amount_in, "86400");
+    assert.equal(route?.swap?.amount_in, "91000", "no second fee on the refunded money");
 
     await t.pass(); // the route's deposit transfer is proven
     invoice = await invoiceNow(invoiceId);
     assert.equal(invoice?.refund_routes?.[0]?.state, "swapping");
-    assert.deepEqual(transfers(invoice, 1), [
-      ["swap_deposit", "swap-deposit-2", "86400", "confirmed"],
-      ["platform_fee", PLATFORM, "4600", "confirmed"],
-    ]);
+    assert.deepEqual(transfers(invoice, 1), [["swap_deposit", "swap-deposit-2", "91000", "confirmed"]]);
 
     t.swap.setStatus("swap-deposit-2", { status: "SUCCESS", deliveryTxids: ["0x0bad"] });
     t.chain.deliver(MERCHANT_USDC, "0x0bad", 590_000n);
@@ -550,10 +546,108 @@ describe("a refunded swap", () => {
     await db.collection("users").updateOne({ user_id: userId }, { $set: { "refund_addresses.btc": REFUND_BTC } });
 
     await t.pass();
+    await t.pass();
 
     const invoice = await invoiceNow(invoiceId);
     assert.equal(invoice?.refund_routes?.[1]?.source, "refund_address");
     assert.equal(t.swap.quotes.length, 2);
+    // The swap and the fallback swap came back: still no second fee, only the network cost.
+    assert.deepEqual(transfers(invoice, 2), [["refund_route", REFUND_BTC, "84000", "confirmed"]]);
+  });
+
+  it("charges the fee once on new late money that arrives after the refund was forwarded", async () => {
+    const t = setUp();
+    const { invoiceId, address } = await refundedSwap(t, await merchant({ refund: { btc: REFUND_BTC } }));
+    await t.pass();
+    await t.pass();
+
+    t.chain.pay(address, "late-1", 50_000n);
+    await t.pass();
+    await t.pass();
+
+    const invoice = await invoiceNow(invoiceId);
+    assert.deepEqual(transfers(invoice, 1), [["refund_route", REFUND_BTC, "91000", "confirmed"]]);
+    // 50,000 − ceil(50,000 × 5%) − 1,000
+    assert.deepEqual(transfers(invoice, 2), [
+      ["refund_route", REFUND_BTC, "46500", "confirmed"],
+      ["platform_fee", PLATFORM, "2500", "confirmed"],
+    ]);
+  });
+
+  it("forwards the refund and new late money together, with the fee on the new money only", async () => {
+    const t = setUp();
+    const { invoiceId, address } = await refundedSwap(t, await merchant({ refund: { btc: REFUND_BTC } }));
+    t.chain.pay(address, "late-1", 50_000n);
+
+    await t.pass();
+    await t.pass();
+
+    const invoice = await invoiceNow(invoiceId);
+    // 142,000 at the deposit, 92,000 of it already paid: fee 5% × 50,000 = 2,500.
+    assert.deepEqual(transfers(invoice, 1), [
+      ["refund_route", REFUND_BTC, "138500", "confirmed"],
+      ["platform_fee", PLATFORM, "2500", "confirmed"],
+    ]);
+  });
+});
+
+describe("a swap delivered with part of the money refunded", () => {
+  it("forwards the refunded part with no second fee", async () => {
+    const t = setUp();
+    const { invoiceId, address, payment } = await confirmedSwapInvoice(await merchant({ refund: { btc: REFUND_BTC } }));
+    t.chain.paid(address, payment);
+    await t.pass();
+    await t.pass();
+    t.swap.setStatus("swap-deposit-1", { status: "SUCCESS", deliveryTxids: ["0xd1"], refundedAmount: 10_000n });
+    t.chain.deliver(MERCHANT_USDC, "0xd1", 580_000n);
+    await t.pass();
+    assert.equal((await invoiceNow(invoiceId))?.status, "completed");
+
+    t.chain.pay(address, "provider-partial-refund", 10_000n);
+    await t.pass();
+    await t.pass();
+
+    assert.deepEqual(transfers(await invoiceNow(invoiceId), 1), [["refund_route", REFUND_BTC, "9000", "confirmed"]]);
+  });
+});
+
+describe("a refunded fallback swap", () => {
+  it("forwards the money that comes back with no second fee: late money pays its fee once, at the fallback swap", async () => {
+    const t = setUp();
+    const userId = await merchant();
+    const { invoiceId, address, payment } = await confirmedSwapInvoice(userId);
+    t.chain.paid(address, payment);
+    await t.pass();
+    await t.pass();
+    t.swap.setStatus("swap-deposit-1", { status: "SUCCESS", deliveryTxids: ["0xd1"] });
+    t.chain.deliver(MERCHANT_USDC, "0xd1", 650_000n);
+    await t.pass();
+    assert.equal((await invoiceNow(invoiceId))?.status, "completed");
+
+    // Late money, no BTC address: swapped to the receive coin, its fee taken once.
+    t.chain.pay(address, "late-1", 50_000n);
+    await t.pass();
+    await t.pass();
+    let invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.refund_routes?.[0]?.source, "swap_to_receive_coin");
+    assert.deepEqual(transfers(invoice, 1), [
+      ["swap_deposit", "swap-deposit-2", "46500", "confirmed"],
+      ["platform_fee", PLATFORM, "2500", "confirmed"],
+    ]);
+
+    // That swap is refunded: the money is held, then forwarded once there is an address.
+    t.swap.setStatus("swap-deposit-2", { status: "REFUNDED", refundedAmount: 46_000n });
+    await t.pass();
+    t.chain.pay(address, "provider-refund-2", 46_000n);
+    await t.pass();
+    assert.equal((await invoiceNow(invoiceId))?.outcome, "held_for_manual_handling");
+    await db.collection("users").updateOne({ user_id: userId }, { $set: { "refund_addresses.btc": REFUND_BTC } });
+    await t.pass();
+    await t.pass();
+
+    invoice = await invoiceNow(invoiceId);
+    assert.deepEqual(transfers(invoice, 2), [["refund_route", REFUND_BTC, "45000", "confirmed"]]);
+    assert.equal(t.swap.quotes.length, 2, "no third swap");
   });
 });
 
@@ -681,9 +775,9 @@ describe("swap status changes in the merchant's webhook outbox", () => {
     assert.equal(byId(swapEventId(invoiceId, 1)).swap.amountIn, INTO_SWAP.toString());
     assert.equal(byId(swapEventId(invoiceId, 2)).swap.status, "REFUNDED");
     assert.equal(byId(swapEventId(invoiceId, 2)).swap.amountRefunded, "92000");
-    assert.equal(byId(refundRouteSwapEventId(invoiceId, 1, 1)).refundRoute.swap.amountIn, "86400");
+    assert.equal(byId(refundRouteSwapEventId(invoiceId, 1, 1)).refundRoute.swap.amountIn, "91000");
     assert.equal(byId(refundRouteSwapEventId(invoiceId, 1, 2)).refundRoute.swap.amountDelivered, "590000");
-    assert.equal(byId(refundRouteEventId(invoiceId, 1)).refundRoute.amount, "86400");
+    assert.equal(byId(refundRouteEventId(invoiceId, 1)).refundRoute.amount, "91000");
     assert.equal(
       posted.filter((body) => JSON.parse(body).invoiceId === invoiceId).length,
       events.length,

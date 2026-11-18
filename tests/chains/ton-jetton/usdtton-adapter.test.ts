@@ -67,7 +67,7 @@ const FULL_TOP_UP = 2n * JETTON_TRANSFER_TON + JETTON_DEPOSIT_FEE_BUDGET - 1n;
 const FULL_REIMBURSEMENT = usdtFor(FULL_TOP_UP + GAS_WALLET_FEE_BUDGET);
 
 /** A deposit made by the adapter, paid `amount` USDT by the payer, and a payout request for it. */
-async function paidDeposit(amount: bigint, destination: Address, feeRate = FIVE_PERCENT) {
+async function paidDeposit(amount: bigint, destination: Address, feeRate = FIVE_PERCENT, fields: Partial<Request> = {}) {
   const deposit = await adapter.newDeposit();
   const address = Address.parse(deposit.address);
   if (amount > 0n) {
@@ -90,6 +90,7 @@ async function paidDeposit(amount: bigint, destination: Address, feeRate = FIVE_
       saved.push(next);
       return true;
     },
+    ...fields,
     ...overrides,
   });
   return { address, text: deposit.address, key: deposit.key, saved, request, refuseSaves: () => (allowSave = false) };
@@ -278,6 +279,20 @@ describe("a USDT-on-TON payout", () => {
     assert.equal(d.saved[0]!.plan.platformFee, 0n);
     assert.equal(await usdt.balanceOf(merchant.address), 30_000_000n - FULL_REIMBURSEMENT);
     assert.equal((await usdt.balanceOf(platform.address)) - platformBefore, FULL_REIMBURSEMENT);
+  });
+
+  it("charges the fee only on the part that has not paid it yet (a refunded swap's money); the gas is still reimbursed", async () => {
+    const refund = await em.deployedWallet(payer);
+    const d = await paidDeposit(30_000_000n, refund.address, FIVE_PERCENT, { destinationKind: "refund_route", feeExempt: 20_000_000n });
+    const platformBefore = await usdt.balanceOf(platform.address);
+
+    const result = await payToEnd(d);
+
+    assert.equal(result.status, "paid");
+    // 5% of (30 − 20) USDT = 0.5 USDT.
+    assert.equal(d.saved[0]!.plan.platformFee, 500_000n);
+    assert.equal(await usdt.balanceOf(refund.address), 30_000_000n - 500_000n - FULL_REIMBURSEMENT);
+    assert.equal((await usdt.balanceOf(platform.address)) - platformBefore, 500_000n + FULL_REIMBURSEMENT);
   });
 
   it("routes late money after a completed payout to the refund address: its own checkpoint, minimum 1, a top-up only for what is missing", async () => {

@@ -410,14 +410,18 @@ async function followDepositTransfers(
 // ---------- Native coin ----------
 
 /**
- * The F1 split of a native deposit. No platform transfer at a 0% rate, so
- * only one transfer's gas. undefined: too small to forward.
+ * The F1 split of a native deposit. No platform transfer when the fee is 0
+ * (a 0% rate, or money that already paid it), so only one transfer's gas.
+ * undefined: too small to forward.
  */
-export function decideTransferCount(input: { balance: bigint; gasPrice: bigint; feeRate: bigint }) {
+export function decideTransferCount(input: { balance: bigint; gasPrice: bigint; feeRate: bigint; feeExempt?: bigint }) {
   const { balance, gasPrice, feeRate } = input;
-  const transfers = feeRate === 0n ? 1n : 2n;
+  const feeExempt = input.feeExempt ?? 0n;
+  // The fee does not depend on the network cost, so a zero-cost split shows it.
+  const fee = splitPayout({ received: balance, networkCost: 0n, feeRate, feeExempt })?.platformFee ?? 0n;
+  const transfers = fee === 0n ? 1n : 2n;
   const networkCost = gasPrice * TRANSFER_GAS * transfers;
-  const split = splitPayout({ received: balance, networkCost, feeRate });
+  const split = splitPayout({ received: balance, networkCost, feeRate, feeExempt });
   return split === undefined ? undefined : { ...split, networkCost };
 }
 
@@ -460,7 +464,7 @@ export async function payOutEvmNative(
     };
   }
 
-  const split = decideTransferCount({ balance, gasPrice, feeRate: request.feeRate });
+  const split = decideTransferCount({ balance, gasPrice, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n });
   if (split === undefined) return { status: "too_small", reason: `${chain.label} payout is too small after fees` };
 
   const txs = [
@@ -589,7 +593,7 @@ export async function payOutEvmToken(request: PayoutRequest, deps: EvmTokenPayou
     const topUp = needed > depositGas ? needed - depositGas : 0n;
     const reimbursement = await nativeInTokenUnits(gasWalletSpend(topUp, gasPrice), deps);
     if (reimbursement === undefined) return undefined;
-    const split = splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate });
+    const split = splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n });
     return { topUp, reimbursement, split };
   };
 

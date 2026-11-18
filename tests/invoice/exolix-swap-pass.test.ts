@@ -149,14 +149,15 @@ function fakeChains() {
         const unspent = (ledger.get(request.depositAddress) ?? []).filter((p) => p.confirmations >= 1 && !spent.has(`${request.depositAddress}:${p.txid}`));
         const total = unspent.reduce((sum, p) => sum + p.amount, 0n);
         if (total <= 0n || total < request.minimumAmount) return { status: "pending", reason: "deposit below the minimum" };
-        const split = splitPayout({ received: total, networkCost: cost, feeRate: request.feeRate });
+        const split = splitPayout({ received: total, networkCost: cost, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n });
         if (split === undefined) return { status: "too_small", reason: "fake: too small" };
         counter += 1;
         const txid = `${asset}-tx-${counter}`;
         const plan = {
           transfers: [
             { kind: request.destinationKind, to: request.destination, amount: split.merchantAmount, txid },
-            { kind: "platform_fee" as const, to: PLATFORM[asset]!, amount: split.platformFee, txid },
+            // Like the real adapters: no platform transfer when no fee is due.
+            ...(split.platformFee > 0n ? [{ kind: "platform_fee" as const, to: PLATFORM[asset]!, amount: split.platformFee, txid }] : []),
           ],
           platformFee: split.platformFee,
           networkCost: cost,
@@ -323,7 +324,7 @@ describe("XMR paid, swapped by Exolix into USDT on Tron", () => {
     assert.equal(invoice?.swap?.deposit_address ?? "", "");
   });
 
-  it("when Exolix refunds, fails the invoice with the 7-day watch and forwards the refunded XMR to the merchant's refund address, F1 again", async () => {
+  it("when Exolix refunds, fails the invoice with the 7-day watch and forwards the refunded XMR to the merchant's refund address with no second fee", async () => {
     const t = setUp();
     const invoiceId = await xmrToUsdtInvoice(t, { xmr: XMR_MERCHANT_REFUND });
     t.http.setTransaction(t.http.replies.create);
@@ -344,13 +345,11 @@ describe("XMR paid, swapped by Exolix into USDT on Tron", () => {
     await t.pass();
     await t.pass();
 
-    // 1.499 XMR: 0.07495 to the platform, 0.001 network cost, the rest to the merchant.
-    assert.deepEqual(t.chain.broadcasts.at(-1), { asset: "xmr", from: XMR_INVOICE, to: XMR_MERCHANT_REFUND, amount: 1_423_050_000_000n });
+    // 1.499 XMR, whose fee was taken before the swap (Exolix names no refunded
+    // amount; the 1.5 XMR sent in counts): 0.001 network cost, the rest to the merchant.
+    assert.deepEqual(t.chain.broadcasts.at(-1), { asset: "xmr", from: XMR_INVOICE, to: XMR_MERCHANT_REFUND, amount: 1_498_000_000_000n });
     invoice = await invoiceNow(invoiceId);
-    assert.deepEqual(transfersOf(invoice, 1), [
-      ["refund_route", XMR_MERCHANT_REFUND, "1423050000000", "confirmed"],
-      ["platform_fee", "platform-xmr", "74950000000", "confirmed"],
-    ]);
+    assert.deepEqual(transfersOf(invoice, 1), [["refund_route", XMR_MERCHANT_REFUND, "1498000000000", "confirmed"]]);
   });
 });
 

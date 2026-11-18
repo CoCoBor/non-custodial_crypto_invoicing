@@ -522,7 +522,7 @@ async function planPayout(request: PayoutRequest, deps: TronPayoutDeps, lifetime
     const gasSpend = topUp === 0n ? 0n : topUp + topUpFee(deposit.active, fees, { from: gas.address, to: depositAddress, amount: topUp }, head, lifetime);
     const reimbursement = await trxInTokenUnits(gasSpend, deps);
     if (reimbursement === undefined) return undefined;
-    return { topUp, gasSpend, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate }) };
+    return { topUp, gasSpend, reimbursement, split: splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n }) };
   };
   const tooSmall: PayoutResult = { status: "too_small", reason: `${token.asset} payout is too small after the fee and the TRX network cost` };
   let planned = await plan(2);

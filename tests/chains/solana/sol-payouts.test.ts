@@ -250,6 +250,23 @@ describe("Solana payouts on a local solana-test-validator", { skip: skipReason }
     assert.equal(await node.balance(d.deposit.address), 0n);
   });
 
+  it("charges SOL's fee only on the part that has not paid it yet (a refunded swap's money)", async () => {
+    await freshAdapters();
+    const received = LAMPORTS_PER_SOL;
+    const exempt = (received * 3n) / 5n;
+    const d = await fundedDeposit(native, received, { destinationKind: "refund_route", feeExempt: exempt });
+    const platformFee = (received - exempt) / 20n;
+
+    const result = await payUntilPaid(native, d.request);
+
+    assert.deepEqual(result.transfers.map((t) => [t.kind, t.amount]), [
+      ["refund_route", received - platformFee - SOL_FEE],
+      ["platform_fee", platformFee],
+    ]);
+    assert.equal(await node.balance(platform), platformFee);
+    assert.equal(await node.balance(d.deposit.address), 0n);
+  });
+
   it("gives the merchant a platform fee too small to open the empty platform wallet (rent)", async () => {
     await freshAdapters();
     const received = 2_000_000n;
@@ -530,6 +547,27 @@ describe("Solana payouts on a local solana-test-validator", { skip: skipReason }
     );
     assert.equal(await tokens(d.destination), received - want.reimbursed);
     assert.equal(await tokens(platform), want.reimbursed);
+  });
+
+  it("charges a token's fee only on the part that has not paid it yet; the gas is still reimbursed", async () => {
+    await freshAdapters();
+    const received = 1_000n * ONE_TOKEN;
+    const exempt = 600n * ONE_TOKEN;
+    const d = await fundedDeposit(token, received, { destinationKind: "refund_route", feeExempt: exempt });
+    const want = expectedTokenPayout(received - exempt, FIVE_PERCENT, 2n);
+
+    const result = await payUntilPaid(token, d.request);
+
+    assert.deepEqual(
+      result.transfers.map((t) => [t.kind, t.amount]),
+      [
+        ["gas_top_up", want.gasSpend],
+        ["refund_route", received - want.fee - want.reimbursed],
+        ["platform_fee", want.fee + want.reimbursed],
+      ],
+    );
+    assert.equal(d.saved.at(-1)!.plan.platformFee, want.fee);
+    assert.equal(await tokens(platform), want.fee + want.reimbursed);
   });
 
   it("routes late token money after the merchant payout, paying rent only for the new refund account", async () => {

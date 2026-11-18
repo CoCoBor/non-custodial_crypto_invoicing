@@ -198,6 +198,24 @@ for (const { chain, lib, tooSmall, makeAdapter } of CHAINS) {
       assert.equal(await node.balance(d.deposit.address), 0n);
     });
 
+    it("charges the fee only on the part of the money that has not paid it yet (a refunded swap's money)", async () => {
+      freshPlatform();
+      const exempt = (RECEIVED * 3n) / 5n;
+      const d = await fundedDeposit([RECEIVED], { destinationKind: "refund_route", feeExempt: exempt });
+      const cost = networkCost([25, 22]);
+      const platformFee = ((RECEIVED - exempt) * FIVE_PERCENT + 10n ** 8n - 1n) / 10n ** 8n;
+
+      const result = await payUntilPaid(d.request);
+
+      if (result.status !== "paid") return;
+      assert.deepEqual(result.transfers.map((t) => [t.kind, t.amount]), [
+        ["refund_route", RECEIVED - platformFee - cost],
+        ["platform_fee", platformFee],
+      ]);
+      assert.equal(await node.balance(platform), platformFee);
+      assert.equal(await node.balance(d.deposit.address), 0n);
+    });
+
     it("routes late money to a refund address after the merchant payout completed, without paying the merchant again", async () => {
       freshPlatform();
       const d = await fundedDeposit([RECEIVED]);
