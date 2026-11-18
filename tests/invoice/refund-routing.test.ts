@@ -505,7 +505,7 @@ describe("money too small to forward", () => {
     assert.equal((await invoiceNow(invoiceId))?.outcome, "too_small_to_forward");
   });
 
-  it("stays marked too small, and is not held, when the watch ends", async () => {
+  it("is held for manual handling when the watch ends, with the amount and the deposit address (owner decision 2026-11-19)", async () => {
     const userId = await merchant();
     const { invoiceId, address } = await closedInvoice("cancelled", userId);
     const chain = fakeChain();
@@ -515,8 +515,10 @@ describe("money too small to forward", () => {
     await passes(chain, NOW + WEEK + 2 * DAY, 2);
 
     const invoice = await invoiceNow(invoiceId);
-    assert.equal(invoice?.outcome, "too_small_to_forward");
+    assert.equal(invoice?.outcome, "held_for_manual_handling");
     assert.equal(invoice?.watch_done, true);
+    assert.match(invoice?.review_reason ?? "", new RegExp(`Held for manual handling: .*1000 .*tx-dust too small to forward.*${address}`));
+    assert.equal(chain.broadcastsFor(address).length, 0);
   });
 
   /** A confirmed invoice paid in full with 1,000 sat: fee 50 + network 1,000 leave the merchant nothing. */
@@ -599,7 +601,7 @@ describe("money too small to forward", () => {
     assert.equal(invoice?.status, "failed");
   });
 
-  it("leaves a closed dust invoice's money at the deposit, marked and with its note, when the watch ends", async () => {
+  it("holds a closed dust invoice's money for manual handling when the watch ends, naming the amount and the deposit address", async () => {
     const userId = await merchant();
     const { invoiceId, address } = await dustInvoice(userId);
     const chain = fakeChain();
@@ -610,8 +612,9 @@ describe("money too small to forward", () => {
 
     const invoice = await invoiceNow(invoiceId);
     assert.equal(invoice?.watch_done, true);
-    assert.equal(invoice?.outcome, "too_small_to_forward");
-    assert.match(invoice?.review_reason ?? "", new RegExp(`Too small to forward.*${address}`));
+    assert.equal(invoice?.status, "failed", "the status does not change");
+    assert.equal(invoice?.outcome, "held_for_manual_handling");
+    assert.match(invoice?.review_reason ?? "", new RegExp(`Held for manual handling: .*1000 .*tx-tiny too small to forward.*${address}`));
     assert.equal(chain.broadcastsFor(address).length, 0);
   });
 });

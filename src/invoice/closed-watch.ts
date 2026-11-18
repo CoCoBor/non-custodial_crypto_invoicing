@@ -852,13 +852,19 @@ async function finish(watch: Watch): Promise<void> {
   const { invoice } = watch;
   const left = stillAtDeposit(watch.payments);
   if (left.length === 0) return await save(watch, { watch_done: true, outcome: baseOutcome(watch) });
-  if (invoice.outcome === "too_small_to_forward") return await save(watch, { watch_done: true });
+  const ended = `the 7-day watch ended (${new Date(invoice.watch_until).toISOString()})`;
+  // Dust is held too (owner decision 2026-11-19): the payer did pay it, and no
+  // second payment may ever come to lift it over the fees.
+  const why =
+    invoice.outcome === "too_small_to_forward"
+      ? `${ended} with ${describeMoney(watch, left)} too small to forward: the fees and network cost would take it all.`
+      : `${ended} with ${describeMoney(watch, left)} not forwarded.`;
   await save(watch, {
     watch_done: true,
     outcome: "held_for_manual_handling",
     review_reason: withLateNote(
       invoice,
-      `Held for manual handling: the 7-day watch ended (${new Date(invoice.watch_until).toISOString()}) with ${describeMoney(watch, left)} not forwarded. It should still be at deposit address ${invoice.address}; forward it by hand with the deposit key.`,
+      `Held for manual handling: ${why} It should still be at deposit address ${invoice.address}; forward it by hand with the deposit key.`,
     ),
   });
 }

@@ -160,6 +160,28 @@ describe("every status change is its own webhook event", () => {
     );
   });
 
+  it("announces the dust being held for manual handling when its 7-day watch ends", async () => {
+    const { invoiceId, address } = await confirmedInvoice(await merchantWithWebhook());
+    const payments = new Map([[address, [{ txid: `pay-${invoiceId}`, amount: AMOUNT, confirmations: 3 }]]]);
+    let now = NOW;
+    const watch = watcher(() => now, payments, async () => ({ status: "too_small", reason: "fees exceed it" }));
+    await watch();
+    await webhookPass(now);
+
+    now = NOW + 9 * 24 * 60 * MINUTE; // past the window and its 24-hour grace
+    await watch();
+    await webhookPass(now);
+
+    const events = await outbox(invoiceId);
+    assert.deepEqual(
+      events.map((e) => [e.body.event, e.body.status, e.body.outcome]),
+      [
+        ["invoice.status_changed", "failed", "too_small_to_forward"],
+        ["invoice.outcome_changed", "failed", "held_for_manual_handling"],
+      ],
+    );
+  });
+
   it("announces two changes made between two webhook passes as two events, in order", async () => {
     const { invoiceId } = await confirmedInvoice(await merchantWithWebhook());
     const watch = watcher(() => NOW, new Map(), paysAtOnce);
