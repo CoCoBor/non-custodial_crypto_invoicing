@@ -1,6 +1,7 @@
 import bitcore from "bitcore-lib";
 import { isAddress } from "ethers";
 
+import { isValidTronAddress } from "../chains/tron-address.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
 import { isValidLtcAddress } from "../transactions/ltc.js";
 import { isValidSolAddress } from "../transactions/sol.js";
@@ -24,7 +25,7 @@ function isValidEvmAddress(address: string): boolean {
 }
 
 // Keyed by chain: a token is paid out to an address of its chain's format.
-// Chains missing here (Tron, Monero) have no payout code yet.
+// Chains missing here (Monero) have no payout code yet.
 const addressRuleByChain: Partial<Record<string, (address: string) => boolean>> = {
   btc: isValidBtcAddress,
   ltc: isValidLtcAddress,
@@ -32,6 +33,7 @@ const addressRuleByChain: Partial<Record<string, (address: string) => boolean>> 
   bsc: isValidEvmAddress,
   sol: isValidSolAddress,
   ton: isValidTonAddress,
+  trx: isValidTronAddress,
 };
 
 export type PayoutAddressCheck = "valid" | "invalid" | "unsupported";

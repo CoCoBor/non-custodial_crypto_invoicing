@@ -12,6 +12,8 @@ import { freshTotpCode } from "../helpers/totp.js";
 
 const BTC_ADDRESS = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
 const ETH_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const TRON_ADDRESS = "TVzYu8aczxtWAF2JmcEZEUapsYqtUWDU1p";
+const XMR_ADDRESS = "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A";
 
 let baseUrl: string;
 let db: Db;
@@ -113,14 +115,34 @@ describe("payout and refund addresses", () => {
       assert.equal(response.status, 409);
       assert.equal(response.body.error.code, "ADDRESS_INVALID");
     });
+
+    it(`saves a Tron ${kind} address for USDT on Tron, and refuses its hex form`, async () => {
+      const m = await merchant();
+
+      const saved = await patch(`/settings/${kind}-addresses`, m.cookie, {
+        asset: "usdttrx",
+        address: TRON_ADDRESS,
+        totpCode: await m.code(),
+      });
+      const hex = await patch(`/settings/${kind}-addresses`, m.cookie, {
+        asset: "usdttrx",
+        address: "41dba38a9ecfc0e6bf49c182dab4848bcbcd23e5d5",
+        totpCode: await m.code(),
+      });
+
+      assert.equal(saved.status, 200);
+      assert.equal(hex.status, 409);
+      assert.equal(hex.body.error.code, "ADDRESS_INVALID");
+      assert.equal((await user(m.userId))?.[field].usdttrx, TRON_ADDRESS);
+    });
   }
 
   it("says a chain without payout code is not supported yet", async () => {
     const m = await merchant();
 
     const response = await patch("/settings/payout-addresses", m.cookie, {
-      asset: "usdttrx",
-      address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      asset: "xmr",
+      address: XMR_ADDRESS,
       totpCode: await m.code(),
     });
 
