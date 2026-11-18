@@ -54,6 +54,10 @@ function fakeNode() {
           return hex(1_000_000_000n);
         case "eth_blockNumber":
           return hex(head);
+        case "eth_getBlockByNumber":
+          return { number: hex(head), baseFeePerGas: "0x0" };
+        case "eth_estimateGas":
+          return hex(50_000n);
         case "eth_getBalance":
           return hex(balances.get(getAddress(String(params[0]))) ?? 0n);
         case "eth_getCode":
@@ -304,7 +308,7 @@ describe("EVM payout: a saved gas top-up whose receipt is not readable yet", () 
     assert.equal(next.status, "pending", show(next));
     assert.equal(saved.length, 2, "the transfers phase was saved");
     assert.equal(saved[1]!.plan.transfers[0]!.txid, topUp.txid, "the same top-up");
-    assert.equal(node.sent.length, 3, "then the two token transfers were sent");
+    assert.equal(node.sent.length, 4, "then the two token transfers and the gas sweep were sent");
 
     node.mineAll();
     const paid = await adapter.payout(request());

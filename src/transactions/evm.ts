@@ -15,9 +15,13 @@ import { openSecret, type SealedSecret, type SecretPurpose } from "../security/s
 // is known before it is sent.
 //
 // A token deposit holds no native coin. The chain's gas wallet first sends
-// it exactly the gas the two token transfers may use (gas_top_up). What the
-// gas wallet spent is converted to token units at the current prices and
-// taken from the merchant's share: it rides on the platform's token transfer.
+// it the gas the two token transfers may use (gas_top_up): the node's
+// estimate for each, plus a safety margin. The merchant is charged the
+// estimate only (fix ticket F, owner option A): converted to token units at
+// the current prices and taken from the merchant's share, it rides on the
+// platform's token transfer. The margin is the platform's: the deposit sends
+// it back to the gas wallet (gas_sweep) in a transaction signed and saved
+// with the transfers, at the next nonce, so it can only run after them.
 
 export type EvmChain = {
   /** Names the chain in messages, e.g. "ETH". */
@@ -54,12 +58,25 @@ export type EvmTokenPayoutDeps = EvmPayoutDeps & {
 };
 
 const TRANSFER_GAS = 21_000n;
-// Gas limit of each token transfer. Ethereum USDT and USDC use about 41k to
-// 65k (more when the receiver held none before). Unused gas stays at the
-// deposit as native coin; the next payout from it tops up less.
-export const TOKEN_TRANSFER_GAS_LIMIT = 100_000n;
+// Gas limit of each token transfer: the node's estimate plus this margin.
+// Ethereum USDT and USDC use about 41k to 65k (more when the receiver held
+// none before). On anvil a transfer to a receiver holding none cost 17,088
+// more than to a holder (a fresh storage slot): the margin covers a receiver
+// that empties its balance between the estimate and the transfer.
+export const TOKEN_GAS_MARGIN = 25_000n;
+// Each transfer is estimated with the whole balance as its amount. A smaller
+// amount can have more non-zero calldata bytes: 12 gas more each, 32 bytes.
+export const TOKEN_AMOUNT_CALLDATA_SLACK = 12n * 32n;
+// The payer-pays estimate is made before any deposit exists to ask the node
+// about: the upper end of USDT and USDC above, per transfer.
+export const PAYER_PAYS_TOKEN_TRANSFER_GAS = 65_000n;
 // Over the node's suggested price. It raises the fee; it does not guarantee inclusion.
+// Only for a chain whose blocks carry no base fee (before EIP-1559).
 const GAS_PRICE_HEADROOM_PERCENT = 125n;
+// Over the latest base fee: it rises by at most 1/8 per block, so this still
+// pays it two full blocks later. The tip (the suggestion above the base fee)
+// is not raised, and a legacy transaction pays exactly this price.
+const BASE_FEE_HEADROOM = { numerator: 81n, denominator: 64n };
 const NATIVE_DECIMALS = 18;
 const PRICE_DECIMALS = 10;
 
@@ -77,10 +94,21 @@ async function quantity(rpc: EvmRpc, method: string, params: unknown[]): Promise
   return parsed.success ? BigInt(parsed.data) : undefined;
 }
 
+/** The latest block's base fee; `baseFee` undefined: the chain has none. undefined: the lookup failed. */
+async function latestBaseFee(rpc: EvmRpc): Promise<{ baseFee: bigint | undefined } | undefined> {
+  const parsed = z.object({ baseFeePerGas: hexQuantity.optional() }).safeParse(await rpc.call("eth_getBlockByNumber", ["latest", false]));
+  if (!parsed.success) return undefined;
+  return { baseFee: parsed.data.baseFeePerGas === undefined ? undefined : BigInt(parsed.data.baseFeePerGas) };
+}
+
 async function gasPriceToPay(rpc: EvmRpc, chain: EvmChain): Promise<bigint | undefined> {
-  const suggested = await quantity(rpc, "eth_gasPrice", []);
-  if (suggested === undefined || suggested <= 0n) return undefined;
-  const price = ceilDivide(suggested * GAS_PRICE_HEADROOM_PERCENT, 100n);
+  const [suggested, block] = await Promise.all([quantity(rpc, "eth_gasPrice", []), latestBaseFee(rpc)]);
+  if (suggested === undefined || suggested <= 0n || block === undefined) return undefined;
+  const { baseFee } = block;
+  const price =
+    baseFee === undefined
+      ? ceilDivide(suggested * GAS_PRICE_HEADROOM_PERCENT, 100n)
+      : ceilDivide(baseFee * BASE_FEE_HEADROOM.numerator, BASE_FEE_HEADROOM.denominator) + (suggested > baseFee ? suggested - baseFee : 0n);
   if (price > chain.maxGasPrice) {
     console.warn(`${chain.label} gas price is above the sanity cap:`, price);
     return undefined;
@@ -209,7 +237,7 @@ async function signTx(
   chain: EvmChain,
   tx: { kind: Transfer["kind"]; recipient: string; nonce: bigint; gasPrice: bigint } & (
     | { value: bigint }
-    | { token: EvmToken; tokenAmount: bigint }
+    | { token: EvmToken; tokenAmount: bigint; gasLimit: bigint }
   ),
 ): Promise<SignedTx> {
   const isToken = "token" in tx;
@@ -218,12 +246,10 @@ async function signTx(
     chainId: chain.chainId,
     nonce: Number(tx.nonce),
     gasPrice: tx.gasPrice,
-    gasLimit: isToken ? TOKEN_TRANSFER_GAS_LIMIT : TRANSFER_GAS,
+    gasLimit: isToken ? tx.gasLimit : TRANSFER_GAS,
     to: isToken ? tx.token.contract : tx.recipient,
     value: isToken ? 0n : tx.value,
-    data: isToken
-      ? TRANSFER_SELECTOR + AbiCoder.defaultAbiCoder().encode(["address", "uint256"], [tx.recipient, tx.tokenAmount]).slice(2)
-      : "0x",
+    data: isToken ? transferCalldata(tx.recipient, tx.tokenAmount) : "0x",
   });
   return {
     kind: tx.kind,
@@ -234,6 +260,9 @@ async function signTx(
     txid: keccak256(raw).toLowerCase(),
   };
 }
+
+const transferCalldata = (recipient: string, amount: bigint) =>
+  TRANSFER_SELECTOR + AbiCoder.defaultAbiCoder().encode(["address", "uint256"], [recipient, amount]).slice(2);
 
 const asTransfer = (t: SignedTx): Transfer => ({ kind: t.kind, to: t.to, amount: BigInt(t.amount), txid: t.txid });
 
@@ -250,6 +279,8 @@ const stateSchema = z.discriminatedUnion("mode", [
     gasWallet: z.string(),
     topUp: signedTxSchema.optional(),
     txs: z.array(signedTxSchema).min(1),
+    // The deposit's native coin left after the transfers, back to the gas wallet.
+    sweep: signedTxSchema.optional(),
   }),
 ]);
 type PayoutState = z.infer<typeof stateSchema>;
@@ -347,6 +378,7 @@ async function followDepositTransfers(
   txs: SignedTx[],
   proof: (tx: SignedTx, receipt: Receipt) => bigint,
   alreadyMoved: Transfer[],
+  sweep?: { tx: SignedTx; gasPrice: bigint },
 ): Promise<PayoutResult> {
   const { chain, rpc } = deps;
   const { depositAddress } = request;
@@ -388,7 +420,10 @@ async function followDepositTransfers(
   }
 
   for (const tx of missing) await broadcast(rpc, chain, tx);
-  if (missing.length > 0) return { status: "pending", reason: "broadcast; waiting for the receipts" };
+  if (missing.length > 0) {
+    if (sweep !== undefined) await broadcast(rpc, chain, sweep.tx);
+    return { status: "pending", reason: "broadcast; waiting for the receipts" };
+  }
   if (waiting !== undefined) return { status: "pending", reason: waiting };
 
   for (const transfer of moved) {
@@ -404,7 +439,39 @@ async function followDepositTransfers(
       transfers: moved,
     };
   }
+  if (sweep !== undefined) {
+    const swept = await sweepOutcome(deps, depositAddress, sweep.tx, sweep.gasPrice);
+    if ("pending" in swept) return { status: "pending", reason: swept.pending };
+    if (swept.transfer !== undefined) moved.push(swept.transfer);
+  }
   return { status: "paid", transfers: moved, ...(notes.length > 0 && { note: notes.join(" ") }) };
+}
+
+/**
+ * The sweep, once the merchant's transfers are proven. It never fails or
+ * stops the payout: a sweep that can no longer be paid for (the transfers
+ * used more gas than estimated) or can never land is left out, and the coin
+ * stays at the deposit.
+ */
+async function sweepOutcome(
+  deps: EvmPayoutDeps,
+  depositAddress: string,
+  tx: SignedTx,
+  gasPrice: bigint,
+): Promise<{ transfer?: Transfer } | { pending: string }> {
+  const { chain, rpc } = deps;
+  const found = await savedTxFate(rpc, chain, tx, depositAddress);
+  if (found.fate === "wait") return { pending: found.reason };
+  if (found.fate === "lost") return {};
+  if (found.fate === "mined") return found.receipt.status === "0x1" ? { transfer: asTransfer(tx) } : {};
+  const balance = await nativeBalance(rpc, depositAddress);
+  if (balance === undefined) return { pending: `${chain.label} deposit balance unavailable` };
+  if (balance < BigInt(tx.amount) + gasPrice * TRANSFER_GAS) {
+    console.warn(`${chain.label} gas sweep ${tx.txid} can't be paid for any more; the coin stays at`, depositAddress);
+    return {};
+  }
+  await broadcast(rpc, chain, tx);
+  return { pending: "gas sweep broadcast; waiting for its receipt" };
 }
 
 // ---------- Native coin ----------
@@ -521,12 +588,14 @@ const gasWalletSpend = (value: bigint, gasPrice: bigint) => (value === 0n ? 0n :
 /**
  * Payer-pays estimate for a token deposit, in token units: a top-up into an
  * empty deposit, two token transfers' gas, at today's gas price and prices.
+ * What a payout is charged comes from the node's estimates then; the gap is
+ * the merchant's (spec story 63).
  */
 export async function estimateEvmTokenNetworkCost(deps: Omit<EvmTokenPayoutDeps, "platformAddress" | "gasWalletKey">): Promise<bigint | undefined> {
   const gasPrice = await gasPriceToPay(deps.rpc, deps.chain);
   if (gasPrice === undefined) return undefined;
-  const topUp = gasPrice * TOKEN_TRANSFER_GAS_LIMIT * 2n;
-  return await nativeInTokenUnits(gasWalletSpend(topUp, gasPrice), { ...deps, platformAddress: undefined, gasWalletKey: undefined });
+  const charged = gasPrice * (PAYER_PAYS_TOKEN_TRANSFER_GAS * 2n + TRANSFER_GAS);
+  return await nativeInTokenUnits(charged, { ...deps, platformAddress: undefined, gasWalletKey: undefined });
 }
 
 function tokenProof(token: EvmToken, depositAddress: string) {
@@ -586,28 +655,49 @@ export async function payOutEvmToken(request: PayoutRequest, deps: EvmTokenPayou
   if (received === undefined || depositGas === undefined) return { status: "pending", reason: `${chain.label} balances unavailable` };
   if (received < request.minimumAmount || received === 0n) return { status: "pending", reason: "the deposit holds less than the payout minimum" };
 
-  // Two token transfers (merchant, platform), each up to its gas limit. Coin
-  // already at the deposit (unused gas of an earlier payout) counts.
-  const plan = async (transferCount: bigint) => {
-    const needed = gasPrice * TOKEN_TRANSFER_GAS_LIMIT * transferCount;
+  // The node's estimate for each transfer (merchant, platform), made from the
+  // deposit with the whole balance as the amount.
+  const estimates: bigint[] = [];
+  for (const to of [destination, deps.platformAddress!]) {
+    const estimate = await quantity(rpc, "eth_estimateGas", [{ from: depositAddress, to: token.contract, data: transferCalldata(to, received) }]);
+    if (estimate === undefined || estimate <= 0n) {
+      return { status: "pending", reason: `${chain.label} gas estimate for a ${token.asset} transfer to ${to} unavailable (the node, or the token refusing it)` };
+    }
+    estimates.push(estimate);
+  }
+
+  // Coin already at the deposit (a payer's, or dust an earlier payout could
+  // not sweep) counts towards the gas and lowers the charge.
+  const plan = async (transferCount: number) => {
+    const used = estimates.slice(0, transferCount);
+    const gasLimits = used.map((estimate) => estimate + TOKEN_GAS_MARGIN);
+    const needed = gasPrice * gasLimits.reduce((a, b) => a + b, 0n);
     const topUp = needed > depositGas ? needed - depositGas : 0n;
-    const reimbursement = await nativeInTokenUnits(gasWalletSpend(topUp, gasPrice), deps);
+    const estimatedGas = used.reduce((a, b) => a + b, 0n);
+    const estimated = gasPrice * estimatedGas;
+    const charged = topUp === 0n ? 0n : (estimated > depositGas ? estimated - depositGas : 0n) + gasPrice * TRANSFER_GAS;
+    const reimbursement = await nativeInTokenUnits(charged, deps);
     if (reimbursement === undefined) return undefined;
     const split = splitPayout({ received, networkCost: reimbursement, feeRate: request.feeRate, feeExempt: request.feeExempt ?? 0n });
-    return { topUp, reimbursement, split };
+    // What is left of the top-up once the transfers used no more than their
+    // estimates: the margin, less the sweep's own gas. Worth sending only if
+    // it brings back more than it costs.
+    const sweepValue = needed - gasPrice * (estimatedGas + TOKEN_AMOUNT_CALLDATA_SLACK * BigInt(transferCount) + TRANSFER_GAS);
+    const sweep = topUp > 0n && sweepValue > gasPrice * TRANSFER_GAS ? sweepValue : 0n;
+    return { topUp, reimbursement, split, gasLimits, sweep };
   };
 
-  let planned = await plan(2n);
+  let planned = await plan(2);
   if (planned === undefined) {
     return { status: "pending", reason: `no ${chain.label}/${token.asset} price to convert the gas cost` };
   }
   if (planned.split === undefined) return { status: "too_small", reason: `${token.asset} payout is too small after the fee and gas` };
   if (planned.split.platformFee + planned.reimbursement === 0n) {
     // Nothing for the platform: one transfer, so less gas is needed.
-    planned = (await plan(1n))!;
+    planned = (await plan(1))!;
     if (planned.split === undefined) return { status: "too_small", reason: `${token.asset} payout is too small after the fee and gas` };
   }
-  const { topUp, reimbursement, split } = planned as typeof planned & { split: NonNullable<typeof planned.split> };
+  const { topUp, reimbursement, split, gasLimits, sweep } = planned as typeof planned & { split: NonNullable<typeof planned.split> };
   const platformAmount = split.platformFee + reimbursement;
 
   let topUpTx: SignedTx | undefined;
@@ -618,13 +708,17 @@ export async function payOutEvmToken(request: PayoutRequest, deps: EvmTokenPayou
   }
 
   const txs = [
-    await signTx(wallet, chain, { kind: destinationKind, recipient: destination, nonce, gasPrice, token, tokenAmount: split.merchantAmount }),
+    await signTx(wallet, chain, { kind: destinationKind, recipient: destination, nonce, gasPrice, token, tokenAmount: split.merchantAmount, gasLimit: gasLimits[0]! }),
   ];
   if (platformAmount > 0n) {
     txs.push(
-      await signTx(wallet, chain, { kind: "platform_fee", recipient: deps.platformAddress!, nonce: nonce + 1n, gasPrice, token, tokenAmount: platformAmount }),
+      await signTx(wallet, chain, { kind: "platform_fee", recipient: deps.platformAddress!, nonce: nonce + 1n, gasPrice, token, tokenAmount: platformAmount, gasLimit: gasLimits[1]! }),
     );
   }
+  const sweepTx =
+    sweep > 0n
+      ? await signTx(wallet, chain, { kind: "gas_sweep", recipient: gasWallet.address, nonce: nonce + BigInt(txs.length), gasPrice, value: sweep })
+      : undefined;
 
   const state: TokenState = {
     v: 1,
@@ -634,6 +728,7 @@ export async function payOutEvmToken(request: PayoutRequest, deps: EvmTokenPayou
     gasWallet: getAddress(gasWallet.address),
     ...(topUpTx !== undefined && { topUp: topUpTx }),
     txs,
+    ...(sweepTx !== undefined && { sweep: sweepTx }),
   };
   const saved = await request.saveCheckpoint(tokenCheckpoint(state, split.platformFee, reimbursement));
   if (!saved) return { status: "pending", reason: "another run saved this payout first" };
@@ -645,7 +740,7 @@ function tokenCheckpoint(state: TokenState, platformFee: bigint, reimbursement: 
   return {
     state: JSON.stringify(state),
     plan: {
-      transfers: [...(state.topUp ? [state.topUp] : []), ...state.txs].map(asTransfer),
+      transfers: [...(state.topUp ? [state.topUp] : []), ...state.txs, ...(state.sweep ? [state.sweep] : [])].map(asTransfer),
       platformFee,
       // In token units: what the gas wallet spent, converted. The gas_top_up
       // transfer itself is in native units.
@@ -745,5 +840,6 @@ async function followTokenPayout(
   }
 
   const topUpMoved = current.topUp ? [asTransfer(current.topUp)] : [];
-  return await followDepositTransfers(request, deps, current.txs, tokenProof(token, depositAddress), topUpMoved);
+  const sweep = current.sweep === undefined ? undefined : { tx: current.sweep, gasPrice: BigInt(current.gasPrice) };
+  return await followDepositTransfers(request, deps, current.txs, tokenProof(token, depositAddress), topUpMoved, sweep);
 }
