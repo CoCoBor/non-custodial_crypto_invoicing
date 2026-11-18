@@ -18,7 +18,7 @@ const TON_ADDRESS = "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_";
 const LTC_ADDRESS = new litecore.PrivateKey().toAddress().toString();
 const SOL_ADDRESS = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const EVM_ADDRESS = "0x000000000000000000000000000000000000dEaD";
-const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500" }; // USD per coin
+const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500", sol: "125", usdtsol: "1", usdcsol: "1" }; // USD per coin
 
 let baseUrl: string;
 let db: Db;
@@ -186,10 +186,47 @@ describe("the merchant API", () => {
     assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
   });
 
-  it("refuses a fixed-coin invoice for a deposit coin with no chain adapter, rather than make a BTC one", async () => {
-    const m = await merchant({ btc: BTC_ADDRESS, sol: SOL_ADDRESS });
+  it("creates a fixed-coin SOL invoice with a Solana deposit, paid out to the merchant's SOL address", async () => {
+    const m = await merchant({ sol: SOL_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { crypto: "sol", to_crypto: "sol" });
+
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "sol");
+    assert.equal(invoice?.to_crypto, "sol");
+    assert.equal(invoice?.to_address, SOL_ADDRESS);
+    assert.equal(invoice?.amount, "200000000"); // $25 at $125/SOL = 0.2 SOL (9 decimals)
+    assert.match(invoice?.address ?? "", /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+    assert.ok(invoice?.private?.private_key, "the deposit key is missing");
+  });
+
+  it("creates a fixed-coin USDT-on-Solana invoice with a Solana deposit, paid out as the token", async () => {
+    const m = await merchant({ usdtsol: SOL_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdtsol", to_crypto: "usdtsol" });
+
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "usdtsol");
+    assert.equal(invoice?.to_address, SOL_ADDRESS);
+    assert.equal(invoice?.amount, "25000000"); // $25 at $1 = 25 USDT (6 decimals)
+    assert.match(invoice?.address ?? "", /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+  });
+
+  it("refuses a Solana token deposit paid out as SOL", async () => {
+    const m = await merchant({ usdcsol: SOL_ADDRESS, sol: SOL_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdcsol", to_crypto: "sol" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
+  });
+
+  it("refuses a fixed-coin invoice for a deposit coin with no chain adapter, rather than make a BTC one", async () => {
+    const m = await merchant({ btc: BTC_ADDRESS, usdcbsc: EVM_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdcbsc", to_crypto: "usdcbsc" });
 
     assert.equal(response.status, 409);
     assert.equal(response.body.error.code, "DEPOSIT_COIN_NOT_SUPPORTED");
@@ -205,8 +242,8 @@ describe("the merchant API", () => {
   });
 
   it("creates a merchant's-list invoice without a deposit, offering only coins that can be paid end to end", async () => {
-    // SOL has no watcher or payout path yet, so it is not offered.
-    const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS, ltc: LTC_ADDRESS, sol: SOL_ADDRESS });
+    // USDC on BSC has no chain adapter yet (its contract is unchecked), so it is not offered.
+    const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS, ltc: LTC_ADDRESS, usdcbsc: EVM_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
 
@@ -233,6 +270,23 @@ describe("the merchant API", () => {
     assert.equal((await invoiceInDb(invoiceId))?.to_address, EVM_ADDRESS);
   });
 
+  it("offers SOL and its tokens on a merchant's-list invoice, and the payer can pick a token", async () => {
+    const m = await merchant({ sol: SOL_ADDRESS, usdtsol: SOL_ADDRESS, usdcsol: SOL_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
+
+    const invoiceId: string = response.body.data.invoiceId;
+    assert.deepEqual([...(await invoiceInDb(invoiceId))!.offered_coins].sort(), ["sol", "usdcsol", "usdtsol"]);
+    const choice = await postJson(`${baseUrl}/pay/${invoiceId}/choose`, { crypto: "usdcsol" });
+    assert.equal(choice.status, 200, JSON.stringify(choice.body));
+    assert.equal(choice.body.data.payment.amount, "25000000");
+    assert.match(choice.body.data.payment.address, /^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+    const invoice = await invoiceInDb(invoiceId);
+    assert.equal(invoice?.crypto, "usdcsol");
+    assert.equal(invoice?.to_address, SOL_ADDRESS);
+    assert.ok(invoice?.private?.private_key);
+  });
+
   it("can narrow the coins offered", async () => {
     const m = await merchant({ btc: BTC_ADDRESS, ton: TON_ADDRESS });
 
@@ -242,7 +296,7 @@ describe("the merchant API", () => {
   });
 
   it("refuses a merchant's-list invoice when no coin can be offered", async () => {
-    const m = await merchant({ sol: SOL_ADDRESS });
+    const m = await merchant({ usdcbsc: EVM_ADDRESS });
 
     const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
 

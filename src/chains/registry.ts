@@ -7,11 +7,15 @@ import { createEvmNativeAdapter, createEvmTokenAdapter, type EvmClients } from "
 import { nowNodesBscBlockbook, nowNodesEthBlockbook } from "./evm-payments.js";
 import { nowNodesBscRpc, nowNodesEthRpc } from "./evm-rpc.js";
 import { createLtcAdapter } from "./ltc.js";
+import { createSolAdapter, createSplTokenAdapter } from "./sol.js";
+import { nowNodesSolRpc } from "./solana-rpc.js";
 import { createTonAdapter } from "./ton.js";
 
 const eth: EvmClients = { rpc: nowNodesEthRpc, index: nowNodesEthBlockbook };
 const bsc: EvmClients = { rpc: nowNodesBscRpc, index: nowNodesBscBlockbook };
 const ethToken = { ...eth, chain: "eth", platformAddress: env.platformEthAddress, gasWalletKey: env.ethGasWalletKey, getPrice } as const;
+const sol = { rpc: nowNodesSolRpc, platformAddress: env.platformSolAddress } as const;
+const solToken = { ...sol, gasWalletKey: env.solGasWalletKey, getPrice } as const;
 
 // One line per deposit asset. A payer can be offered, and the watcher only
 // follows, the assets listed here. The BEP-20 tokens (usdtbsc, usdcbsc,
@@ -25,6 +29,9 @@ export const chainAdapters: ChainRegistry = {
   usdceth: createEvmTokenAdapter({ ...ethToken, asset: "usdceth" }),
   daieth: createEvmTokenAdapter({ ...ethToken, asset: "daieth" }),
   bsc: createEvmNativeAdapter({ ...bsc, chain: "bsc", platformAddress: env.platformBscAddress }),
+  sol: createSolAdapter(sol),
+  usdtsol: createSplTokenAdapter({ ...solToken, asset: "usdtsol" }),
+  usdcsol: createSplTokenAdapter({ ...solToken, asset: "usdcsol" }),
   ton: createTonAdapter({ platformAddress: env.platformTonAddress }),
 };
 

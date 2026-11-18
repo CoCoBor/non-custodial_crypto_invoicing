@@ -68,8 +68,23 @@ describe("the payout network-cost estimate", () => {
     assert.equal(requested.length, 0);
   });
 
+  it("prices a SOL payout at one signature plus the priority fee floor over its compute unit limit", async () => {
+    // 5,000 lamports + 1,500 compute units × 50,000 micro-lamports = 5,075.
+    blockbookAnswers(200, { jsonrpc: "2.0", id: 1, result: [{ slot: 1, prioritizationFee: 0 }] });
+
+    assert.equal(await estimatePayoutNetworkCost("sol"), 5_075n);
+    assert.equal(requested.length, 1);
+    assert.match(requested[0]!, /^https:\/\/sol\.nownodes\.io/);
+  });
+
+  it("has no SOL estimate while the node fails", async () => {
+    blockbookAnswers(500, {});
+
+    assert.equal(await estimatePayoutNetworkCost("sol"), undefined);
+  });
+
   it("has none for a coin a payer can't deposit yet", async () => {
-    for (const coin of ["sol", "usdtsol", "usdtbsc"] as const) {
+    for (const coin of ["usdtbsc", "usdttrx", "xmr"] as const) {
       assert.equal(await estimatePayoutNetworkCost(coin), "unsupported");
     }
   });
