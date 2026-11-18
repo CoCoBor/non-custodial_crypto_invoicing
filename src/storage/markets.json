@@ -99,7 +99,8 @@
       "kraken": "XMRUSDT",
       "kucoin": "XMR-USDT",
       "xt": "xmr_usdt",
-      "bitfinex": "tXMRUST"
+      "bitfinex": "tXMRUST",
+      "htx": "xmrusdt"
     },
     "usd": {
       "kraken": "XXMRZUSD",

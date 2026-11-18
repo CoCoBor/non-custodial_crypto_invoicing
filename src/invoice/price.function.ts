@@ -394,6 +394,31 @@ const exchanges = {
         timeMs: null,
       })),
   },
+
+  htx: {
+    url: (market: string) =>
+      `https://api.huobi.pro/market/detail/merged?symbol=${encodeURIComponent(market)}`,
+
+    schema: z
+      .object({
+        status: z.literal("ok"),
+        ch: z.string().regex(/^market\.[a-z0-9]+\.detail\.merged$/),
+        ts: z.string().regex(/^[0-9]+$/),
+        tick: z.object({
+          // [price, size]
+          bid: z.tuple([z.string(), z.string()]),
+          ask: z.tuple([z.string(), z.string()]),
+          amount: z.string(),
+        }),
+      })
+      .transform((data) => ({
+        symbol: data.ch.split(".")[1],
+        bid: data.tick.bid[0],
+        ask: data.tick.ask[0],
+        volume: data.tick.amount,
+        timeMs: Number(data.ts),
+      })),
+  },
 };
 
 type Exchange = keyof typeof exchanges;
@@ -408,6 +433,13 @@ const markets: Record<
 // These three sources can still be read on their own.
 // Their volume window is not yet confirmed to match the other sources, so they are left out of weighting for now.
 const excludedFromWeighting = new Set<Exchange>(["bitstamp", "bitfinex", "xt"]);
+
+// Owner decision 2026-11-19: XMR is listed on too few weighted exchanges to
+// meet MIN_SOURCES. XT's and Bitfinex's XMR volumes were checked to be rolling
+// 24 h base-coin volumes, like the weighted sources (docs/domain.md, Pricing).
+const weightedForCoin: Partial<Record<string, ReadonlySet<Exchange>>> = {
+  xmr: new Set<Exchange>(["xt", "bitfinex"]),
+};
 
 const tickerSchema = z.object({
   symbol: z.string(),
@@ -458,7 +490,7 @@ export async function getTicker(
 
     let raw: unknown;
 
-    if (exchange === "bitfinex") {
+    if (exchange === "bitfinex" || exchange === "htx") {
       // Node.js 24: keep the original text of JSON numbers to avoid Number rounding.
       raw = JSON.parse(
         await response.text(),
@@ -647,7 +679,8 @@ async function weightedPrice(
   const availableExchanges = exchangeNames.filter(
     (exchange) =>
       configuredMarkets[exchange] !== undefined &&
-      !excludedFromWeighting.has(exchange),
+      (!excludedFromWeighting.has(exchange) ||
+        weightedForCoin[coin]?.has(exchange) === true),
   );
 
   if (availableExchanges.length < minSources) {

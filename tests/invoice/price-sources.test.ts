@@ -7,6 +7,8 @@ import { getPrice, getTrxPrice } from "../../src/invoice/price.function.js";
 // The multi-exchange USD prices, answered from one recorded snapshot of every
 // weighted market in src/storage/markets.json (tests/fixtures/prices, all
 // recorded within 3 s on 2026-11-18 with one public GET each). No network.
+// XMR's markets (XT, Bitfinex and HTX count for XMR since 2026-11-19) have
+// their own snapshot: tests/invoice/xmr-price.test.ts.
 
 type Recording = { url: string; status: number; file?: string };
 const snapshot = JSON.parse(
@@ -141,10 +143,6 @@ describe("USD prices from the recorded snapshot", () => {
     down(/pubticker\/daiusd$/);
 
     assert.equal(await getPrice("daieth", "usd"), undefined);
-  });
-
-  it("still has no XMR price: only Kraken and KuCoin quote it among the weighted exchanges", async () => {
-    assert.equal(await getPrice("xmr", "usd"), undefined);
   });
 
   it("prices TRX in USDT for the Tron gas reimbursement", async () => {
