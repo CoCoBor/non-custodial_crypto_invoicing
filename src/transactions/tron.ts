@@ -320,7 +320,7 @@ const stateSchema = z.object({
   transfers: z
     .array(
       z.object({
-        kind: z.enum(["merchant_payout", "refund_route", "platform_fee"]),
+        kind: z.enum(["merchant_payout", "refund_route", "swap_deposit", "platform_fee"]),
         to: z.string(),
         amount: u64,
         feeLimit: u64,

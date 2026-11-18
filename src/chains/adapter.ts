@@ -57,8 +57,6 @@ export type PayoutPlan = {
   transfers: Transfer[];
   platformFee: bigint;
   networkCost: bigint;
-  /** Legacy NEAR swap of a BTC or TON deposit (ticket 15 replaces it). */
-  legacySwap?: { depositAddress: string; deadline: string; quote?: unknown };
 };
 
 export type PayoutCheckpoint = {
@@ -72,8 +70,9 @@ export type PayoutRequest = {
   depositKey: DepositKey;
   /** Receives everything that is not platform fee or network cost. */
   destination: string;
-  destinationKind: "merchant_payout" | "refund_route";
-  /** The deposit's own asset, except for a legacy swap (see canPayOutAs). */
+  /** swap_deposit: `destination` is a swap provider's deposit address (src/swap/swap-port.ts). */
+  destinationKind: "merchant_payout" | "refund_route" | "swap_deposit";
+  /** Always the deposit's own asset: another coin is reached through a swap. */
   receiveAsset: AssetId;
   /** The invoice's fee rate in FEE_RATE_SCALE units (src/money/payout-split.ts). */
   feeRate: bigint;
@@ -104,7 +103,7 @@ export type ChainAdapter = {
   requiredConfirmations: number;
   /** The chain's rule from src/assets/payout-address.ts. */
   isValidAddress: (address: string) => boolean;
-  /** Can a deposit be paid out as `receiveAsset`? Always true for `asset` itself. */
+  /** Can a deposit be paid out as `receiveAsset`? True only for `asset` itself; other coins go through a swap. */
   canPayOutAs: (receiveAsset: AssetId) => boolean;
   newDeposit: () => Promise<NewDeposit>;
   /** Every incoming payment to `address`. undefined: the lookup failed (never [] for a failure). */

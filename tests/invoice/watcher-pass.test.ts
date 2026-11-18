@@ -15,6 +15,7 @@ import {
   disconnectFromMongoDB,
 } from "../../src/infrastructure/database/mongodb.js";
 import { runWatcherPass, type WatcherPorts } from "../../src/invoice/invoice.watcher.js";
+import { unusedSwap } from "../helpers/fake-swap.js";
 import { parseFeeRate, payerPaysAskedAmount, splitPayout } from "../../src/money/payout-split.js";
 
 // One watcher pass, with the clock and the chains faked at the registry seam.
@@ -93,7 +94,7 @@ function fakeAdapter(asset: "btc" | "ton", chain: Chain, payout: FakePayout, cal
     asset,
     requiredConfirmations: 1,
     isValidAddress: (address) => address === MERCHANT_ADDRESS || address.startsWith("merchant-"),
-    canPayOutAs: (receive) => receive === asset || (asset === "btc" && receive === "usdceth"),
+    canPayOutAs: (receive) => receive === asset,
     newDeposit: async () => {
       throw new Error("not used by the watcher");
     },
@@ -115,19 +116,16 @@ const stillPending: FakePayout = async () => ({ status: "pending", reason: "fake
 /** Fake ports: `chain` says what each deposit address has received. */
 function fakePorts(chain: Chain, now = NOW, payout: FakePayout = stillPending) {
   const payoutCalls: PayoutRequest[] = [];
-  const swapsFollowed: string[] = [];
   const ports: WatcherPorts = {
     now: () => now,
     chains: {
       btc: fakeAdapter("btc", chain, payout, payoutCalls),
       ton: fakeAdapter("ton", chain, payout, payoutCalls),
     },
-    followSwap: async (invoiceId) => {
-      swapsFollowed.push(invoiceId);
-    },
+    swap: unusedSwap(),
   };
   const paidOut = () => payoutCalls.map((request) => request.depositAddress);
-  return { ports, payoutCalls, paidOut, swapsFollowed };
+  return { ports, payoutCalls, paidOut };
 }
 
 async function invoiceNow(invoiceId: string) {
@@ -618,40 +616,6 @@ describe("paying out", () => {
 
     assert.equal((await invoiceNow(onBtc.invoiceId))?.status, "waiting");
     assert.equal((await invoiceNow(onTon.invoiceId))?.status, "confirmed");
-  });
-
-  describe("a legacy swap (BTC deposit, USDC payout)", () => {
-    const SWAP_PLAN = {
-      transfers: [{ kind: "swap_deposit" as const, to: "near-deposit", amount: 92_000n, txid: "swap-tx" }],
-      platformFee: 5_000n,
-      networkCost: 3_000n,
-      legacySwap: { depositAddress: "near-deposit", deadline: "2026-11-18T12:00:00Z", quote: { quote: { minAmountOut: "1" } } },
-    };
-    const swapPayout: FakePayout = async (request) => {
-      if (!request.checkpoint) {
-        await request.saveCheckpoint({ state: "signed-swap-tx", plan: SWAP_PLAN });
-        return { status: "pending", reason: "broadcast" };
-      }
-      return { status: "paid", transfers: request.checkpoint.plan.transfers };
-    };
-
-    it("stays processing once the deposit reached NEAR, and only follows the swap after that", async () => {
-      const { invoiceId, address } = await confirmedInvoice({ to_crypto: "usdceth", to_address: "0x000000000000000000000000000000000000dEaD" });
-
-      await runWatcherPass(fakePorts(new Map(), NOW, swapPayout).ports);
-      const saved = await invoiceNow(invoiceId);
-      assert.equal(saved?.swap?.deposit_address, "near-deposit");
-      assert.equal(saved?.swap?.status, "PENDING_DEPOSIT");
-      assert.equal(saved?.received_amount, "0");
-
-      await runWatcherPass(fakePorts(new Map(), NOW, swapPayout).ports);
-      assert.equal((await invoiceNow(invoiceId))?.status, "processing");
-
-      const third = fakePorts(new Map(), NOW, swapPayout);
-      await runWatcherPass(third.ports);
-      assert.ok(!third.paidOut().includes(address), "asked the adapter again after its proof");
-      assert.ok(third.swapsFollowed.includes(invoiceId));
-    });
   });
 });
 

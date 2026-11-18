@@ -10,7 +10,9 @@ import type {
 } from "../chains/adapter.js";
 import { chainAdapters, depositAssets } from "../chains/registry.js";
 import { Invoice } from "../database/invoices.model.js";
-import { updateSwapStatus } from "../swap/near.js";
+import { LATE_PAYMENT_NOTE_PREFIX } from "../swap/near.js";
+import { swapProvider } from "../swap/registry.js";
+import type { SwapPort } from "../swap/swap-port.js";
 import { closedInvoicesToWatch, watchClosedInvoice, watchUntil } from "./closed-watch.js";
 import {
   depositKeyOf,
@@ -21,14 +23,24 @@ import {
   STUCK_PAYOUT_MS,
 } from "./deposit-payout.js";
 import { getPaymentStatus } from "./invoice.function.js";
+import { totalOf } from "./payment-ledger.js";
 import { acceptedPaymentAmount } from "./payment-rules.js";
+import {
+  hintSwapStart,
+  maxLossOf,
+  minAmountOutOf,
+  payIntoSwap,
+  refundToOf,
+  seenDelivery,
+  swapRecordFields,
+} from "./swap-payout.js";
 
 export type WatcherPorts = {
   now: () => number;
   /** The chain adapters, keyed by deposit asset. */
   chains: ChainRegistry;
-  /** Legacy NEAR swap: moves a processing swap invoice on from NEAR's status. */
-  followSwap: (invoiceId: string) => Promise<void>;
+  /** The swap provider: swap invoices, and refund routing's swap to the receive coin. */
+  swap: SwapPort;
 };
 
 /** One look at every open invoice, then at every closed one still watched. */
@@ -41,7 +53,7 @@ export async function runWatcherPass(
   const now = ports.now();
   await Invoice.updateMany(
     {
-      mode: "merchant_list",
+      mode: { $in: ["merchant_list", "swap"] },
       crypto: "",
       status: "waiting",
       $expr: {
@@ -90,7 +102,7 @@ export async function runWatcherPass(
     const adapter = isAssetId(invoice.crypto) ? ports.chains[invoice.crypto] : undefined;
     if (adapter === undefined) continue;
     try {
-      await watchClosedInvoice(invoice.invoice_id, adapter, ports.now());
+      await watchClosedInvoice(invoice.invoice_id, adapter, ports);
     } catch (error) {
       console.error("Closed-invoice watch failed on", invoice.invoice_id, error);
     }
@@ -216,7 +228,7 @@ async function checkPayments(invoiceId: string, adapter: ChainAdapter, ports: Wa
 
 /** What the invoice records when a checkpoint is saved; the old fields too, for the webhook and old readers. */
 function checkpointFields(next: PayoutCheckpoint, isSwap: boolean): Record<string, unknown> {
-  const { transfers, platformFee, networkCost, legacySwap } = next.plan;
+  const { transfers, platformFee, networkCost } = next.plan;
   return {
     "tx.raw": next.state,
     "tx.out": transfers.find((t) => DESTINATION_KINDS.has(t.kind))?.txid ?? "",
@@ -224,16 +236,8 @@ function checkpointFields(next: PayoutCheckpoint, isSwap: boolean): Record<strin
     transfers: storeTransfers(transfers, "pending"),
     platform_fee: platformFee.toString(),
     network_fee: networkCost.toString(),
-    // Swap: what the merchant gets is known only when NEAR finishes.
+    // Swap: what the merchant gets is known only once the delivery is seen.
     received_amount: isSwap ? "0" : destinationAmount(transfers).toString(),
-    ...(legacySwap
-      ? {
-          "swap.deposit_address": legacySwap.depositAddress,
-          "swap.deadline": legacySwap.deadline,
-          "swap.status": "PENDING_DEPOSIT",
-          "swap.quote_response": legacySwap.quote ?? null,
-        }
-      : {}),
   };
 }
 
@@ -247,9 +251,13 @@ async function findPayoutInvoice(invoiceId: string) {
     .exec();
 }
 
+/** Paid in one coin, received in another: the money goes through a swap. */
+function isSwapInvoice(invoice: { crypto?: string | null; to_crypto?: string | null }): boolean {
+  return Boolean(invoice.to_crypto) && invoice.to_crypto !== invoice.crypto;
+}
+
 function savedCheckpoint(invoice: PayoutInvoice): PayoutCheckpoint | undefined {
   if (invoice.status !== "processing" || !invoice.tx?.raw) return undefined;
-  const swap = invoice.swap;
   return {
     state: invoice.tx.raw,
     plan: {
@@ -261,27 +269,15 @@ function savedCheckpoint(invoice: PayoutInvoice): PayoutCheckpoint | undefined {
       })),
       platformFee: BigInt(invoice.platform_fee || "0"),
       networkCost: BigInt(invoice.network_fee || "0"),
-      ...(swap?.deposit_address
-        ? { legacySwap: { depositAddress: swap.deposit_address, deadline: swap.deadline ?? "" } }
-        : {}),
     },
   };
-}
-
-function isValidDestination(adapter: ChainAdapter, receiveAsset: string, destination: string): boolean {
-  if (receiveAsset === adapter.asset) return adapter.isValidAddress(destination);
-  return (
-    isAssetId(receiveAsset) &&
-    adapter.canPayOutAs(receiveAsset) &&
-    checkPayoutAddress(receiveAsset, destination) === "valid"
-  );
 }
 
 async function payOut(invoiceId: string, adapter: ChainAdapter, ports: WatcherPorts) {
   const invoice = await findPayoutInvoice(invoiceId);
   if (!invoice) return;
 
-  const isSwap = invoice.to_crypto !== invoice.crypto;
+  const isSwap = isSwapInvoice(invoice);
   const transfers = invoice.transfers ?? [];
   const proven =
     invoice.status === "processing" &&
@@ -289,52 +285,67 @@ async function payOut(invoiceId: string, adapter: ChainAdapter, ports: WatcherPo
     transfers.every((t) => t.status === "confirmed");
 
   if (!proven) {
-    const result = await requestPayout(invoice, adapter, ports, isSwap);
-    await recordPayoutResult(invoice, result.outcome, result.latestPlan, ports.now(), isSwap);
+    const checkpoint = savedCheckpoint(invoice);
+    if (isSwap && checkpoint === undefined) {
+      await startSwap(invoice, adapter, ports);
+    } else {
+      const result = await requestPayout(invoice, adapter, ports, checkpoint, isSwap);
+      await recordPayoutResult(invoice, result.outcome, result.latestPlan, ports, isSwap);
+    }
   }
 
-  if (isSwap) await ports.followSwap(invoiceId);
+  if (isSwap) await followSwap(invoiceId, ports);
 }
+
+/** Why a payout can't start, or what it needs: the deposit key and the fee rate. */
+async function payoutBasics(invoice: PayoutInvoice) {
+  const nothingSent = `Nothing was sent: all funds are still at deposit address ${invoice.address}.`;
+  const depositKey = depositKeyOf(invoice);
+  if (!depositKey) {
+    return `the deposit key is missing from the database. ${nothingSent} Restore the key from backup; without it the funds cannot be moved.`;
+  }
+  const feeRate = await feeRateOf(invoice);
+  if (typeof feeRate === "string") {
+    return `${feeRate}. ${nothingSent} Fix the rate, then set the invoice back to "confirmed" to retry.`;
+  }
+  return { depositKey, feeRate };
+}
+
+const stopped = (message: string): PayoutResult => ({ status: "failed", message: `Payout stopped: ${message}`, transfers: [] });
 
 async function requestPayout(
   invoice: PayoutInvoice,
   adapter: ChainAdapter,
   ports: WatcherPorts,
+  checkpoint: PayoutCheckpoint | undefined,
   isSwap: boolean,
 ): Promise<{ outcome: PayoutResult; latestPlan: Transfer[] }> {
-  const checkpoint = savedCheckpoint(invoice);
   let latestPlan = checkpoint?.plan.transfers ?? [];
   const nothingSent = `Nothing was sent: all funds are still at deposit address ${invoice.address}.`;
-  const stop = (message: string) => ({
-    outcome: { status: "failed" as const, message: `Payout stopped: ${message}`, transfers: [] },
-    latestPlan,
-  });
 
-  const destination = invoice.to_address;
+  // A swap invoice gets here only with a saved checkpoint: its destination is
+  // the swap's deposit address, fixed when the quote was saved.
+  const destination = isSwap ? invoice.swap?.deposit_address ?? "" : invoice.to_address;
   const receiveAsset = invoice.to_crypto;
-  if (!checkpoint && !isValidDestination(adapter, receiveAsset, destination)) {
-    return stop(`payout address "${destination}" is not a valid ${receiveAsset} address for a ${adapter.asset} deposit. ${nothingSent} Fix to_address, then set the invoice back to "confirmed" to retry.`);
+  if (!checkpoint && (receiveAsset !== adapter.asset || !adapter.isValidAddress(destination))) {
+    return {
+      outcome: stopped(`payout address "${destination}" is not a valid ${receiveAsset} address for a ${adapter.asset} deposit. ${nothingSent} Fix to_address, then set the invoice back to "confirmed" to retry.`),
+      latestPlan,
+    };
   }
 
-  const depositKey = depositKeyOf(invoice);
-  if (!depositKey) {
-    return stop(`the deposit key is missing from the database. ${nothingSent} Restore the key from backup; without it the funds cannot be moved.`);
-  }
-
-  const feeRate = await feeRateOf(invoice);
-  if (typeof feeRate === "string") {
-    return stop(`${feeRate}. ${nothingSent} Fix the rate, then set the invoice back to "confirmed" to retry.`);
-  }
+  const basics = await payoutBasics(invoice);
+  if (typeof basics === "string") return { outcome: stopped(basics), latestPlan };
 
   let claimed = checkpoint !== undefined;
   let currentState = checkpoint?.state;
   const request: PayoutRequest = {
     depositAddress: invoice.address,
-    depositKey,
+    depositKey: basics.depositKey,
     destination,
-    destinationKind: "merchant_payout",
-    receiveAsset: isAssetId(receiveAsset) ? receiveAsset : adapter.asset,
-    feeRate,
+    destinationKind: isSwap ? "swap_deposit" : "merchant_payout",
+    receiveAsset: adapter.asset,
+    feeRate: basics.feeRate,
     minimumAmount: acceptedPaymentAmount(invoice),
     checkpoint,
     saveCheckpoint: async (next) => {
@@ -363,14 +374,88 @@ async function requestPayout(
   return { outcome, latestPlan };
 }
 
+// Each quote opens a deposit address at the provider; a payout that keeps
+// waiting (fee API down, gas wallet empty) must not open one every pass.
+const QUOTE_EVERY_MS = 5 * 60_000;
+
+/** A swap invoice's first payout: quote, then pay exactly the quoted amount into the swap. */
+async function startSwap(invoice: PayoutInvoice, adapter: ChainAdapter, ports: WatcherPorts): Promise<void> {
+  const now = ports.now();
+  if (invoice.swap_quoted_at != null && now - invoice.swap_quoted_at < QUOTE_EVERY_MS) return;
+  const claimed = await Invoice.updateOne(
+    { invoice_id: invoice.invoice_id, status: "confirmed", swap_quoted_at: invoice.swap_quoted_at ?? null },
+    { $set: { swap_quoted_at: now } },
+  ).exec();
+  if (claimed.matchedCount !== 1) return;
+
+  const nothingSent = `Nothing was sent: all funds are still at deposit address ${invoice.address}.`;
+  const stop = async (message: string) => await recordPayoutResult(invoice, stopped(message), [], ports, true);
+
+  const receiveAsset = invoice.to_crypto;
+  if (!isAssetId(receiveAsset) || !ports.swap.supports(adapter.asset, receiveAsset)) {
+    return await stop(`${adapter.asset} can't be swapped into "${receiveAsset}" by ${ports.swap.provider}. ${nothingSent} Fix to_crypto, then set the invoice back to "confirmed" to retry.`);
+  }
+  const recipient = invoice.to_address;
+  if (checkPayoutAddress(receiveAsset, recipient) !== "valid") {
+    return await stop(`payout address "${recipient}" is not a valid ${receiveAsset} address. ${nothingSent} Fix to_address, then set the invoice back to "confirmed" to retry.`);
+  }
+  const basics = await payoutBasics(invoice);
+  if (typeof basics === "string") return await stop(basics);
+
+  let latestPlan: Transfer[] = [];
+  const answer = await payIntoSwap({
+    adapter,
+    swap: ports.swap,
+    to: receiveAsset,
+    recipient,
+    maxLossBps: await maxLossOf(invoice),
+    received: totalOf(invoice.payments ?? []),
+    request: {
+      depositAddress: invoice.address,
+      depositKey: basics.depositKey,
+      feeRate: basics.feeRate,
+      minimumAmount: acceptedPaymentAmount(invoice),
+    },
+    save: async (next, quote) => {
+      const result = await Invoice.updateOne(
+        { invoice_id: invoice.invoice_id, status: "confirmed" },
+        {
+          $set: {
+            ...checkpointFields(next, true),
+            ...swapRecordFields("swap.", quote, receiveAsset, recipient),
+            status: "processing",
+            "timestamps.processing": ports.now(),
+          },
+          $inc: { "swap.version": 1 },
+        },
+      ).exec();
+      if (result.matchedCount !== 1) {
+        console.warn("Another run saved this swap payout first:", invoice.invoice_id);
+        return false;
+      }
+      latestPlan = next.plan.transfers;
+      return true;
+    },
+  });
+
+  const outcome: PayoutResult =
+    answer.kind === "payout"
+      ? answer.result
+      : answer.kind === "too_small"
+        ? { status: "too_small", reason: answer.reason }
+        : { status: "pending", reason: answer.reason, ...(answer.review !== undefined && { review: answer.review }) };
+  await recordPayoutResult(invoice, outcome, latestPlan, ports, true);
+}
+
 async function recordPayoutResult(
   invoice: PayoutInvoice,
   result: PayoutResult,
   latestPlan: Transfer[],
-  now: number,
+  ports: WatcherPorts,
   isSwap: boolean,
 ) {
   const invoiceId = invoice.invoice_id;
+  const now = ports.now();
   const open = { invoice_id: invoiceId, status: PAYING_OUT };
 
   switch (result.status) {
@@ -406,19 +491,21 @@ async function recordPayoutResult(
         review_reason: result.note ?? "",
       };
       if (isSwap) {
-        // The coins reached NEAR; NEAR's status completes the invoice.
+        // The coins reached the swap; its delivery completes the invoice.
         changes.status = "processing";
       } else {
         changes.received_amount = destinationAmount(result.transfers).toString();
         changes.status = "completed";
         changes["timestamps.completed"] = now;
         changes.watch_until = watchUntil(now);
-        if (invoice.outcome === "too_small_to_forward") changes.outcome = "";
       }
+      if (invoice.outcome === "too_small_to_forward") changes.outcome = "";
       const updated = await Invoice.updateOne(open, { $set: changes }).exec();
       if (updated.matchedCount === 1) {
         console.log(isSwap ? "Payout reached the swap:" : "Payout completed:", invoiceId);
         if (result.note) console.warn("Payout note needs review:", invoiceId);
+        const deposit = result.transfers.find((t) => t.kind === "swap_deposit");
+        if (isSwap && deposit) await hintSwapStart(ports.swap, deposit.to, deposit.txid);
       }
       return;
     }
@@ -445,13 +532,127 @@ async function recordPayoutResult(
   }
 }
 
-async function followNearSwap(invoiceId: string): Promise<void> {
-  const current = await Invoice.findOne({ invoice_id: invoiceId, status: "processing" })
-    .select("tx.out swap.deposit_address -_id")
+// ---------- Following a swap ----------
+
+/** A review note that keeps an earlier late-payment note (see LATE_PAYMENT_NOTE_PREFIX). */
+function keepLateNote(current: string | null | undefined, text: string): string {
+  const at = (current ?? "").indexOf(LATE_PAYMENT_NOTE_PREFIX);
+  const late = at >= 0 ? current!.slice(at) : "";
+  return [text, late].filter(Boolean).join(" ");
+}
+
+/**
+ * Moves a swap invoice on from the provider's status, once the deposit
+ * reached the swap. Completed only when the provider reports success and the
+ * receive coin's chain shows the delivery at the merchant's address.
+ */
+async function followSwap(invoiceId: string, ports: WatcherPorts): Promise<void> {
+  const invoice = await Invoice.findOne({ invoice_id: invoiceId, status: "processing", "swap.deposit_address": { $gt: "" } })
+    .select("+swap.quote_response")
     .lean()
     .exec();
-  if (current?.tx?.out && current.swap?.deposit_address) {
-    await updateSwapStatus(invoiceId, current.tx.out, current.swap.deposit_address);
+  if (!invoice?.swap) return;
+  const transfers = invoice.transfers ?? [];
+  if (transfers.length === 0 || !transfers.every((t) => t.status === "confirmed")) return;
+
+  const swap = invoice.swap;
+  const depositAddress = swap.deposit_address;
+  const reply = await ports.swap.status(depositAddress);
+  if (reply === undefined) return;
+
+  const now = ports.now();
+  const filter = {
+    invoice_id: invoiceId,
+    status: "processing" as const,
+    "swap.deposit_address": depositAddress,
+    "swap.status": swap.status ?? "",
+  };
+  const bump = reply.status !== swap.status ? { $inc: { "swap.version": 1 } } : {};
+  const coin = invoice.crypto.toUpperCase();
+  const refundTo = refundToOf(swap.quote_response) ?? invoice.address;
+  const reason = reply.refundReason ?? "no reason given";
+  const note = (text: string) => keepLateNote(invoice.review_reason, text);
+  const processingAt = invoice.timestamps?.processing;
+  const stuck = processingAt != null && now - processingAt >= STUCK_PAYOUT_MS;
+  let set: Record<string, unknown>;
+
+  switch (reply.status) {
+    case "SUCCESS": {
+      const delivery = await seenDelivery({
+        chains: ports.chains,
+        receiveAsset: invoice.to_crypto,
+        recipient: invoice.to_address,
+        deliveryTxids: reply.deliveryTxids,
+      });
+      if (delivery.kind !== "seen") {
+        set = { "swap.status": reply.status, "swap.destination_txids": reply.deliveryTxids };
+        if (stuck) {
+          set.review_reason = note(`The swap provider reports the swap delivered (${reply.deliveryTxids.join(", ") || "no txid"}), but ${delivery.reason}. Check the merchant's address ${invoice.to_address} on a ${invoice.to_crypto} explorer; the invoice completes once the delivery is seen.`);
+        }
+        break;
+      }
+      const minimum = minAmountOutOf(swap);
+      const short =
+        minimum !== undefined && delivery.amount < minimum
+          ? `The merchant's address received ${delivery.amount} (smallest ${invoice.to_crypto} units), below the quote's minimum of ${minimum}. Ask the swap provider (deposit address ${depositAddress}).`
+          : "";
+      set = {
+        "swap.status": reply.status,
+        "swap.amount_delivered": delivery.amount.toString(),
+        "swap.destination_txids": delivery.txids,
+        "swap.amount_refunded": (reply.refundedAmount ?? 0n).toString(),
+        status: "completed",
+        received_amount: delivery.amount.toString(),
+        "timestamps.completed": now,
+        watch_until: watchUntil(now),
+        review_reason: note(short),
+      };
+      if (invoice.outcome === "too_small_to_forward") set.outcome = "";
+      break;
+    }
+
+    case "REFUNDED":
+      // The coins go back to refundTo. If that is the deposit, the 7-day
+      // watch sees them as new money and refund routing forwards them.
+      set = {
+        "swap.status": reply.status,
+        "swap.amount_refunded": (reply.refundedAmount ?? 0n).toString(),
+        "swap.refund_reason": reply.refundReason ?? "",
+        status: "failed",
+        "timestamps.failed": now,
+        watch_until: watchUntil(now),
+        review_reason: note(
+          refundTo === invoice.address
+            ? `Swap refunded: the provider sent ${reply.refundedAmount ?? "the"} ${coin} back to deposit address ${refundTo}. Refund routing forwards it (refund address, payout address, a swap to the receive coin, else held). Provider says: ${reason}`
+            : `Swap refunded: the provider sent the ${coin} back to ${refundTo}, not to the deposit address (a swap saved before ticket 15). Pay the merchant by hand from there. Provider says: ${reason}`,
+        ),
+      };
+      break;
+
+    case "FAILED":
+      set = {
+        "swap.status": reply.status,
+        status: "failed",
+        "timestamps.failed": now,
+        watch_until: watchUntil(now),
+        review_reason: note(`Swap failed: ask the swap provider about deposit address ${depositAddress}. Refunds go to ${refundTo}; money that comes back to the deposit within 7 days is routed. Provider says: ${reason}`),
+      };
+      break;
+
+    case "INCOMPLETE_DEPOSIT":
+      set = { "swap.status": reply.status, review_reason: note(`The swap provider received less than quoted at ${depositAddress}; it refunds by the deadline (${swap.deadline}). Investigate.`) };
+      break;
+
+    default:
+      set = { "swap.status": reply.status };
+      if (stuck) {
+        set.review_reason = note(`Swap not finished 24 hours after the payout was saved (provider status ${reply.status}, deposit address ${depositAddress}). Ask the swap provider before sending anything.`);
+      }
+  }
+
+  const result = await Invoice.updateOne(filter, { $set: set, ...bump }).exec();
+  if (result.modifiedCount > 0 && set.status !== undefined) {
+    console.log("Swap finished:", invoiceId, reply.status);
   }
 }
 
@@ -463,7 +664,7 @@ export function startInvoiceWatcher() {
   const ports: WatcherPorts = {
     now: Date.now,
     chains: chainAdapters,
-    followSwap: followNearSwap,
+    swap: swapProvider,
   };
 
   async function checkInvoices(): Promise<void> {

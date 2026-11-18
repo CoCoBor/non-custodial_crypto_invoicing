@@ -1,6 +1,8 @@
+import { checkPayoutAddress, isAssetId, type AssetId } from "../assets/payout-address.js";
 import type {
   ChainAdapter,
   ChainPayment,
+  ChainRegistry,
   PayoutCheckpoint,
   PayoutRequest,
   PayoutResult,
@@ -10,6 +12,7 @@ import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { splitPayout } from "../money/payout-split.js";
 import { LATE_PAYMENT_NOTE_PREFIX } from "../swap/near.js";
+import type { SwapPort } from "../swap/swap-port.js";
 import {
   depositKeyOf,
   destinationAmount,
@@ -27,6 +30,7 @@ import {
   type LedgerPayment,
   type Sweep,
 } from "./payment-ledger.js";
+import { hintSwapStart, maxLossOf, payIntoSwap, seenDelivery, swapRecord } from "./swap-payout.js";
 import { ROUTE_GRACE_MS } from "./watch-window.js";
 
 export { watchUntil } from "./watch-window.js";
@@ -37,11 +41,19 @@ export { watchUntil } from "./watch-window.js";
 // address, else their payout address, else it is held for a person. The rules
 // are in docs/domain.md ("Refund routing").
 
-const CLOSED = ["expired", "cancelled", "completed"] as const;
+// "failed" is watched only when it set watch_until: a refunded swap, whose
+// coins come back to the deposit. A failed payout leaves it null.
+const CLOSED = ["expired", "cancelled", "completed", "failed"] as const;
 
 // A closed deposit is looked at this often (a route in flight every pass):
 // each look is a chain lookup, and late money is not urgent.
 const LOOK_EVERY_MS = 5 * 60_000;
+
+// A route's states. processing: its payout is saved and not proven yet;
+// swapping: the deposit reached the swap provider, whose delivery is awaited.
+const IN_FLIGHT: readonly string[] = ["processing", "swapping"];
+// Every state in which the route's payout took the money from the deposit.
+const SWEPT: readonly string[] = ["paid", "swapping", "refunded"];
 
 /** Closed invoices whose deposit is due a look. */
 export async function closedInvoicesToWatch(now: number, assets: string[]) {
@@ -53,7 +65,7 @@ export async function closedInvoicesToWatch(now: number, assets: string[]) {
     $or: [
       { watch_checked_at: null },
       { watch_checked_at: { $lte: now - LOOK_EVERY_MS } },
-      { "refund_routes.state": "processing" },
+      { "refund_routes.state": { $in: ["processing", "swapping"] } },
     ],
   })
     .select("invoice_id crypto -_id")
@@ -61,19 +73,31 @@ export async function closedInvoicesToWatch(now: number, assets: string[]) {
     .exec();
 }
 
+type StoredSwap = {
+  deposit_address: string;
+  recipient: string;
+  receive_crypto: string;
+  status: string;
+  deadline?: string | null;
+};
+
 type StoredRoute = {
   n: number;
   destination: string;
-  source: "refund_address" | "payout_address";
-  state: "processing" | "paid" | "failed";
+  source: "refund_address" | "payout_address" | "swap_to_receive_coin";
+  state: "processing" | "swapping" | "paid" | "refunded" | "failed";
   raw?: string;
   swept?: string;
   platform_fee?: string;
   network_fee?: string;
   started_at: number;
+  swap?: StoredSwap | null;
 };
 
-type Destination = { destination: string; source: StoredRoute["source"] };
+type Destination =
+  | { destination: string; source: "refund_address" | "payout_address" }
+  /** The spec's last step before "held": swap it into the merchant's receive coin. */
+  | { source: "swap_to_receive_coin"; to: AssetId; recipient: string };
 
 type ClosedInvoice = {
   invoice_id: string;
@@ -81,6 +105,9 @@ type ClosedInvoice = {
   status: (typeof CLOSED)[number];
   outcome: string;
   address: string;
+  crypto: string;
+  to_crypto?: string | null;
+  swap_max_loss_bps?: number | null;
   fee_rate?: string | null;
   platform_fee?: string | null;
   network_fee?: string | null;
@@ -94,10 +121,13 @@ type ClosedInvoice = {
   depositKey: PayoutRequest["depositKey"] | undefined;
 };
 
+export type ClosedWatchPorts = { now: () => number; chains: ChainRegistry; swap: SwapPort };
+
 /** One pass's view of a closed invoice; `version` follows this run's own writes. */
 type Watch = {
   invoice: ClosedInvoice;
   adapter: ChainAdapter;
+  ports: ClosedWatchPorts;
   now: number;
   version: number;
   payments: LedgerPayment[];
@@ -124,13 +154,14 @@ async function loadClosed(invoiceId: string): Promise<ClosedInvoice | undefined>
 }
 
 /** One look at a closed invoice's deposit: record, account, route, or finish. */
-export async function watchClosedInvoice(invoiceId: string, adapter: ChainAdapter, now: number): Promise<void> {
+export async function watchClosedInvoice(invoiceId: string, adapter: ChainAdapter, ports: ClosedWatchPorts): Promise<void> {
   const invoice = await loadClosed(invoiceId);
   if (!invoice || invoice.watch_done) return;
 
-  const inFlight = invoice.refund_routes.find((r) => r.state === "processing");
+  const now = ports.now();
+  const inFlight = invoice.refund_routes.find((r) => IN_FLIGHT.includes(r.state));
   const graceOver = now >= invoice.watch_until + ROUTE_GRACE_MS;
-  const watch: Watch = { invoice, adapter, now, version: invoice.watch_version ?? 0, payments: invoice.payments };
+  const watch: Watch = { invoice, adapter, ports, now, version: invoice.watch_version ?? 0, payments: invoice.payments };
 
   if (!graceOver || inFlight) {
     const listed = await adapter.getPayments(invoice.address);
@@ -142,7 +173,7 @@ export async function watchClosedInvoice(invoiceId: string, adapter: ChainAdapte
   }
   watch.payments = assignPayments(watch.payments, sweepsOf(invoice));
 
-  if (inFlight) return await followRoute(watch, inFlight);
+  if (inFlight) return inFlight.state === "swapping" ? await followRouteSwap(watch, inFlight) : await followRoute(watch, inFlight);
 
   const ready = readyToRoute(watch.payments, adapter.requiredConfirmations);
   if (ready.length > 0 && !graceOver) return await startRoute(watch, ready);
@@ -205,10 +236,11 @@ function mergePayments(
 /** Every proven payout of this deposit and what it swept: destination, platform fee and network cost. */
 function sweepsOf(invoice: ClosedInvoice): Sweep[] {
   const sweeps: Sweep[] = [];
-  if (invoice.status === "completed") {
-    const sent = invoice.transfers.filter(
-      (t) => (t.payout ?? 0) === 0 && t.status === "confirmed" && DESTINATION_KINDS.has(t.kind),
-    );
+  const sent = invoice.transfers.filter(
+    (t) => (t.payout ?? 0) === 0 && t.status === "confirmed" && DESTINATION_KINDS.has(t.kind),
+  );
+  // A refunded swap's invoice is failed, but its payout swept the deposit too.
+  if (invoice.status === "completed" || sent.length > 0) {
     sweeps.push({
       payout: 0,
       swept:
@@ -218,7 +250,7 @@ function sweepsOf(invoice: ClosedInvoice): Sweep[] {
     });
   }
   for (const route of invoice.refund_routes) {
-    if (route.state === "paid") sweeps.push({ payout: route.n, swept: BigInt(route.swept || "0") });
+    if (SWEPT.includes(route.state)) sweeps.push({ payout: route.n, swept: BigInt(route.swept || "0") });
   }
   return sweeps;
 }
@@ -247,9 +279,18 @@ async function refundDestination(watch: Watch): Promise<Destination | undefined>
   if (usable(refund)) return { destination: refund!, source: "refund_address" };
   const payout = merchant?.payout_addresses?.[adapter.asset];
   if (usable(payout)) return { destination: payout!, source: "payout_address" };
-  // The spec's next step, a swap to the merchant's receive coin (ticket 15),
-  // goes here, before the money is held.
-  return undefined;
+
+  // Swap it into the receive coin, unless a swap to it already came back:
+  // the money of a refunded fallback swap is held, never swapped again.
+  const to = invoice.to_crypto ?? "";
+  const swapCameBack = invoice.refund_routes.some(
+    (r) => r.source === "swap_to_receive_coin" && (r.state === "refunded" || r.state === "failed"),
+  );
+  if (!isAssetId(to) || to === adapter.asset || swapCameBack) return undefined;
+  if (!watch.ports.swap.supports(adapter.asset, to) || watch.ports.chains[to] === undefined) return undefined;
+  const recipient = merchant?.payout_addresses?.[to];
+  if (!recipient || checkPayoutAddress(to, recipient) !== "valid") return undefined;
+  return { source: "swap_to_receive_coin", to, recipient };
 }
 
 function describeMoney(watch: Watch, payments: LedgerPayment[]): string {
@@ -270,7 +311,7 @@ async function startRoute(watch: Watch, ready: LedgerPayment[]): Promise<void> {
       outcome: "held_for_manual_handling",
       review_reason: withLateNote(
         invoice,
-        `Held for manual handling: ${money} is at deposit address ${invoice.address}, and the merchant has no valid ${adapter.asset} refund or payout address. If the merchant sets one before ${until}, the watcher forwards it; otherwise forward it by hand with the deposit key.`,
+        `Held for manual handling: ${money} is at deposit address ${invoice.address}, and the merchant has no valid ${adapter.asset} refund or payout address${invoice.to_crypto && invoice.to_crypto !== adapter.asset ? ` (and no swap to ${invoice.to_crypto} can be made${invoice.refund_routes.some((r) => r.source === "swap_to_receive_coin" && r.state === "refunded") ? ": a swap of this money was already refunded" : ""})` : ""}. If the merchant sets one before ${until}, the watcher forwards it; otherwise forward it by hand with the deposit key.`,
       ),
     });
   }
@@ -289,6 +330,10 @@ async function startRoute(watch: Watch, ready: LedgerPayment[]): Promise<void> {
     });
   }
 
+  if (destination.source === "swap_to_receive_coin") {
+    return await startSwapRoute(watch, ready, destination, depositKey, feeRate);
+  }
+
   // F1 with the expected network cost first; the chain's own dust or rent
   // limit is the adapter's too_small below.
   const estimate = await adapter.estimateNetworkCost();
@@ -296,10 +341,56 @@ async function startRoute(watch: Watch, ready: LedgerPayment[]): Promise<void> {
     return await save(watch, { outcome: "too_small_to_forward" });
   }
 
-  const n = Math.max(0, ...invoice.refund_routes.map((r) => r.n)) + 1;
+  const n = nextRouteNumber(invoice);
   const route = routeRequest(watch, { n, ...destination }, undefined, depositKey, feeRate);
   const result = await adapter.payout(route.request);
   await recordRouteResult(watch, route, result);
+}
+
+function nextRouteNumber(invoice: ClosedInvoice): number {
+  return Math.max(0, ...invoice.refund_routes.map((r) => r.n)) + 1;
+}
+
+/** Refund routing's last step: quote a swap into the receive coin and pay exactly that into it. */
+async function startSwapRoute(
+  watch: Watch,
+  ready: LedgerPayment[],
+  destination: Extract<Destination, { source: "swap_to_receive_coin" }>,
+  depositKey: PayoutRequest["depositKey"],
+  feeRate: bigint,
+): Promise<void> {
+  const { invoice, adapter } = watch;
+  const n = nextRouteNumber(invoice);
+  const saver = routeSaver(watch, { n }, undefined);
+  const answer = await payIntoSwap({
+    adapter,
+    swap: watch.ports.swap,
+    to: destination.to,
+    recipient: destination.recipient,
+    maxLossBps: await maxLossOf(invoice),
+    received: totalOf(ready),
+    request: { depositAddress: invoice.address, depositKey, feeRate, minimumAmount: 1n },
+    save: async (next, quote) =>
+      await saver.save(next, {
+        destination: quote.depositAddress,
+        source: "swap_to_receive_coin",
+        swap: { ...swapRecord(quote, destination.to, destination.recipient), version: 1, notified_version: 0 },
+      }),
+  });
+
+  if (answer.kind === "too_small") return await save(watch, { outcome: "too_small_to_forward" });
+  if (answer.kind === "wait") {
+    console.warn(`Refund route ${n} swap waiting (${answer.reason}):`, invoice.invoice_id);
+    return await save(watch, {
+      outcome: baseOutcome(watch),
+      ...(answer.review !== undefined ? { review_reason: withLateNote(invoice, answer.review) } : {}),
+    });
+  }
+  const run: RouteRun = {
+    route: { n, destination: answer.quote?.depositAddress ?? destination.recipient, source: "swap_to_receive_coin" },
+    ...saver,
+  };
+  await recordRouteResult(watch, run, answer.result);
 }
 
 async function followRoute(watch: Watch, stored: StoredRoute): Promise<void> {
@@ -326,112 +417,128 @@ async function followRoute(watch: Watch, stored: StoredRoute): Promise<void> {
   await recordRouteResult(watch, route, result);
 }
 
-type RouteRun = {
-  request: PayoutRequest;
-  route: Destination & { n: number; started_at?: number };
+type RouteFields = {
+  destination: string;
+  source: StoredRoute["source"];
+  /** The route's swap record, for a swap to the receive coin. */
+  swap?: Record<string, unknown>;
+};
+
+type RouteSaver = {
+  /** Saves the route's checkpoint; the first save pushes the route with `first`. */
+  save: (next: PayoutCheckpoint, first: RouteFields) => Promise<boolean>;
   /** True once a checkpoint of this route is in the database. */
   saved: () => boolean;
   latestPlan: () => Transfer[];
   swept: () => bigint;
 };
 
-function routeRequest(
+type RouteRun = Omit<RouteSaver, "save"> & {
+  route: { n: number; destination: string; source: StoredRoute["source"]; started_at?: number };
+};
+
+function routeSaver(
   watch: Watch,
-  route: Destination & { n: number; started_at?: number; swept?: string },
+  route: { n: number; swept?: string | undefined },
   checkpoint: PayoutCheckpoint | undefined,
-  depositKey: PayoutRequest["depositKey"],
-  feeRate: bigint,
-): RouteRun {
+): RouteSaver {
   const { invoice } = watch;
   let claimed = checkpoint !== undefined;
   let currentState = checkpoint?.state;
   let latestPlan = checkpoint?.plan.transfers ?? [];
   let swept = BigInt(route.swept || "0");
 
+  const save = async (next: PayoutCheckpoint, first: RouteFields): Promise<boolean> => {
+    const nextSwept = sweptBy(next.plan);
+    const planned = storeTransfers(next.plan.transfers, "pending", route.n);
+    const amounts = {
+      swept: nextSwept.toString(),
+      platform_fee: next.plan.platformFee.toString(),
+      network_fee: next.plan.networkCost.toString(),
+    };
+    const result = claimed
+      ? await Invoice.updateOne(
+          {
+            invoice_id: invoice.invoice_id,
+            ...versionIs(watch.version),
+            refund_routes: { $elemMatch: { n: route.n, state: "processing", raw: currentState } },
+          },
+          {
+            $set: {
+              "refund_routes.$.raw": next.state,
+              "refund_routes.$.swept": amounts.swept,
+              "refund_routes.$.platform_fee": amounts.platform_fee,
+              "refund_routes.$.network_fee": amounts.network_fee,
+              transfers: [...invoice.transfers.filter((t) => t.payout !== route.n), ...planned],
+            },
+            $inc: { watch_version: 1 },
+          },
+        ).exec()
+      : await Invoice.updateOne(
+          {
+            invoice_id: invoice.invoice_id,
+            status: invoice.status,
+            watch_done: { $ne: true },
+            ...versionIs(watch.version),
+            "refund_routes.n": { $ne: route.n },
+          },
+          {
+            $push: {
+              refund_routes: {
+                n: route.n,
+                destination: first.destination,
+                source: first.source,
+                state: "processing",
+                raw: next.state,
+                ...amounts,
+                started_at: watch.now,
+                settled_at: null,
+                notified: false,
+                ...(first.swap ? { swap: first.swap } : {}),
+              },
+              transfers: { $each: planned },
+            },
+            $set: { payments: watch.payments },
+            $inc: { watch_version: 1 },
+          },
+        ).exec();
+    if (result.matchedCount !== 1) {
+      console.warn("Another run saved this refund route first:", invoice.invoice_id, route.n);
+      return false;
+    }
+    watch.version += 1;
+    claimed = true;
+    currentState = next.state;
+    latestPlan = next.plan.transfers;
+    swept = nextSwept;
+    return true;
+  };
+
+  return { save, saved: () => claimed, latestPlan: () => latestPlan, swept: () => swept };
+}
+
+function routeRequest(
+  watch: Watch,
+  route: { n: number; destination: string; source: StoredRoute["source"]; started_at?: number; swept?: string },
+  checkpoint: PayoutCheckpoint | undefined,
+  depositKey: PayoutRequest["depositKey"],
+  feeRate: bigint,
+): RouteRun & { request: PayoutRequest } {
+  const saver = routeSaver(watch, route, checkpoint);
   const request: PayoutRequest = {
-    depositAddress: invoice.address,
+    depositAddress: watch.invoice.address,
     depositKey,
     destination: route.destination,
-    destinationKind: "refund_route",
+    destinationKind: route.source === "swap_to_receive_coin" ? "swap_deposit" : "refund_route",
     receiveAsset: watch.adapter.asset,
     feeRate,
     // Forward whatever the deposit holds: a fixed minimum could never be met
     // once a storage fee (TON) has taken part of it.
     minimumAmount: 1n,
     checkpoint,
-    saveCheckpoint: async (next) => {
-      const nextSwept = sweptBy(next.plan);
-      const planned = storeTransfers(next.plan.transfers, "pending", route.n);
-      const amounts = {
-        swept: nextSwept.toString(),
-        platform_fee: next.plan.platformFee.toString(),
-        network_fee: next.plan.networkCost.toString(),
-      };
-      const result = claimed
-        ? await Invoice.updateOne(
-            {
-              invoice_id: invoice.invoice_id,
-              ...versionIs(watch.version),
-              refund_routes: { $elemMatch: { n: route.n, state: "processing", raw: currentState } },
-            },
-            {
-              $set: {
-                "refund_routes.$.raw": next.state,
-                "refund_routes.$.swept": amounts.swept,
-                "refund_routes.$.platform_fee": amounts.platform_fee,
-                "refund_routes.$.network_fee": amounts.network_fee,
-                transfers: [...invoice.transfers.filter((t) => t.payout !== route.n), ...planned],
-              },
-              $inc: { watch_version: 1 },
-            },
-          ).exec()
-        : await Invoice.updateOne(
-            {
-              invoice_id: invoice.invoice_id,
-              status: invoice.status,
-              watch_done: { $ne: true },
-              ...versionIs(watch.version),
-              "refund_routes.n": { $ne: route.n },
-            },
-            {
-              $push: {
-                refund_routes: {
-                  n: route.n,
-                  destination: route.destination,
-                  source: route.source,
-                  state: "processing",
-                  raw: next.state,
-                  ...amounts,
-                  started_at: watch.now,
-                  settled_at: null,
-                  notified: false,
-                },
-                transfers: { $each: planned },
-              },
-              $set: { payments: watch.payments },
-              $inc: { watch_version: 1 },
-            },
-          ).exec();
-      if (result.matchedCount !== 1) {
-        console.warn("Another run saved this refund route first:", invoice.invoice_id, route.n);
-        return false;
-      }
-      watch.version += 1;
-      claimed = true;
-      currentState = next.state;
-      latestPlan = next.plan.transfers;
-      swept = nextSwept;
-      return true;
-    },
+    saveCheckpoint: async (next) => await saver.save(next, { destination: route.destination, source: route.source }),
   };
-
-  return {
-    request,
-    route,
-    saved: () => claimed,
-    latestPlan: () => latestPlan,
-    swept: () => swept,
-  };
+  return { request, route, saved: saver.saved, latestPlan: saver.latestPlan, swept: saver.swept };
 }
 
 async function recordRouteResult(watch: Watch, run: RouteRun, result: PayoutResult): Promise<void> {
@@ -471,6 +578,8 @@ async function recordRouteResult(watch: Watch, run: RouteRun, result: PayoutResu
         { payout: n, swept: run.swept() },
       ];
       watch.payments = assignPayments(watch.payments, sweeps);
+      // A swap route's deposit reached the provider: it is paid once delivered.
+      const isSwap = run.route.source === "swap_to_receive_coin";
       const updated = await Invoice.updateOne(
         {
           invoice_id: invoice.invoice_id,
@@ -479,8 +588,7 @@ async function recordRouteResult(watch: Watch, run: RouteRun, result: PayoutResu
         },
         {
           $set: {
-            "refund_routes.$.state": "paid",
-            "refund_routes.$.settled_at": now,
+            ...(isSwap ? { "refund_routes.$.state": "swapping" } : { "refund_routes.$.state": "paid", "refund_routes.$.settled_at": now }),
             transfers: [
               ...invoice.transfers.filter((t) => t.payout !== n),
               ...storeTransfers(result.transfers, "confirmed", n),
@@ -495,7 +603,9 @@ async function recordRouteResult(watch: Watch, run: RouteRun, result: PayoutResu
       ).exec();
       if (updated.matchedCount === 1) {
         watch.version += 1;
-        console.log("Refund route paid:", invoice.invoice_id, n);
+        console.log(isSwap ? "Refund route reached the swap:" : "Refund route paid:", invoice.invoice_id, n);
+        const deposit = result.transfers.find((t) => t.kind === "swap_deposit");
+        if (isSwap && deposit) await hintSwapStart(watch.ports.swap, deposit.to, deposit.txid);
       }
       return;
     }
@@ -554,6 +664,94 @@ async function recordRouteResult(watch: Watch, run: RouteRun, result: PayoutResu
       return;
     }
   }
+}
+
+/** A route whose deposit reached the swap: moves it on from the provider's status. */
+async function followRouteSwap(watch: Watch, stored: StoredRoute): Promise<void> {
+  const { invoice, now } = watch;
+  const swap = stored.swap;
+  if (!swap?.deposit_address) {
+    return await save(watch, {
+      review_reason: withLateNote(invoice, `Refund route ${stored.n} reached a swap but has no swap record (a bug or a manual DB edit). Check deposit address ${invoice.address} and the swap provider before sending anything.`),
+    });
+  }
+  const reply = await watch.ports.swap.status(swap.deposit_address);
+  if (reply === undefined) return await save(watch, {});
+
+  const p = "refund_routes.$.";
+  const stuck = now - stored.started_at >= STUCK_PAYOUT_MS;
+  let set: Record<string, unknown> = { [`${p}swap.status`]: reply.status };
+  let outcome = baseOutcome(watch);
+  let review: string | undefined;
+  let held = false;
+
+  switch (reply.status) {
+    case "SUCCESS": {
+      set[`${p}swap.destination_txids`] = reply.deliveryTxids;
+      const delivery = await seenDelivery({
+        chains: watch.ports.chains,
+        receiveAsset: swap.receive_crypto,
+        recipient: swap.recipient,
+        deliveryTxids: reply.deliveryTxids,
+      });
+      if (delivery.kind !== "seen") {
+        if (stuck) review = `Refund route ${stored.n}: the swap provider reports the swap delivered, but ${delivery.reason}. Check ${swap.recipient} on a ${swap.receive_crypto} explorer.`;
+        break;
+      }
+      set = {
+        ...set,
+        [`${p}state`]: "paid",
+        [`${p}settled_at`]: now,
+        [`${p}swap.amount_delivered`]: delivery.amount.toString(),
+        [`${p}swap.destination_txids`]: delivery.txids,
+        [`${p}swap.amount_refunded`]: (reply.refundedAmount ?? 0n).toString(),
+      };
+      break;
+    }
+    case "REFUNDED":
+      // The coins come back to the deposit as new money; refundDestination
+      // will not swap them again.
+      set = {
+        ...set,
+        [`${p}state`]: "refunded",
+        [`${p}settled_at`]: now,
+        [`${p}swap.amount_refunded`]: (reply.refundedAmount ?? 0n).toString(),
+        [`${p}swap.refund_reason`]: reply.refundReason ?? "",
+      };
+      break;
+    case "FAILED":
+      held = true;
+      outcome = "held_for_manual_handling";
+      set = { ...set, [`${p}state`]: "failed", [`${p}settled_at`]: now };
+      review = `Held for manual handling: refund route ${stored.n}'s swap failed. Ask the swap provider about deposit address ${swap.deposit_address}; refunds go to deposit address ${invoice.address}. Provider says: ${reply.refundReason ?? "no reason given"}`;
+      break;
+    default:
+      if (stuck) review = `Refund route ${stored.n}'s swap not finished 24 hours after it was saved (provider status ${reply.status}, deposit address ${swap.deposit_address}). Ask the swap provider before sending anything.`;
+  }
+
+  const updated = await Invoice.updateOne(
+    {
+      invoice_id: invoice.invoice_id,
+      ...versionIs(watch.version),
+      refund_routes: { $elemMatch: { n: stored.n, state: "swapping" } },
+    },
+    {
+      $set: {
+        ...set,
+        payments: watch.payments,
+        watch_checked_at: now,
+        ...changesWithOutcome(watch, outcome),
+        ...(review !== undefined ? { review_reason: withLateNote(invoice, review) } : {}),
+        ...(held ? { watch_done: true } : {}),
+      },
+      $inc: {
+        watch_version: 1,
+        ...outcomeBump(watch, outcome),
+        ...(reply.status !== swap.status ? { [`${p}swap.version`]: 1 } : {}),
+      },
+    },
+  ).exec();
+  if (updated.matchedCount === 1) watch.version += 1;
 }
 
 // ---------- Ending the watch ----------

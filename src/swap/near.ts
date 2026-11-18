@@ -1,405 +1,200 @@
 import { z } from "zod";
-import { env } from "../config/env.js";
-import { Invoice } from "../database/invoices.model.js";
-import { watchUntil } from "../invoice/watch-window.js";
+
+import type { AssetId } from "../assets/payout-address.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
+import type { QuoteAnswer, SwapPort, SwapRequest, SwapStatus } from "./swap-port.js";
+import { SWAP_STATUSES } from "./swap-port.js";
+
+// NEAR Intents through its 1Click API, behind the swap port (swap-port.ts).
+// Request and reply shapes: https://1click.chaindefuser.com/docs/v0/openapi.yaml.
+// Recorded replies are in tests/fixtures/near/.
 
 const API_URL = "https://1click.chaindefuser.com";
 
-const swapTokenSchema = z.object({
-  assetId: z.string().min(1),
-  symbol: z.string().min(1),
-  blockchain: z.string().min(1),
-  decimals: z.number().int().nonnegative(),
-  contractAddress: z.string().optional(),
-});
+// How long NEAR keeps the deposit address open. A deposit that lands after
+// the deadline is refunded to refundTo (the invoice's deposit address).
+const QUOTE_DEADLINE_MS = 24 * 60 * 60 * 1000;
 
-export type SwapToken = z.infer<typeof swapTokenSchema>;
+// A quote with less time left than this is refused: the deposit
+// transaction must still be mined and seen before the deadline.
+export const MIN_SWAP_TIME_LEFT_MS = 4 * 60 * 60 * 1000;
 
-const swapTokensSchema = z.array(swapTokenSchema);
-
-export async function getSwapTokens(): Promise<SwapToken[] | undefined> {
-  try {
-    const res = await fetch(`${API_URL}/v0/tokens`, {
-      headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!res.ok) {
-      console.error("Swap token request failed: ", res.status);
-      return undefined;
-    }
-
-    const parsed = swapTokensSchema.safeParse(await res.json());
-
-    if (!parsed.success) {
-      console.warn("Invalid swap token response:", parsed.error.message);
-      return undefined;
-    }
-
-    return parsed.data;
-  } catch (error) {
-    console.warn(
-      "Swap token request failed:",
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return undefined;
-  }
+/** NEAR's id for an asset (cryptos.json `near_asset_id`); undefined: NEAR does not list it. */
+export function nearAssetId(asset: AssetId): string | undefined {
+  const coin = cryptos[asset];
+  return "near_asset_id" in coin ? coin.near_asset_id : undefined;
 }
 
-const swapQuoteSchema = z.looseObject({
-  correlationId: z.string(),
-  timestamp: z.string(),
-  signature: z.string(),
-  quoteRequest: z.looseObject({}),
+const digits = z.string().regex(/^[0-9]+$/);
+
+const quoteReplySchema = z.looseObject({
   quote: z.looseObject({
-    amountIn: z.string().regex(/^[0-9]+$/),
-    amountInFormatted: z.string(),
-    amountOut: z.string().regex(/^[0-9]+$/),
-    amountOutFormatted: z.string(),
-    minAmountOut: z.string().regex(/^[0-9]+$/),
-    timeEstimate: z.number().nonnegative(),
+    amountIn: digits,
+    amountOut: digits,
+    minAmountOut: digits,
     depositAddress: z.string().min(1).optional(),
-    // Some chains need a memo with the deposit. We never send one, so a
-    // quote that has one is refused (see prepareSwap).
     depositMemo: z.string().optional(),
     deadline: z.string().min(1).optional(),
   }),
 });
 
-export type SwapQuote = z.infer<typeof swapQuoteSchema>["quote"];
-export type SwapQuoteResponse = z.infer<typeof swapQuoteSchema>;
+const errorReplySchema = z.looseObject({ message: z.string() });
 
-export async function getSwapQuote(input: {
-  originAsset: string;
-  destinationAsset: string;
-  amount: bigint;
-  recipient: string;
-  refundAddress: string;
-  dry?: boolean;
-}): Promise<SwapQuoteResponse | undefined> {
-  const { originAsset, destinationAsset, amount, recipient, refundAddress } =
-    input;
-  if (amount <= 0n) throw new RangeError("Swap amount must be positive");
+const txListSchema = z.array(z.looseObject({ hash: z.string().min(1) }));
 
-  const dry = input.dry ?? true;
-  try {
-    const res = await fetch(`${API_URL}/v0/quote`, {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${env.nearIntentsJwt}`,
-      },
-      body: JSON.stringify({
-        dry,
-        depositMode: "SIMPLE",
-        swapType: "EXACT_INPUT",
-        slippageTolerance: 50,
-        originAsset: originAsset,
-        destinationAsset: destinationAsset,
-        amount: amount.toString(),
-        depositType: "ORIGIN_CHAIN",
-        recipient: recipient,
-        recipientType: "DESTINATION_CHAIN",
-        refundTo: refundAddress,
-        refundType: "ORIGIN_CHAIN",
-        deadline: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-
-    if (!res.ok) {
-      console.warn("Swap quote request failed:", res.status, await res.text());
-      return undefined;
-    }
-
-    const parsed = swapQuoteSchema.safeParse(await res.json());
-
-    if (!parsed.success) {
-      console.warn("Invalid swap quote response", parsed.error.message);
-      return undefined;
-    }
-
-    const result = parsed.data;
-
-    if (!dry && (!result.quote.depositAddress || !result.quote.deadline)) {
-      console.warn("Swap quote is missing its deposit address or deadline");
-      return undefined;
-    }
-
-    return result;
-  } catch (error) {
-    console.warn(
-      "Swap quote request failed:",
-      error instanceof Error ? error.message : "unknown error",
-    );
-
-    return undefined;
-  }
-}
-
-const swapStatusSchema = z.object({
-  status: z.enum([
-    "PENDING_DEPOSIT",
-    "KNOWN_DEPOSIT_TX",
-    "INCOMPLETE_DEPOSIT",
-    "PROCESSING",
-    "SUCCESS",
-    "REFUNDED",
-    "FAILED",
-  ]),
-  swapDetails: z.object({
-    amountIn: z
-      .string()
-      .regex(/^[0-9]+$/)
-      .optional()
-      .nullish(),
-    amountOut: z
-      .string()
-      .regex(/^[0-9]+$/)
-      .optional()
-      .nullish(),
-    refundedAmount: z
-      .string()
-      .regex(/^[0-9]+$/)
-      .optional()
-      .nullish(),
-    refundReason: z.string().optional().nullish(),
-
-    originChainTxHashes: z.array(z.object({ hash: z.string().min(1) })),
-    destinationChainTxHashes: z.array(z.object({ hash: z.string().min(1) })),
+const statusReplySchema = z.looseObject({
+  status: z.enum(SWAP_STATUSES),
+  swapDetails: z.looseObject({
+    amountIn: digits.nullish(),
+    amountOut: digits.nullish(),
+    refundedAmount: digits.nullish(),
+    refundReason: z.string().nullish(),
+    originChainTxHashes: txListSchema,
+    destinationChainTxHashes: txListSchema,
   }),
 });
 
-export type SwapStatusResponse = z.infer<typeof swapStatusSchema>;
+const TOO_LOW = /amount is too low.*?try at least (\d+)/i;
 
-export async function getSwapStatus(
-  depositAddress: string,
-): Promise<SwapStatusResponse | undefined> {
-  try {
-    const url = new URL(`${API_URL}/v0/status`);
-    url.searchParams.set("depositAddress", depositAddress);
-
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-        Authorization: `Bearer ${env.nearIntentsJwt}`,
-      },
-      signal: AbortSignal.timeout(10_000),
-    });
-
-    if (!res.ok) {
-      console.warn("Swap status request failed:", res.status, await res.text());
-      return undefined;
-    }
-
-    const parsed = swapStatusSchema.safeParse(await res.json());
-
-    if (!parsed.success) {
-      console.warn("Invalid swap status response", parsed.error.message);
-      return undefined;
-    }
-
-    return parsed.data;
-  } catch (error) {
-    console.warn(
-      "Swap status request failed:",
-      error instanceof Error ? error.message : "unknown error",
-    );
-    return undefined;
-  }
-}
-
-// NEAR's symbol, where it differs from ours. Checked 2026-11-10: NEAR lists
-// native Toncoin as "GRAM" (blockchain "ton", 9 decimals, no contract).
-// "ton" stays accepted in case NEAR renames it back.
-const NEAR_SYMBOLS: Partial<Record<keyof typeof cryptos, string[]>> = {
-  ton: ["ton", "gram"],
-};
-
-export function findSwapToken(
-  cryptoId: keyof typeof cryptos,
-  tokens: SwapToken[],
-): SwapToken | undefined {
-  const crypto = cryptos[cryptoId];
-
-  if (!crypto) return undefined;
-
-  const chain = crypto.chain.symbol;
-  const symbols = NEAR_SYMBOLS[cryptoId] ?? [crypto.symbol.toLowerCase()];
-
-  const contractAddress =
-    "contract_address" in crypto
-      ? crypto.contract_address
-      : "mint_address" in crypto
-        ? crypto.mint_address
-        : undefined;
-
-  const matches = tokens.filter((token) => {
-    if (
-      token.blockchain !== chain ||
-      !symbols.includes(token.symbol.toLowerCase()) ||
-      token.decimals !== crypto.decimal
-    )
-      return false;
-
-    if (!contractAddress) return true;
-    if (!token.contractAddress) return false;
-
-    if (chain === "eth" || chain === "bsc")
-      return (token.contractAddress.toLowerCase() === contractAddress.toLowerCase());
-
-    return token.contractAddress === contractAddress;
+export function createNearIntentsSwap(deps: {
+  fetch: typeof globalThis.fetch;
+  /** The 1Click JWT. Empty: requests go without one. */
+  jwt: string;
+  now: () => number;
+}): SwapPort {
+  const headers = (json: boolean): Record<string, string> => ({
+    Accept: "application/json",
+    ...(json ? { "Content-Type": "application/json" } : {}),
+    ...(deps.jwt ? { Authorization: `Bearer ${deps.jwt}` } : {}),
   });
 
-  if(matches.length!==1){
-    console.warn("Expected one matching swap token:", cryptoId, matches.length)
-    return undefined
-  }
-
-  return matches[0]
-}
-
-// ---------- Swap flow, shared by every chain ----------
-//
-// NEAR does the cross-chain work. From a chain's side, a swap is a normal
-// payout whose receiver is NEAR's deposit address instead of the merchant.
-// So each chain only answers two questions (SwapOrigin below), and the
-// quote checks, deadline rules and status tracking live here once.
-
-// Leave at least this long before the NEAR deadline when sending. A deposit
-// that arrives after the deadline is refunded, not swapped.
-export const MIN_SWAP_TIME_LEFT_MS = 4 * 60 * 60 * 1000;
-
-export type CryptoId = keyof typeof cryptos;
-
-export function isCryptoId(value: string): value is CryptoId {
-  return Object.hasOwn(cryptos, value);
-}
-
-export function hasSwapTimeLeft(deadline: string | null | undefined): boolean {
-  const expiresAt = Date.parse(deadline ?? ""); // NaN if missing or invalid
-  return (
-    Number.isFinite(expiresAt) && expiresAt - Date.now() >= MIN_SWAP_TIME_LEFT_MS
-  );
-}
-
-export type SwapOrigin = {
-  // The coin we send: "btc", "ltc", "sol", "usdtsol", ...
-  crypto: CryptoId;
-  isValidAddress(address: string): boolean;
-  // How much reaches `address` after the network fee and platform fee, or
-  // undefined if it can't be paid right now. Must use the same fees the
-  // chain then signs with.
-  amountArrivingAt(address: string): Promise<bigint | undefined>;
-  // NEAR returns the coin here if the swap fails.
-  refundAddress: string;
-  // Ours. A deposit address equal to it (or to the refund address) is refused.
-  platformAddress: string;
-};
-
-export type PreparedSwap = {
-  depositAddress: string;
-  deadline: string;
-  amount: bigint;
-  quote: SwapQuoteResponse;
-};
-
-async function findSwapAssets(origin: CryptoId, destination: CryptoId) {
-  const tokens = await getSwapTokens();
-  if (tokens === undefined) return undefined;
-
-  const originAsset = findSwapToken(origin, tokens);
-  const destinationAsset = findSwapToken(destination, tokens);
-  if (originAsset === undefined || destinationAsset === undefined) {
-    console.warn("No NEAR swap token for:", origin, "->", destination);
-    return undefined;
+  async function call(path: string, init: { method: "GET" | "POST"; body?: unknown; timeoutMs: number }) {
+    try {
+      const response = await deps.fetch(`${API_URL}${path}`, {
+        method: init.method,
+        headers: headers(init.body !== undefined),
+        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+        signal: AbortSignal.timeout(init.timeoutMs),
+      });
+      const text = await response.text();
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = undefined;
+      }
+      return { status: response.status, ok: response.ok, json };
+    } catch (error) {
+      console.warn("NEAR 1Click request failed:", path, error instanceof Error ? error.message : "unknown error");
+      return undefined;
+    }
   }
 
   return {
-    originAsset: originAsset.assetId,
-    destinationAsset: destinationAsset.assetId,
-  };
-}
+    provider: "near_intents",
 
-// Gets a real quote whose input amount is exactly what the chain will send
-// to the quote's deposit address. EXACT_INPUT: if less arrives, NEAR refunds
-// all of it. undefined = not ready (NEAR down, quote unusable); retry later.
-export async function prepareSwap(
-  origin: SwapOrigin,
-  toCrypto: CryptoId,
-  recipient: string,
-): Promise<PreparedSwap | undefined> {
-  if (toCrypto === origin.crypto) return undefined;
+    supports: (from, to) => from !== to && nearAssetId(from) !== undefined && nearAssetId(to) !== undefined,
 
-  const assets = await findSwapAssets(origin.crypto, toCrypto);
-  if (assets === undefined) return undefined;
+    async quote(request: SwapRequest): Promise<QuoteAnswer> {
+      const originAsset = nearAssetId(request.from);
+      const destinationAsset = nearAssetId(request.to);
+      if (originAsset === undefined || destinationAsset === undefined) {
+        return { kind: "unavailable", reason: `NEAR does not list ${request.from} or ${request.to}` };
+      }
+      if (request.amountIn <= 0n) return { kind: "too_small", reason: "nothing to swap" };
 
-  // The fee can depend on the receiving address (output size on BTC/LTC,
-  // a brand-new account on Solana). Size with a stand-in address first,
-  // then check again with the real deposit address.
-  let amount = await origin.amountArrivingAt(origin.platformAddress);
-  if (amount === undefined) return undefined;
+      const now = deps.now();
+      const reply = await call("/v0/quote", {
+        method: "POST",
+        timeoutMs: 15_000,
+        body: {
+          dry: false,
+          depositMode: "SIMPLE",
+          swapType: "EXACT_INPUT",
+          slippageTolerance: request.maxLossBps,
+          originAsset,
+          depositType: "ORIGIN_CHAIN",
+          destinationAsset,
+          amount: request.amountIn.toString(),
+          refundTo: request.refundTo,
+          refundType: "ORIGIN_CHAIN",
+          recipient: request.recipient,
+          recipientType: "DESTINATION_CHAIN",
+          deadline: new Date(now + QUOTE_DEADLINE_MS).toISOString(),
+        },
+      });
+      if (reply === undefined) return { kind: "unavailable", reason: "NEAR could not be reached" };
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const response = await getSwapQuote({
-      originAsset: assets.originAsset,
-      destinationAsset: assets.destinationAsset,
-      amount,
-      recipient,
-      refundAddress: origin.refundAddress,
-      dry: false,
-    });
-    if (response === undefined) return undefined;
+      if (!reply.ok) {
+        const message = errorReplySchema.safeParse(reply.json);
+        const text = message.success ? message.data.message : "no message";
+        const tooLow = TOO_LOW.exec(text);
+        if (reply.status === 400 && tooLow) return { kind: "too_small", minimumIn: BigInt(tooLow[1]!), reason: text };
+        return { kind: "unavailable", reason: `NEAR refused the quote (${reply.status}): ${text}` };
+      }
 
-    const { depositAddress, depositMemo, deadline, amountIn } = response.quote;
+      const parsed = quoteReplySchema.safeParse(reply.json);
+      if (!parsed.success) return { kind: "unavailable", reason: "NEAR's quote reply is unreadable" };
+      const { depositAddress, depositMemo, deadline, amountIn, amountOut, minAmountOut } = parsed.data.quote;
 
-    if (depositAddress === undefined || !origin.isValidAddress(depositAddress)) {
-      console.warn("Swap quote deposit address is invalid:", origin.crypto);
-      return undefined;
-    }
-    if (
-      depositAddress === origin.platformAddress ||
-      depositAddress === origin.refundAddress
-    ) {
-      console.warn("Swap quote deposit address is one of ours:", origin.crypto);
-      return undefined;
-    }
-    if (depositMemo) {
-      console.warn("Swap quote needs a deposit memo; we never send one:", origin.crypto);
-      return undefined;
-    }
-    if (deadline === undefined || !hasSwapTimeLeft(deadline)) {
-      console.warn("Swap quote deadline is invalid or too close:", origin.crypto, deadline);
-      return undefined;
-    }
-    if (BigInt(amountIn) !== amount) {
-      console.warn("Swap quote amountIn differs from what we asked:", origin.crypto);
-      return undefined;
-    }
+      if (depositAddress === undefined) return { kind: "unavailable", reason: "NEAR's quote has no deposit address" };
+      // Our payouts send to an address only; a deposit that needs a memo would be lost.
+      if (depositMemo) return { kind: "unavailable", reason: "NEAR's quote needs a deposit memo" };
+      const deadlineAt = Date.parse(deadline ?? "");
+      if (!Number.isFinite(deadlineAt) || deadlineAt - now < MIN_SWAP_TIME_LEFT_MS) {
+        return { kind: "unavailable", reason: `NEAR's quote deadline (${deadline ?? "missing"}) is missing or too close` };
+      }
+      // EXACT_INPUT: a smaller deposit is refunded whole, so the quote must be for exactly what we send.
+      if (BigInt(amountIn) !== request.amountIn) {
+        return { kind: "unavailable", reason: `NEAR quoted amountIn ${amountIn}, not the ${request.amountIn} asked` };
+      }
 
-    const real = await origin.amountArrivingAt(depositAddress);
-    if (real === undefined) return undefined;
-    if (real === amount) {
-      return { depositAddress, deadline, amount, quote: response };
-    }
+      return {
+        kind: "ok",
+        quote: {
+          provider: "near_intents",
+          depositAddress,
+          amountIn: BigInt(amountIn),
+          amountOut: BigInt(amountOut),
+          minAmountOut: BigInt(minAmountOut),
+          deadline: deadlineAt,
+          record: reply.json,
+        },
+      };
+    },
 
-    console.warn("Swap amount changed for the real deposit address; re-quoting:", origin.crypto);
-    amount = real;
-  }
+    async start(deposit) {
+      const reply = await call("/v0/deposit/submit", {
+        method: "POST",
+        timeoutMs: 10_000,
+        body: { txHash: deposit.txid, depositAddress: deposit.depositAddress },
+      });
+      return reply?.ok === true;
+    },
 
-  console.warn("Could not match the payout to a swap quote:", origin.crypto);
-  return undefined;
-}
-
-// The swap fields to save together with the signed tx (before sending it).
-export function swapFieldsToSave(swap: PreparedSwap) {
-  return {
-    "swap.deposit_address": swap.depositAddress,
-    "swap.deadline": swap.deadline,
-    "swap.status": "PENDING_DEPOSIT",
-    "swap.quote_response": swap.quote,
+    async status(depositAddress): Promise<SwapStatus | undefined> {
+      const reply = await call(`/v0/status?${new URLSearchParams({ depositAddress })}`, { method: "GET", timeoutMs: 10_000 });
+      if (!reply?.ok) {
+        if (reply) console.warn("NEAR swap status request failed:", reply.status, depositAddress);
+        return undefined;
+      }
+      const parsed = statusReplySchema.safeParse(reply.json);
+      if (!parsed.success) {
+        console.warn("NEAR swap status reply is unreadable:", depositAddress);
+        return undefined;
+      }
+      const details = parsed.data.swapDetails;
+      const amount = (text: string | null | undefined) => (text == null ? undefined : BigInt(text));
+      return {
+        status: parsed.data.status,
+        ...(details.amountIn != null && { amountIn: amount(details.amountIn) }),
+        ...(details.amountOut != null && { amountOut: amount(details.amountOut) }),
+        ...(details.refundedAmount != null && { refundedAmount: amount(details.refundedAmount) }),
+        ...(details.refundReason != null && { refundReason: details.refundReason }),
+        originTxids: details.originChainTxHashes.map((tx) => tx.hash),
+        deliveryTxids: details.destinationChainTxHashes.map((tx) => tx.hash),
+      };
+    },
   };
 }
 
@@ -407,124 +202,3 @@ export function swapFieldsToSave(swap: PreparedSwap) {
 // when money arrived after the payout was signed and went to the platform
 // (see transactions/ton.ts). It always sits at the end of review_reason.
 export const LATE_PAYMENT_NOTE_PREFIX = "Late payment:";
-
-// For the watcher: call for a processing invoice that has a swap.
-// SUCCESS completes the invoice; REFUNDED / FAILED mark it failed with a note.
-// The same for every chain.
-export async function updateSwapStatus(
-  invoiceId: string,
-  txId: string,
-  depositAddress: string,
-) {
-  const filter = {
-    invoice_id: invoiceId,
-    status: "processing" as const,
-    "tx.out": txId,
-    "swap.deposit_address": depositAddress,
-  };
-
-  const invoice = await Invoice.findOne(filter)
-    .select("crypto address review_reason +swap.quote_response")
-    .exec();
-  if (!invoice) return;
-
-  const swapStatus = await getSwapStatus(depositAddress);
-  if (swapStatus === undefined) return;
-
-  const coin = invoice.crypto.toUpperCase();
-  const reason = swapStatus.swapDetails.refundReason ?? "no reason given";
-  // Where NEAR sends refunds: the refundTo we quoted with (NEAR echoes the
-  // request in the quote). The deposit address for most coins, the platform
-  // address for TON.
-  const savedRequest = z
-    .object({ quoteRequest: z.object({ refundTo: z.string().min(1) }) })
-    .safeParse(invoice.swap?.quote_response);
-  const refundPlace = savedRequest.success
-    ? savedRequest.data.quoteRequest.refundTo
-    : `the refundTo in the saved quote (unreadable; the deposit address is ${invoice.address})`;
-  // Keep a late-payment note (if any) on every note written below.
-  const current = invoice.review_reason ?? "";
-  const lateAt = current.indexOf(LATE_PAYMENT_NOTE_PREFIX);
-  const lateNote = lateAt >= 0 ? current.slice(lateAt) : "";
-  const note = (text: string) => [text, lateNote].filter(Boolean).join(" ");
-  let changes: Record<string, unknown>;
-
-  switch (swapStatus.status) {
-    case "PENDING_DEPOSIT":
-    case "KNOWN_DEPOSIT_TX":
-    case "PROCESSING":
-      changes = { "swap.status": swapStatus.status };
-      break;
-
-    case "SUCCESS": {
-      const savedQuote = z
-        .object({
-          quote: z.object({ minAmountOut: z.string().regex(/^[0-9]+$/) }),
-        })
-        .safeParse(invoice.swap?.quote_response);
-      const { amountOut, destinationChainTxHashes } = swapStatus.swapDetails;
-
-      let problem: string | undefined;
-      if (!savedQuote.success) {
-        problem = "NEAR reported SUCCESS, but the saved quote is unreadable; check minAmountOut manually";
-      } else if (amountOut == null) {
-        problem = "NEAR reported SUCCESS without amountOut";
-      } else if (destinationChainTxHashes.length < 1) {
-        problem = "NEAR reported SUCCESS without a destination tx";
-      } else if (BigInt(amountOut) < BigInt(savedQuote.data.quote.minAmountOut)) {
-        problem = "NEAR reported SUCCESS, but amountOut is below the quote's minAmountOut";
-      }
-
-      if (problem !== undefined || amountOut == null) {
-        changes = { "swap.status": swapStatus.status, review_reason: note(problem ?? "") };
-        break;
-      }
-
-      const completedAt = Date.now();
-      changes = {
-        "swap.status": swapStatus.status,
-        status: "completed",
-        received_amount: amountOut,
-        "swap.destination_txids": destinationChainTxHashes.map((tx) => tx.hash),
-        "timestamps.completed": completedAt,
-        watch_until: watchUntil(completedAt),
-        review_reason: note(""),
-      };
-      break;
-    }
-
-    case "REFUNDED":
-      changes = {
-        "swap.status": swapStatus.status,
-        status: "failed",
-        "swap.refunded_amount": swapStatus.swapDetails.refundedAmount ?? "0",
-        review_reason: note(`Swap refunded: NEAR sent the ${coin} back to ${refundPlace}. Pay the merchant manually. NEAR says: ${reason}`),
-        "timestamps.failed": Date.now(),
-      };
-      break;
-
-    case "FAILED":
-      changes = {
-        "swap.status": swapStatus.status,
-        status: "failed",
-        review_reason: note(`Swap failed; check NEAR and the funds (refunds go to ${refundPlace}). NEAR says: ${reason}`),
-        "timestamps.failed": Date.now(),
-      };
-      break;
-
-    case "INCOMPLETE_DEPOSIT":
-      changes = {
-        "swap.status": swapStatus.status,
-        review_reason: note("NEAR received less than quoted; investigate"),
-      };
-      break;
-
-    default:
-      return;
-  }
-
-  const result = await Invoice.updateOne(filter, { $set: changes }).exec();
-  if (result.modifiedCount > 0 && changes.status !== undefined) {
-    console.log("Swap finished:", invoiceId, swapStatus.status);
-  }
-}

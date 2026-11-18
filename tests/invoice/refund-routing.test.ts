@@ -15,6 +15,7 @@ import {
   disconnectFromMongoDB,
 } from "../../src/infrastructure/database/mongodb.js";
 import { runWatcherPass, type WatcherPorts } from "../../src/invoice/invoice.watcher.js";
+import { unusedSwap } from "../helpers/fake-swap.js";
 import { parseFeeRate, splitPayout } from "../../src/money/payout-split.js";
 import { openSecret, sealSecret } from "../../src/security/secret-envelope.js";
 
@@ -244,7 +245,7 @@ function fakeChain(options: FakeChainOptions = {}) {
     broadcasts,
     lookups,
     ports(now: number): WatcherPorts {
-      return { now: () => now, chains: { btc: adapter }, followSwap: async () => {} };
+      return { now: () => now, chains: { btc: adapter }, swap: unusedSwap() };
     },
     callsFor: (address: string) => payoutCalls.filter((r) => r.depositAddress === address),
     broadcastsFor: (address: string) => broadcasts.filter((b) => b.depositAddress === address),

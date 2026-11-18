@@ -55,6 +55,29 @@ const transferSchema = new Schema(
   { _id: false },
 );
 
+// A swap through a provider (src/swap/swap-port.ts): the deposit's coin is
+// sent to the provider's deposit address, and the provider delivers the
+// receive coin to the merchant. Amounts are integer strings in smallest units:
+// amount_in and amount_refunded in the deposit coin, the others in the receive
+// coin. See "Swap mode" in docs/domain.md.
+const swapFields = {
+  provider: { type: String, default: "" }, // "near_intents"
+  deposit_address: { type: String, default: "" },
+  recipient: { type: String, default: "" },
+  receive_crypto: { type: String, default: "" },
+  status: { type: String, default: "" }, // the provider's: PENDING_DEPOSIT, KNOWN_DEPOSIT_TX, INCOMPLETE_DEPOSIT, PROCESSING, SUCCESS, REFUNDED, FAILED
+  deadline: { type: String, default: "" }, // ISO time; a deposit landing later is refunded
+  amount_in: { type: String, default: "0" },
+  min_amount_out: { type: String, default: "" },
+  amount_delivered: { type: String, default: "0" }, // what the merchant's address was seen to receive
+  amount_refunded: { type: String, default: "0" },
+  refund_reason: { type: String, default: "" },
+  destination_txids: { type: [String], default: [] }, // the provider's delivery transactions
+  version: { type: Number, default: 0 }, // counts status changes; each is one webhook
+  notified_version: { type: Number, default: 0 },
+  quote_response: { type: Schema.Types.Mixed, default: null, select: false }, // the provider's signed quote, for disputes
+};
+
 // One payout of money that reached the deposit outside the merchant payout:
 // partial money at expiry, or money after a cancel, expiry or completion (see
 // "Refund routing" in docs/domain.md). Routes are numbered from 1, run one at
@@ -63,8 +86,10 @@ const refundRouteSchema = new Schema(
   {
     n: { type: Number, required: true },
     destination: { type: String, required: true },
-    source: { type: String, enum: ["refund_address", "payout_address"], required: true },
-    state: { type: String, enum: ["processing", "paid", "failed"], required: true },
+    source: { type: String, enum: ["refund_address", "payout_address", "swap_to_receive_coin"], required: true },
+    // swapping: the deposit reached the swap provider; paid: delivered (a swap
+    // route) or proven on chain; refunded: the provider sent it back.
+    state: { type: String, enum: ["processing", "swapping", "paid", "refunded", "failed"], required: true },
     raw: { type: String, default: "", select: false }, // the adapter's saved checkpoint (PayoutCheckpoint.state)
     swept: { type: String, default: "0" }, // what left the deposit: destination + platform fee + network cost
     platform_fee: { type: String, default: "0" },
@@ -72,6 +97,7 @@ const refundRouteSchema = new Schema(
     started_at: { type: Number, required: true },
     settled_at: { type: Number, default: null },
     notified: { type: Boolean, default: false }, // announced by webhook; see src/webhooks/webhook-pass.ts
+    swap: { type: new Schema(swapFields, { _id: false }), default: null }, // source swap_to_receive_coin only
   },
   { _id: false },
 );
@@ -96,7 +122,7 @@ const invoiceSchema = new Schema(
     invoice_id: { type: String, required: true },
     user_id: { type: String, required: true },
     invoiceType: { type: String, default: "" },
-    mode: { type: String, enum: ["fixed", "merchant_list"], default: "fixed" }, // fixed: merchant picked the coin; merchant_list: the payer picks one of offered_coins
+    mode: { type: String, enum: ["fixed", "merchant_list", "swap"], default: "fixed" }, // fixed: merchant picked the coin; merchant_list: the payer picks one of offered_coins; swap: the payer picks one of offered_coins and it is swapped into to_crypto
     offered_coins: { type: [String], default: [] }, // merchant_list: coins the payer may pick
     status: { type: String, enum: INVOICE_STATUSES, default: "" }, // waiting, underpaid, confirming, confirmed, processing, completed, failed, expired, cancelled
     lifetime: { type: Number, default: 0 }, // lifetime in minutes within 1-60 minutes, default: 30
@@ -116,6 +142,8 @@ const invoiceSchema = new Schema(
     network_fee: { type: String, default: "0" }, // fee to transfer the received asset to the merchant
     platform_fee: { type: String, default: "0" }, // fee charged by the platform, based on user's merchant fee
     fee_rate: { type: String, default: "" }, // the merchant's fee rate when the invoice was made; "" on older invoices, which use the merchant's current rate
+    swap_max_loss_bps: { type: Number, default: null }, // the merchant's swap max loss when the invoice was made; null on older invoices, which use the merchant's current one
+    swap_quoted_at: { type: Number, default: null }, // unix ms of the last swap quote for the merchant payout; quotes are spaced out
     swap_fee: { type: Number, default: 0 }, // if to_crypto is another crypto and NEAR Intents is used, fee = amount transferred - network fees - near estimated receive quote
     review_reason: { type: String, default: "" },
     notified_status: { type: String, default: "" }, // last status announced by webhook; see src/webhooks/webhook-pass.ts
@@ -149,18 +177,9 @@ const invoiceSchema = new Schema(
       platform_raw: { type: String, default: "", select: false }, 
     },
     swap: {
-      deposit_address: { type: String, default: "" },
-      status: { type: String, default: "" },
-      deadline: { type: String, default: "" },
-      destination_txids: { type: [String], default: [] },
+      ...swapFields,
       origin_txids: { type: [String], default: [] },
-      refunded_amount: { type: String, default: "0" },
-
-      quote_response: {
-        type: Schema.Types.Mixed,
-        default: null,
-        select: false,
-      },
+      refunded_amount: { type: String, default: "0" }, // written only by the removed legacy swap code; see amount_refunded
     },
     timestamps: {
       created: { type: Number, default: null },

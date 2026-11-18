@@ -22,12 +22,7 @@ import { env } from "../config/env.js";
 import { ceilDivide } from "../money/format.js";
 import { splitPayout } from "../money/payout-split.js";
 import { openSecret, type SealedSecret } from "../security/secret-envelope.js";
-import {
-  isCryptoId,
-  LATE_PAYMENT_NOTE_PREFIX,
-  prepareSwap,
-  type PreparedSwap,
-} from "../swap/near.js";
+import { LATE_PAYMENT_NOTE_PREFIX } from "../swap/near.js";
 
 // TON (native Toncoin only): payment lookup and payout.
 // Network calls go through callTonApi() (NOWNodes, toncenter v2 API).
@@ -501,7 +496,6 @@ type PreparedPayout =
       merchantAmount: bigint;
       networkFee: bigint;
       platformFee: bigint;
-      swap: PreparedSwap | undefined;
     };
 
 export function notAWallet(address: string) {
@@ -536,11 +530,9 @@ async function prepareTonPayout(input: {
   }
 
   const toCrypto = input.toCrypto;
-  if (!isCryptoId(toCrypto)) {
-    return stop(`payout asset "${toCrypto}" is unknown. ${fundsAt} Fix to_crypto, then pay out manually.`);
+  if (toCrypto !== "ton") {
+    return stop(`a TON deposit pays out only as ton, not "${toCrypto}". ${fundsAt} Fix to_crypto, then pay out manually.`);
   }
-  // Paid in TON but wanted in another coin: swap through NEAR.
-  const swapTo = toCrypto === "ton" ? undefined : toCrypto;
 
   const deposit = parseTonAddress(depositAddress);
   if (deposit === undefined) {
@@ -553,15 +545,11 @@ async function prepareTonPayout(input: {
     throw new Error("Platform TON address is not a valid mainnet TON address");
   }
 
-  // With a swap, the merchant address is on the other chain; NEAR checks
-  // it when quoting.
-  if (swapTo === undefined) {
-    if (!isValidTonAddress(merchantAddress)) {
-      return stop(`merchant payout address "${merchantAddress}" is not a valid mainnet TON address. ${fundsAt} Fix the merchant's TON address, then pay out manually.`);
-    }
-    if (sameTonAccount(merchantAddress, depositAddress)) {
-      return stop(`merchant payout address is the deposit address itself. ${fundsAt} Fix the merchant's TON address, then pay out manually.`);
-    }
+  if (!isValidTonAddress(merchantAddress)) {
+    return stop(`merchant payout address "${merchantAddress}" is not a valid mainnet TON address. ${fundsAt} Fix the merchant's TON address, then pay out manually.`);
+  }
+  if (sameTonAccount(merchantAddress, depositAddress)) {
+    return stop(`merchant payout address is the deposit address itself. ${fundsAt} Fix the merchant's TON address, then pay out manually.`);
   }
 
   if (!input.sealedDepositKey) {
@@ -603,33 +591,7 @@ async function prepareTonPayout(input: {
   if (plan === undefined) return { kind: "too_small" };
 
   // Who receives: the merchant, or NEAR's deposit address for a swap.
-  let receiverText = merchantAddress;
-  let swap: PreparedSwap | undefined;
-  if (swapTo !== undefined) {
-    swap = await prepareSwap(
-      {
-        crypto: "ton",
-        isValidAddress: isValidTonAddress,
-        // The same for every address on TON: the fee budget is fixed.
-        amountArrivingAt: async () => plan.merchantAmount,
-        // NEAR refunds go to the platform wallet; the admin pays the
-        // merchant from there.
-        refundAddress: platformAddress,
-        platformAddress,
-      },
-      swapTo,
-      merchantAddress,
-    );
-    if (swap === undefined) return wait("swap quote not ready");
-    // prepareSwap compares strings; one account has two forms, so check again.
-    if (
-      sameTonAccount(swap.depositAddress, platformAddress) ||
-      sameTonAccount(swap.depositAddress, depositAddress)
-    ) {
-      return wait("NEAR's deposit address is one of ours");
-    }
-    receiverText = swap.depositAddress;
-  }
+  const receiverText = merchantAddress;
 
   const receiver = parseTonAddress(receiverText);
   if (receiver === undefined) throw new Error("receiver address was checked above");
@@ -643,9 +605,7 @@ async function prepareTonPayout(input: {
         ? notAWallet(receiverText)
         : undefined;
   if (problem !== undefined) {
-    return swap
-      ? wait(`NEAR's deposit address can't receive: ${problem}`)
-      : stop(`the merchant can't receive TON: ${problem}. ${fundsAt} Ask the merchant for another wallet address, then pay out manually.`);
+    return stop(`the merchant can't receive TON: ${problem}. ${fundsAt} Ask the merchant for another wallet address, then pay out manually.`);
   }
 
   // Valid until a time on the chain's clock, not ours.
@@ -670,7 +630,6 @@ async function prepareTonPayout(input: {
       merchantAmount: plan.merchantAmount,
       networkFee: plan.networkFee,
       platformFee: plan.platformFee,
-      swap,
     };
   } catch (error) {
     return stop(`signing failed (${error instanceof Error ? error.message : "unknown error"}). Nothing was sent. ${fundsAt} Investigate before retrying.`);
@@ -712,7 +671,7 @@ function checkpointOf(
     plan: {
       transfers: [
         {
-          kind: prepared.swap ? "swap_deposit" : destinationKind,
+          kind: destinationKind,
           to: Address.parseRaw(prepared.receiver).toString({ bounceable: false }),
           amount: prepared.merchantAmount,
           txid: prepared.hash,
@@ -728,15 +687,6 @@ function checkpointOf(
       ],
       platformFee: prepared.platformFee,
       networkCost: prepared.networkFee,
-      ...(prepared.swap
-        ? {
-            legacySwap: {
-              depositAddress: prepared.swap.depositAddress,
-              deadline: prepared.swap.deadline,
-              quote: prepared.swap.quote,
-            },
-          }
-        : {}),
     },
   };
 }
@@ -992,8 +942,7 @@ export async function payOutTon(
 
     // What the landed transaction really sent: the proof, or on failure the
     // record of where the money went.
-    const receiverKind: Transfer["kind"] =
-      request.receiveAsset === "ton" ? request.destinationKind : "swap_deposit";
+    const receiverKind: Transfer["kind"] = request.destinationKind;
     const moved: Transfer[] = landed.sent
       .filter((m) => m.to.equals(saved.receiver) || m.to.equals(platform))
       .map((m) => ({
@@ -1071,7 +1020,6 @@ export async function payOutTon(
   // Expired without landing: the chain was past valid_until and the seqno
   // was still unused. A new message is safe now. It must reuse the same
   // seqno, so this and any old version can never both land.
-  // A swap also gets a fresh NEAR quote: nothing reached the old one.
   const prepared = await prepare();
   if (prepared.kind === "wait") return pending(prepared.reason);
   if (prepared.kind === "too_small") return pending("rebuild found the deposit too small");

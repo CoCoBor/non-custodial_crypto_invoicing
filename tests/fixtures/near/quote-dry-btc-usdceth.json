@@ -1,0 +1,37 @@
+{
+  "quote": {
+    "amountIn": "100000",
+    "amountInFormatted": "0.001",
+    "amountInUsd": "64.837000000000",
+    "minAmountIn": "100000",
+    "amountOut": "64414580",
+    "amountOutFormatted": "64.41458",
+    "amountOutUsd": "64.386624072280",
+    "minAmountOut": "64092507",
+    "timeEstimate": 812,
+    "refundFee": "1900",
+    "withdrawFee": "300000"
+  },
+  "quoteRequest": {
+    "dry": true,
+    "depositMode": "SIMPLE",
+    "swapType": "EXACT_INPUT",
+    "slippageTolerance": 50,
+    "originAsset": "nep141:btc.omft.near",
+    "depositType": "ORIGIN_CHAIN",
+    "destinationAsset": "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near",
+    "amount": "100000",
+    "refundTo": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+    "refundType": "ORIGIN_CHAIN",
+    "recipient": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
+    "recipientType": "DESTINATION_CHAIN",
+    "deadline": "2026-11-19T07:58:31.000Z",
+    "confidentiality": "public",
+    "quoteWaitingTimeMs": 0,
+    "insured": false,
+    "appFees": []
+  },
+  "signature": "ed25519:QKXUAD1FkX8LMjBdkLjc5tohYpvNXdK4LMtULzH8mm6n66JCNpk8vdSopzJJzgWwgq69UfRMrTwEHeARRaQsoS6",
+  "timestamp": "2026-11-18T07:58:31.351Z",
+  "correlationId": "803097ee-a7e9-40e9-8c08-7e4d0eea7282"
+}
