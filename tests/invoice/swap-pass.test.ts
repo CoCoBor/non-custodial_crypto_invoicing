@@ -651,6 +651,82 @@ describe("a refunded fallback swap", () => {
   });
 });
 
+describe("one route that sweeps two late payments", () => {
+  const WEEK_AND_A_DAY = (7 * 24 + 25) * 60;
+
+  /** A completed swap invoice, then two late payments that reach the deposit before any route starts. */
+  async function completedWithTwoLatePayments(t: ReturnType<typeof setUp>, userId: string) {
+    const { invoiceId, address, payment } = await confirmedSwapInvoice(userId);
+    t.chain.paid(address, payment);
+    await t.pass();
+    await t.pass();
+    t.swap.setStatus("swap-deposit-1", { status: "SUCCESS", deliveryTxids: ["0xd1"] });
+    t.chain.deliver(MERCHANT_USDC, "0xd1", 650_000n);
+    await t.pass();
+    assert.equal((await invoiceNow(invoiceId))?.status, "completed");
+    t.chain.pay(address, "late-1", 50_000n);
+    t.chain.pay(address, "late-2", 30_000n);
+    return { invoiceId, address };
+  }
+
+  const carriedBy = (invoice: Record<string, unknown> | null) =>
+    Object.fromEntries((invoice?.payments as { txid: string; payout?: number }[]).map((p) => [p.txid, p.payout]));
+
+  it("a fallback swap route counts both as swept: nothing is routed again or held at the window's end", async () => {
+    const t = setUp();
+    const { invoiceId, address } = await completedWithTwoLatePayments(t, await merchant());
+
+    await t.pass();
+    await t.pass();
+    let invoice = await invoiceNow(invoiceId);
+    // 80,000 − ceil(80,000 × 5%) − 1,000
+    assert.deepEqual(transfers(invoice, 1), [
+      ["swap_deposit", "swap-deposit-2", "75000", "confirmed"],
+      ["platform_fee", PLATFORM, "4000", "confirmed"],
+    ]);
+    assert.equal(invoice?.refund_routes?.[0]?.swept, "80000");
+    assert.deepEqual(carriedBy(invoice), { [`pay-${invoiceId}`]: 0, "late-1": 1, "late-2": 1 });
+
+    t.swap.setStatus("swap-deposit-2", { status: "SUCCESS", deliveryTxids: ["0xd2"] });
+    t.chain.deliver(MERCHANT_USDC, "0xd2", 480_000n);
+    await t.pass();
+    await t.pass(WEEK_AND_A_DAY);
+
+    invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.watch_done, true);
+    assert.equal(invoice?.outcome ?? "", "", "nothing held");
+    assert.doesNotMatch(invoice?.review_reason ?? "", /Held for manual handling/);
+    assert.deepEqual(carriedBy(invoice), { [`pay-${invoiceId}`]: 0, "late-1": 1, "late-2": 1 });
+    assert.equal(invoice?.refund_routes?.length, 1);
+    assert.equal(t.chain.broadcastsFrom(address).length, 2, "the swap deposit and one fallback swap");
+    assert.equal(t.swap.quotes.length, 2, "no third swap");
+  });
+
+  it("a direct route to the refund address counts both as swept, as before", async () => {
+    const t = setUp();
+    const { invoiceId, address } = await completedWithTwoLatePayments(t, await merchant({ refund: { btc: REFUND_BTC } }));
+
+    await t.pass();
+    await t.pass();
+    let invoice = await invoiceNow(invoiceId);
+    assert.deepEqual(transfers(invoice, 1), [
+      ["refund_route", REFUND_BTC, "75000", "confirmed"],
+      ["platform_fee", PLATFORM, "4000", "confirmed"],
+    ]);
+    assert.equal(invoice?.refund_routes?.[0]?.swept, "80000");
+    assert.deepEqual(carriedBy(invoice), { [`pay-${invoiceId}`]: 0, "late-1": 1, "late-2": 1 });
+
+    await t.pass(WEEK_AND_A_DAY);
+
+    invoice = await invoiceNow(invoiceId);
+    assert.equal(invoice?.watch_done, true);
+    assert.equal(invoice?.outcome ?? "", "", "nothing held");
+    assert.doesNotMatch(invoice?.review_reason ?? "", /Held for manual handling/);
+    assert.equal(invoice?.refund_routes?.length, 1);
+    assert.equal(t.chain.broadcastsFrom(address).length, 2, "the swap deposit and one refund route");
+  });
+});
+
 describe("a swap saved before ticket 15 (BTC deposit, USDC payout, fixed mode)", () => {
   it("is followed by the new code and completes when the delivery is seen", async () => {
     const t = setUp();

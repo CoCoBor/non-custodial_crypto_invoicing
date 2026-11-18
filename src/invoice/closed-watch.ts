@@ -15,7 +15,6 @@ import { LATE_PAYMENT_NOTE_PREFIX } from "../swap/near.js";
 import type { SwapPort, SwapRef } from "../swap/swap-port.js";
 import {
   depositKeyOf,
-  destinationAmount,
   DESTINATION_KINDS,
   feeRateOf,
   storeTransfers,
@@ -274,7 +273,8 @@ function sweepsOf(invoice: ClosedInvoice): Sweep[] {
 }
 
 function sweptBy(plan: PayoutCheckpoint["plan"]): bigint {
-  return destinationAmount(plan.transfers) + plan.platformFee + plan.networkCost;
+  const sent = plan.transfers.filter((t) => DESTINATION_KINDS.has(t.kind)).reduce((sum, t) => sum + t.amount, 0n);
+  return sent + plan.platformFee + plan.networkCost;
 }
 
 /** The outcome when nothing needs a person: "expired, partially paid" stays. */
