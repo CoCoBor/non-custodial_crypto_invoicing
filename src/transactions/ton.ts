@@ -90,11 +90,11 @@ export function tonMinimumPayment(
 }
 
 // A signed payout is valid this long after the chain time it was built at.
-const TX_LIFETIME_SECONDS = 300;
+export const TX_LIFETIME_SECONDS = 300;
 // Wait this much past valid_until before deciding a message can never land.
 // A shard block from just before valid_until can reach the masterchain a few
 // seconds later.
-const EXPIRY_MARGIN_SECONDS = 60;
+export const EXPIRY_MARGIN_SECONDS = 60;
 // A deposit wallet has few transactions (payments in, one payout out).
 const RECENT_TX_LIMIT = 20;
 
@@ -111,7 +111,7 @@ type AccountState = z.infer<typeof accountStateSchema>;
 
 // EQ…/UQ… form only: it has a checksum, so a typo is caught. Mainnet,
 // workchain 0 (where all normal wallets live).
-function parseTonAddress(value: string): Address | undefined {
+export function parseTonAddress(value: string): Address | undefined {
   try {
     const parsed = Address.parseFriendly(value);
     if (parsed.isTestOnly || parsed.address.workChain !== 0) return undefined;
@@ -127,7 +127,7 @@ export function isValidTonAddress(value: string): boolean {
 
 // One account has two text forms (EQ… bounceable, UQ… non-bounceable), so
 // compare parsed addresses, never strings.
-function sameTonAccount(a: string, b: string): boolean {
+export function sameTonAccount(a: string, b: string): boolean {
   const x = parseTonAddress(a);
   const y = parseTonAddress(b);
   return x !== undefined && y !== undefined && x.equals(y);
@@ -203,7 +203,7 @@ export const nowNodesTonApi: TonApi = callTonApi;
 // One consistent snapshot of an account: balance, code, data, and the chain
 // time of that snapshot. A never-used address answers "uninitialized" with
 // balance 0. TON has no reorgs: once the API shows a state, it is final.
-async function getTonAccount(api: TonApi, address: Address) {
+export async function getTonAccount(api: TonApi, address: Address) {
   const parsed = z
     .object({
       balance: u64String,
@@ -240,7 +240,7 @@ async function getTonAccount(api: TonApi, address: Address) {
 
 // For a receiver: is it a normal wallet, and is it deployed?
 // wallet = the API recognises the code as a standard wallet (v1–v5).
-async function getTonDestination(api: TonApi, address: Address) {
+export async function getTonDestination(api: TonApi, address: Address) {
   const parsed = z
     .object({ wallet: z.boolean(), account_state: accountStateSchema })
     .safeParse(
@@ -253,7 +253,7 @@ async function getTonDestination(api: TonApi, address: Address) {
 }
 
 // The newest transactions of an account, each as a base64 BOC.
-async function getRecentTonTransactions(api: TonApi, address: Address, limit = RECENT_TX_LIMIT) {
+export async function getRecentTonTransactions(api: TonApi, address: Address, limit = RECENT_TX_LIMIT) {
   const parsed = z
     .array(z.object({ data: z.string().min(1) }))
     .safeParse(
@@ -265,16 +265,16 @@ async function getRecentTonTransactions(api: TonApi, address: Address, limit = R
 }
 
 // Sending the same signed message again is safe: its seqno can be used once.
-async function sendTonMessage(api: TonApi, boc: string): Promise<boolean> {
+export async function sendTonMessage(api: TonApi, boc: string): Promise<boolean> {
   return (await api("sendBoc", { body: { boc } })) !== undefined;
 }
 
 // ---------- Wallet ----------
 
-type TonWallet = { contract: WalletContractV5R1; secretKey: Buffer };
+export type TonWallet = { contract: WalletContractV5R1; secretKey: Buffer };
 
 // The key is the 24-word mnemonic (see crypto/ton.ts).
-async function loadTonWallet(secret: string): Promise<TonWallet> {
+export async function loadTonWallet(secret: string): Promise<TonWallet> {
   const words = secret.split(" ");
   if (!(await mnemonicValidate(words))) {
     throw new Error("the saved key is not a valid TON mnemonic");
@@ -302,7 +302,7 @@ function readW5Data(data: Cell) {
 
 // The seqno the next signed message must carry. A never-deployed wallet
 // starts at 0. undefined = can't tell.
-function readSeqno(account: { state: AccountState; data?: Cell }) {
+export function readSeqno(account: { state: AccountState; data?: Cell }) {
   if (account.state === "uninitialized") return 0;
   if (account.state !== "active" || !account.data) return undefined;
   return readW5Data(account.data)?.seqno;
@@ -310,7 +310,7 @@ function readSeqno(account: { state: AccountState; data?: Cell }) {
 
 // A deployed deposit wallet must run exactly our W5 code with our public
 // key; anything else is a problem for a person.
-function readDepositWallet(
+export function readDepositWallet(
   account: { state: AccountState; code?: Cell; data?: Cell },
   wallet: WalletContractV5R1,
 ): { seqno: number; deployed: boolean } | { problem: string } {
@@ -422,42 +422,19 @@ function planTonPayout(total: bigint, feeRate: bigint) {
 // Builds the external message: the signed W5 request, plus the wallet's code
 // if it is not deployed yet. Its hash is known before sending, so it can be
 // saved first.
-// Both messages are non-bounceable (see the top of this file).
-// Exported for tests (tests/transactions/ton-payout.test.ts).
-export function signTonPayout(input: {
+export function signW5External(input: {
   wallet: TonWallet;
   seqno: number;
   deploy: boolean;
   validUntil: number;
-  receiver: Address;
-  amount: bigint;
-  platform: Address;
+  messages: { mode: number; message: ReturnType<typeof internal> }[];
 }) {
   const { contract, secretKey } = input.wallet;
   const body = contract.createRequest({
     seqno: input.seqno,
     secretKey,
     timeout: input.validUntil,
-    actions: [
-      {
-        type: "sendMsg",
-        mode: SendMode.PAY_GAS_SEPARATELY | SendMode.IGNORE_ERRORS,
-        outMsg: internal({
-          to: input.receiver,
-          value: input.amount,
-          bounce: false,
-        }),
-      },
-      {
-        type: "sendMsg",
-        mode: SendMode.CARRY_ALL_REMAINING_BALANCE | SendMode.IGNORE_ERRORS,
-        outMsg: internal({
-          to: input.platform,
-          value: 0n,
-          bounce: false,
-        }),
-      },
-    ],
+    actions: input.messages.map(({ mode, message }) => ({ type: "sendMsg" as const, mode, outMsg: message })),
   });
 
   const message = beginCell()
@@ -476,6 +453,35 @@ export function signTonPayout(input: {
     boc: message.toBoc().toString("base64"),
     hash: message.hash().toString("hex"),
   };
+}
+
+// Both messages are non-bounceable (see the top of this file).
+// Exported for tests (tests/transactions/ton-payout.test.ts).
+export function signTonPayout(input: {
+  wallet: TonWallet;
+  seqno: number;
+  deploy: boolean;
+  validUntil: number;
+  receiver: Address;
+  amount: bigint;
+  platform: Address;
+}) {
+  return signW5External({
+    wallet: input.wallet,
+    seqno: input.seqno,
+    deploy: input.deploy,
+    validUntil: input.validUntil,
+    messages: [
+      {
+        mode: SendMode.PAY_GAS_SEPARATELY | SendMode.IGNORE_ERRORS,
+        message: internal({ to: input.receiver, value: input.amount, bounce: false }),
+      },
+      {
+        mode: SendMode.CARRY_ALL_REMAINING_BALANCE | SendMode.IGNORE_ERRORS,
+        message: internal({ to: input.platform, value: 0n, bounce: false }),
+      },
+    ],
+  });
 }
 
 // ---------- Prepare one payout ----------
@@ -498,7 +504,7 @@ type PreparedPayout =
       swap: PreparedSwap | undefined;
     };
 
-function notAWallet(address: string) {
+export function notAWallet(address: string) {
   return `${address} is not a normal TON wallet (a common mistake is giving a USDT jetton wallet instead of the wallet address), so funds sent there could be locked`;
 }
 
@@ -787,6 +793,10 @@ export function findPayoutBySeqno(transactions: string[], seqno: number) {
     // The messages this transaction really created. With +2 (ignore
     // errors) a message that could not be sent is simply missing here.
     const sent: SentMessage[] = [];
+    const outgoing: OutgoingMessage[] = [];
+    // What the wallet's balance lost in this transaction: its fees, plus each
+    // message's value and the forwarding fee it paid for it.
+    let spent = tx.totalFees.coins;
     for (const out of tx.outMessages.values()) {
       if (out.info.type === "internal") {
         sent.push({
@@ -794,6 +804,8 @@ export function findPayoutBySeqno(transactions: string[], seqno: number) {
           value: out.info.value.coins,
           bounce: out.info.bounce,
         });
+        outgoing.push({ ...sent[sent.length - 1]!, createdLt: out.info.createdLt, body: out.body });
+        spent += out.info.value.coins + out.info.forwardFee + out.info.ihrFee;
       }
     }
 
@@ -805,12 +817,13 @@ export function findPayoutBySeqno(transactions: string[], seqno: number) {
       failed = "the wallet code did not run successfully";
     } else if (d.actionPhase && !d.actionPhase.success) failed = "the send step failed";
 
-    return { txHash: root.hash().toString("hex"), messageHash, sent, failed };
+    return { txHash: root.hash().toString("hex"), messageHash, sent, outgoing, spent, failed };
   }
   return undefined;
 }
 
 type SentMessage = { to: Address; value: bigint; bounce: boolean };
+export type OutgoingMessage = SentMessage & { createdLt: bigint; body: Cell };
 
 // Did the landed payout really send `amount` to `receiver`, non-bounceable?
 // Decided from the messages the transaction created, never from its status:

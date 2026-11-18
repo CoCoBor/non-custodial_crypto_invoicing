@@ -13,6 +13,7 @@ export type SecretPurpose =
   | "solana-deposit-key"
   | "solana-gas-wallet-key"
   | "ton-deposit-key"
+  | "ton-gas-wallet-key"
   | "webhook-secret";
 
 export interface SealedSecret {

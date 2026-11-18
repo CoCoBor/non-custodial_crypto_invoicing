@@ -1,6 +1,7 @@
 import { mnemonicNew, mnemonicToPrivateKey } from "@ton/crypto";
 import { WalletContractV5R1 } from "@ton/ton";
 import { SealedSecret, sealSecret } from "../security/secret-envelope.js";
+import { formatSealedSecretForEnv } from "./sol.js";
 
 // A fresh deposit address for one TON invoice.
 //
@@ -34,5 +35,22 @@ export async function generateTonAddress(): Promise<{
   return {
     address,
     encryptedPrivateKey: sealSecret("ton-deposit-key", words.join(" ")),
+  };
+}
+
+// The TON gas wallet for jetton payouts: a W5 wallet from a 24-word
+// mnemonic, like a deposit, so Tonkeeper can open it too. Returns its
+// address and the sealed mnemonic in .env form; the words are never printed.
+export async function generateTonGasWallet(): Promise<{
+  address: string;
+  sealedKeyForEnv: string;
+}> {
+  const words = await mnemonicNew(24);
+  const keyPair = await mnemonicToPrivateKey(words);
+  const wallet = WalletContractV5R1.create({ workchain: 0, publicKey: keyPair.publicKey });
+  keyPair.secretKey.fill(0);
+  return {
+    address: wallet.address.toString({ urlSafe: true, bounceable: false, testOnly: false }),
+    sealedKeyForEnv: formatSealedSecretForEnv(sealSecret("ton-gas-wallet-key", words.join(" "))),
   };
 }

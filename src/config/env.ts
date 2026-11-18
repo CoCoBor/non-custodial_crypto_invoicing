@@ -122,6 +122,15 @@ export const env = Object.freeze({
     process.env.PLATFORM_TON_ADDRESS,
   ),
 
+  // The TON gas wallet: a hot W5 wallet that sends the TON a jetton (USDT)
+  // payout needs to the deposit. Sealed with DATA_ENCRYPTION_KEY. Create it
+  // with `npx tsx src/scripts/create-ton-gas-wallet.ts`. Optional: jetton
+  // payouts wait (with a review note) until it is set.
+  tonGasWalletKey: readOptionalSealedSecret(
+    "TON_GAS_WALLET_KEY",
+    process.env.TON_GAS_WALLET_KEY,
+  ),
+
   nearIntentsJwt: readRequiredString("NEAR_INTENTS", process.env.NEAR_INTENTS),
 });
 
