@@ -72,6 +72,27 @@ export const env = Object.freeze({
     process.env.PLATFORM_ETH_ADDRESS
   ),
 
+  // Receives the platform fee for BNB and BEP-20 tokens on BNB Smart Chain.
+  // Optional so the server starts without it: BSC payouts wait (with a
+  // review note) until it is set. Address only.
+  platformBscAddress: readOptionalEthAddress(
+    "PLATFORM_BSC_ADDRESS",
+    process.env.PLATFORM_BSC_ADDRESS,
+  ),
+
+  // The gas wallets that top up a token deposit before its payout, one per
+  // EVM chain. Sealed with DATA_ENCRYPTION_KEY; create one with
+  // `npx tsx src/scripts/create-evm-gas-wallet.ts eth|bsc`. Optional: token
+  // payouts wait (with a review note) until it is set.
+  ethGasWalletKey: readOptionalSealedSecret(
+    "ETH_GAS_WALLET_KEY",
+    process.env.ETH_GAS_WALLET_KEY,
+  ),
+  bscGasWalletKey: readOptionalSealedSecret(
+    "BSC_GAS_WALLET_KEY",
+    process.env.BSC_GAS_WALLET_KEY,
+  ),
+
   platformLtcAddress: readLtcAddress(
     "PLATFORM_LTC_ADDRESS",
     process.env.PLATFORM_LTC_ADDRESS,
@@ -120,6 +141,10 @@ function readEthAddress(name: string, value: string | undefined): string {
     throw new Error(`${name} must be a valid Ethereum address`);
   }
   return getAddress(address);   // store it checksummed
+}
+
+function readOptionalEthAddress(name: string, value: string | undefined): string | undefined {
+  return value?.trim() ? readEthAddress(name, value) : undefined;
 }
 
 function readLtcAddress(name: string, value: string | undefined): string {

@@ -8,6 +8,8 @@ export type SecretPurpose =
   | "bitcoin-deposit-key"
   | "litecoin-deposit-key"
   | "ethereum-deposit-key"
+  | "ethereum-gas-wallet-key"
+  | "bsc-gas-wallet-key"
   | "solana-deposit-key"
   | "solana-gas-wallet-key"
   | "ton-deposit-key"

@@ -69,7 +69,7 @@ describe("the payout network-cost estimate", () => {
   });
 
   it("has none for a coin a payer can't deposit yet", async () => {
-    for (const coin of ["eth", "sol", "usdceth"] as const) {
+    for (const coin of ["sol", "usdtsol", "usdtbsc"] as const) {
       assert.equal(await estimatePayoutNetworkCost(coin), "unsupported");
     }
   });

@@ -1,15 +1,30 @@
 import { ASSET_IDS, isAssetId, type AssetId } from "../assets/payout-address.js";
 import { env } from "../config/env.js";
 import type { ChainAdapter, ChainRegistry } from "./adapter.js";
+import { getPrice } from "../invoice/price.function.js";
 import { createBtcAdapter } from "./btc.js";
+import { createEvmNativeAdapter, createEvmTokenAdapter, type EvmClients } from "./evm.js";
+import { nowNodesBscBlockbook, nowNodesEthBlockbook } from "./evm-payments.js";
+import { nowNodesBscRpc, nowNodesEthRpc } from "./evm-rpc.js";
 import { createLtcAdapter } from "./ltc.js";
 import { createTonAdapter } from "./ton.js";
 
+const eth: EvmClients = { rpc: nowNodesEthRpc, index: nowNodesEthBlockbook };
+const bsc: EvmClients = { rpc: nowNodesBscRpc, index: nowNodesBscBlockbook };
+const ethToken = { ...eth, chain: "eth", platformAddress: env.platformEthAddress, gasWalletKey: env.ethGasWalletKey, getPrice } as const;
+
 // One line per deposit asset. A payer can be offered, and the watcher only
-// follows, the assets listed here.
+// follows, the assets listed here. The BEP-20 tokens (usdtbsc, usdcbsc,
+// daibsc) are left out until their contracts are checked against an
+// official source (docs/domain.md, "EVM token contracts").
 export const chainAdapters: ChainRegistry = {
   btc: createBtcAdapter({ platformAddress: env.platformBtcAddress }),
   ltc: createLtcAdapter({ platformAddress: env.platformLtcAddress }),
+  eth: createEvmNativeAdapter({ ...eth, chain: "eth", platformAddress: env.platformEthAddress }),
+  usdteth: createEvmTokenAdapter({ ...ethToken, asset: "usdteth" }),
+  usdceth: createEvmTokenAdapter({ ...ethToken, asset: "usdceth" }),
+  daieth: createEvmTokenAdapter({ ...ethToken, asset: "daieth" }),
+  bsc: createEvmNativeAdapter({ ...bsc, chain: "bsc", platformAddress: env.platformBscAddress }),
   ton: createTonAdapter({ platformAddress: env.platformTonAddress }),
 };
 
