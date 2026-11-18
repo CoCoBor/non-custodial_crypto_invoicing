@@ -87,9 +87,21 @@ export async function startAnvil(name: "eth" | "bsc", chainId: number) {
         type: 0, chainId, nonce: Number(nonce), gasPrice: 2n * NODE_GAS_PRICE, gasLimit: 200_000n, to, value, data,
       });
       const txid = await rpc<string>("eth_sendRawTransaction", [raw]);
-      const receipt = await rpc<{ status: string }>("eth_getTransactionReceipt", [txid]);
-      if (receipt?.status !== "0x1") throw new Error(`test transaction ${txid} failed`);
+      const receipt = await waitForReceipt(txid);
+      if (receipt.status !== "0x1") throw new Error(`test transaction ${txid} reverted (receipt status ${receipt.status})`);
       return txid.toLowerCase();
+    }
+
+    // Automine can answer eth_sendRawTransaction before the block holding the
+    // transaction is queryable: a busy machine saw no receipt for ~30 ms.
+    async function waitForReceipt(txid: string): Promise<{ status: string }> {
+      const started = Date.now();
+      for (;;) {
+        const receipt = await rpc<{ status: string } | null>("eth_getTransactionReceipt", [txid]);
+        if (receipt !== null) return receipt;
+        if (Date.now() - started > 10_000) throw new Error(`test transaction ${txid} not mined within 10 s (no receipt)`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
     }
 
     const node = {
