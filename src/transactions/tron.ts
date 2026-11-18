@@ -42,6 +42,8 @@ export type TronPayoutDeps = {
   trxPrice: () => Promise<string | undefined>;
   /** How long a signed transaction stays valid. */
   txLifetimeMs?: number;
+  /** How long past its expiration the solidified head must be before a saved transaction is called lost. */
+  lostMarginMs?: number;
 };
 
 const TRX_DECIMALS = 6;
@@ -50,6 +52,8 @@ const PRICE_DECIMALS = 10;
 // stays at the deposit; the next payout from it tops up less.
 const ENERGY_HEADROOM_PERCENT = 110n;
 const DEFAULT_TX_LIFETIME_MS = 10 * 60_000;
+// 20 blocks of 3 s: room for a provider's nodes at different heights.
+const DEFAULT_LOST_MARGIN_MS = 60_000;
 // A full list is treated as one that may be missing payments.
 const MAX_LISTED_PAYMENTS = 100;
 // A key nobody holds: signs throwaway copies to measure a transaction's size.
@@ -174,6 +178,38 @@ async function txInfo(api: TronApi, txid: string, solid: boolean): Promise<TxInf
   const parsed = infoSchema.safeParse(reply);
   if (!parsed.success || parsed.data.id !== txid) return undefined;
   return parsed.data;
+}
+
+type SavedTxFate =
+  | { fate: "landed"; info: TxInfo }
+  | { fate: "can_land" }
+  | { fate: "wait"; reason: string }
+  | { fate: "lost" };
+
+/**
+ * What became of a saved transaction. "lost" needs proof: the solidified
+ * head, read first, is `lostMarginMs` past its expiration, and a lookup made
+ * after that still finds it in no solidified block. A lookup made before the
+ * head is no proof: the block holding it may be solidified in between, or
+ * come from a provider's node behind the one that answered the head.
+ */
+async function savedTxFate(api: TronApi, signed: { txid: string; expiration: number }, lostMarginMs: number): Promise<SavedTxFate> {
+  const wait = (reason: string): SavedTxFate => ({ fate: "wait", reason });
+  const info = await txInfo(api, signed.txid, true);
+  if (info === undefined) return wait("Tron transaction lookup failed");
+  if (info !== null) return { fate: "landed", info };
+
+  const solidHead = await nowBlock(api, true);
+  if (solidHead === undefined) return wait("Tron solidified block unavailable");
+  if (solidHead.timestamp <= signed.expiration) return { fate: "can_land" };
+  if (solidHead.timestamp <= signed.expiration + lostMarginMs) {
+    return wait(`Tron transaction ${signed.txid} expired; waiting ${lostMarginMs} ms past its expiration before rebuilding it`);
+  }
+
+  const again = await txInfo(api, signed.txid, true);
+  if (again === undefined) return wait("Tron transaction lookup failed");
+  if (again !== null) return { fate: "landed", info: again };
+  return { fate: "lost" };
 }
 
 /** Token units `to` received from the token's own Transfer logs in one transaction (optionally only from `from`). */
@@ -594,16 +630,14 @@ async function followTopUp(ctx: Context, state: TronState): Promise<PayoutResult
     return pending("saved Tron top-up is missing", `The saved Tron payout is in its top-up phase without a top-up (a bug). ${stillAt(request)}`);
   }
   // Proof only from the solidified chain: those blocks can't be undone.
-  const info = await txInfo(api, topUp.signed.txid, true);
-  if (info === undefined) return pending("Tron transaction lookup failed");
+  const found = await savedTxFate(api, topUp.signed, ctx.deps.lostMarginMs ?? DEFAULT_LOST_MARGIN_MS);
+  if (found.fate === "wait") return pending(found.reason);
+  if (found.fate === "can_land") {
+    await broadcast(api, topUp.signed);
+    return pending("gas top-up sent; waiting for it to be solidified");
+  }
 
-  if (info === null) {
-    const solidHead = await nowBlock(api, true);
-    if (solidHead === undefined) return pending("Tron solidified block unavailable");
-    if (solidHead.timestamp <= topUp.signed.expiration) {
-      await broadcast(api, topUp.signed);
-      return pending("gas top-up sent; waiting for it to be solidified");
-    }
+  if (found.fate === "lost") {
     // Expired and not in any solidified block: it can never land.
     const gas = gasWalletOf(ctx.deps, request);
     if ("status" in gas) return gas;
@@ -625,7 +659,7 @@ async function followTopUp(ctx: Context, state: TronState): Promise<PayoutResult
 
   const depositKey = depositKeyOf(request);
   if (typeof depositKey !== "string") return depositKey;
-  const spent = BigInt(topUp.amount) + BigInt(info.fee ?? 0);
+  const spent = BigInt(topUp.amount) + BigInt(found.info.fee ?? 0);
   return await sendTransfers(ctx, { ...state, topUp: { ...topUp, spent: spent.toString() } }, depositKey);
 }
 
@@ -637,17 +671,24 @@ async function followTransfers(ctx: Context, state: TronState): Promise<PayoutRe
     : [];
   const notes: string[] = [];
   const missing: PlannedTransfer[] = [];
+  const expired: PlannedTransfer[] = [];
+  let waiting: string | undefined;
 
   for (const t of state.transfers) {
     if (t.signed === undefined) {
       return pending("saved Tron transfer is not signed", `The saved Tron payout is in its transfer phase without a signed transfer (a bug). ${stillAt(request)}`);
     }
-    const info = await txInfo(api, t.signed.txid, true);
-    if (info === undefined) return pending("Tron transaction lookup failed");
-    if (info === null) {
-      missing.push(t);
+    const found = await savedTxFate(api, t.signed, ctx.deps.lostMarginMs ?? DEFAULT_LOST_MARGIN_MS);
+    if (found.fate === "wait") {
+      waiting ??= found.reason;
       continue;
     }
+    if (found.fate !== "landed") {
+      missing.push(t);
+      if (found.fate === "lost") expired.push(t);
+      continue;
+    }
+    const { info } = found;
     if (info.receipt?.result !== "SUCCESS") {
       const outcome = info.receipt?.result ?? "no result";
       if (t.kind === "platform_fee") {
@@ -665,9 +706,6 @@ async function followTransfers(ctx: Context, state: TronState): Promise<PayoutRe
   }
 
   if (missing.length > 0) {
-    const solidHead = await nowBlock(api, true);
-    if (solidHead === undefined) return pending("Tron solidified block unavailable");
-    const expired = missing.filter((t) => solidHead.timestamp > t.signed!.expiration);
     if (expired.length === 0) {
       for (const t of missing) await broadcast(api, t.signed!);
       return pending("USDT transfers sent; waiting for them to be solidified");
@@ -688,6 +726,7 @@ async function followTransfers(ctx: Context, state: TronState): Promise<PayoutRe
     for (const t of next.transfers) if (missing.some((m) => m.kind === t.kind)) await broadcast(api, t.signed!);
     return pending("expired USDT transfers rebuilt and sent");
   }
+  if (waiting !== undefined) return pending(waiting);
 
   for (const transfer of moved) {
     const planned = state.transfers.find((t) => t.signed?.txid === transfer.txid);

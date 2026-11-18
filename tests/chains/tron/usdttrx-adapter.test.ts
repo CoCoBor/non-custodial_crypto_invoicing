@@ -32,15 +32,31 @@ function show(result: PayoutResult): string {
 
 const newAddress = () => tronAddressFromEvm(Wallet.createRandom().address);
 
-/** Passes every call through, and counts the broadcasts. `solidLag` hides transactions from the solidified view, as before they are 19 blocks deep. */
+/**
+ * Passes every call through, and counts the broadcasts. `solidLag` hides transactions from the solidified view, as before they are 19 blocks deep.
+ * `hideInfoReads` hides them from that many lookups only, and `solidHeadAheadMs` moves the solidified head's time forward: together, a
+ * load-balanced provider whose node answering the lookup is behind the one answering the head.
+ */
 function countingApi(inner: TronApi) {
   const sent: string[] = [];
-  const state = { solidLag: false };
+  const state = { solidLag: false, hideInfoReads: 0, solidHeadAheadMs: 0 };
   const api: TronApi = {
     post: async (path, body) => {
       if (path === "/wallet/broadcasthex") sent.push((body as { transaction: string }).transaction);
-      if (state.solidLag && path === "/walletsolidity/gettransactioninfobyid") return {};
-      return await inner.post(path, body);
+      if (path === "/walletsolidity/gettransactioninfobyid") {
+        if (state.solidLag) return {};
+        if (state.hideInfoReads > 0) {
+          state.hideInfoReads -= 1;
+          return {};
+        }
+      }
+      const reply = await inner.post(path, body);
+      if (path === "/walletsolidity/getnowblock" && state.solidHeadAheadMs !== 0) {
+        const block = structuredClone(reply) as { block_header: { raw_data: { timestamp: number } } };
+        block.block_header.raw_data.timestamp += state.solidHeadAheadMs;
+        return block;
+      }
+      return reply;
     },
   };
   return { api, sent, state };
@@ -70,7 +86,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
   const tokens = (owner: string) => node.tokenBalance(contract, owner);
 
   /** Fresh platform and gas wallets, so balances start known. */
-  async function freshAdapter(options: { gasWalletKey?: boolean; platformHolds?: boolean; txLifetimeMs?: number } = {}) {
+  async function freshAdapter(options: { gasWalletKey?: boolean; platformHolds?: boolean; txLifetimeMs?: number; lostMarginMs?: number } = {}) {
     platform = newAddress();
     if (options.platformHolds) await node.payToken(contract, platform, 1n);
     const wallet = Wallet.createRandom();
@@ -86,6 +102,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
       trxPrice: async () => price,
       contract,
       ...(options.txLifetimeMs !== undefined && { txLifetimeMs: options.txLifetimeMs }),
+      ...(options.lostMarginMs !== undefined && { lostMarginMs: options.lostMarginMs }),
     });
   }
 
@@ -367,6 +384,86 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     assert.equal(await tokens(d.destination), want.merchant);
   });
 
+  describe("a saved transaction a lagging node can't find yet, while the solidified head is past its expiration", () => {
+    const LIFETIME_MS = 10 * 60_000;
+    const MARGIN_MS = 60_000;
+
+    it("waits, and never rebuilds the top-up, within the margin past its expiration", async () => {
+      await freshAdapter({ txLifetimeMs: LIFETIME_MS, lostMarginMs: MARGIN_MS });
+      const d = await fundedDeposit(100n * ONE_USDT);
+      const gasBefore = await node.trxBalance(gasWallet.address);
+      assert.equal((await adapter.payout(d.request())).status, "pending");
+      const topUp = d.saved[0]!.plan.transfers[0]!.txid;
+      await node.landed(topUp);
+      const sentBefore = counting.sent.length;
+
+      counting.state.solidLag = true;
+      counting.state.solidHeadAheadMs = LIFETIME_MS + 5_000;
+      try {
+        const raced = await adapter.payout(d.request());
+        assert.equal(raced.status, "pending", show(raced));
+      } finally {
+        counting.state.solidLag = false;
+        counting.state.solidHeadAheadMs = 0;
+      }
+      assert.equal(d.saved.length, 1, "no rebuilt top-up saved");
+      assert.equal(counting.sent.length, sentBefore, "nothing sent");
+
+      const paid = await payUntilPaid(d.request);
+      assert.equal(paid.transfers[0]!.txid, topUp);
+      assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount, "one top-up only");
+    });
+
+    it("past the margin, looks the top-up up again and follows it instead of rebuilding", async () => {
+      await freshAdapter({ txLifetimeMs: LIFETIME_MS, lostMarginMs: MARGIN_MS });
+      const d = await fundedDeposit(100n * ONE_USDT);
+      const gasBefore = await node.trxBalance(gasWallet.address);
+      assert.equal((await adapter.payout(d.request())).status, "pending");
+      const topUp = d.saved[0]!.plan.transfers[0]!.txid;
+      await node.landed(topUp);
+
+      counting.state.hideInfoReads = 1;
+      counting.state.solidHeadAheadMs = LIFETIME_MS + MARGIN_MS + 5_000;
+      try {
+        assert.equal((await adapter.payout(d.request())).status, "pending");
+      } finally {
+        counting.state.hideInfoReads = 0;
+        counting.state.solidHeadAheadMs = 0;
+      }
+      assert.equal(d.saved.length, 2, "the transfers were saved, not a rebuilt top-up");
+      assert.equal(d.saved[1]!.plan.transfers[0]!.txid, topUp);
+
+      const paid = await payUntilPaid(d.request);
+      assert.equal(gasBefore - (await node.trxBalance(gasWallet.address)), paid.transfers[0]!.amount, "one top-up only");
+    });
+
+    it("past the margin, looks the transfers up again and proves them instead of rebuilding", async () => {
+      await freshAdapter({ txLifetimeMs: LIFETIME_MS, lostMarginMs: MARGIN_MS });
+      const d = await fundedDeposit(100n * ONE_USDT);
+      assert.equal((await adapter.payout(d.request())).status, "pending");
+      await node.landed(d.saved[0]!.plan.transfers[0]!.txid);
+      assert.equal((await adapter.payout(d.request())).status, "pending");
+      assert.equal(d.saved.length, 2, "the transfers are signed, saved and sent");
+      const signedTransfers = d.saved[1]!.plan.transfers.slice(1).map((t) => t.txid);
+      for (const txid of signedTransfers) await node.landed(txid);
+
+      counting.state.hideInfoReads = 1;
+      counting.state.solidHeadAheadMs = LIFETIME_MS + MARGIN_MS + 5_000;
+      let result: PayoutResult;
+      try {
+        result = await adapter.payout(d.request());
+      } finally {
+        counting.state.hideInfoReads = 0;
+        counting.state.solidHeadAheadMs = 0;
+      }
+      assert.equal(result.status, "paid", show(result));
+      assert.equal(d.saved.length, 2, "nothing rebuilt");
+      assert.deepEqual(result.status === "paid" && result.transfers.slice(1).map((t) => t.txid), signedTransfers);
+      const want = await expectedFromChain(result as PayoutResult & { status: "paid" }, 100n * ONE_USDT, FIVE_PERCENT);
+      assert.equal(await tokens(d.destination), want.merchant);
+    });
+  });
+
   it("sends nothing when another run saved first", async () => {
     await freshAdapter();
     const d = await fundedDeposit(100n * ONE_USDT, { saveCheckpoint: async () => false });
@@ -379,7 +476,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
   });
 
   it("rebuilds an expired top-up and expired transfers only once the solidified chain is past their expiration, saving first", async () => {
-    await freshAdapter({ txLifetimeMs: 1_500 });
+    await freshAdapter({ txLifetimeMs: 1_500, lostMarginMs: 500 });
     const saved: PayoutCheckpoint[] = [];
     let crash = true;
     const d = await fundedDeposit(100n * ONE_USDT, {
@@ -394,7 +491,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
 
     await assert.rejects(adapter.payout(d.request(undefined)), /process killed/);
     const expiredTopUp = saved[0]!.plan.transfers[0]!.txid;
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => setTimeout(resolve, 2_600));
     await node.tick();
 
     // The re-run sees it expired: it saves a rebuilt top-up first (and "crashes" before sending it).
@@ -411,7 +508,7 @@ describe("USDT on Tron (usdttrx) on a TRE node", { skip: skipReason }, () => {
     crash = true;
     await assert.rejects(adapter.payout(again()), /process killed/);
     const expiredMerchant = saved.at(-1)!.plan.transfers[1]!.txid;
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    await new Promise((resolve) => setTimeout(resolve, 2_600));
     await node.tick();
     crash = false;
 

@@ -18,6 +18,7 @@ export function createTronTokenAdapter(deps: {
   /** Tests on a local node, where the real contract can't be placed, pass the test token's address. */
   contract?: string;
   txLifetimeMs?: number;
+  lostMarginMs?: number;
 }): ChainAdapter {
   const facts = cryptos[deps.asset];
   if (!("contract_address" in facts) || facts.chain.symbol !== "trx") {
@@ -32,6 +33,7 @@ export function createTronTokenAdapter(deps: {
     gasWalletKey: deps.gasWalletKey,
     trxPrice: deps.trxPrice,
     ...(deps.txLifetimeMs !== undefined && { txLifetimeMs: deps.txLifetimeMs }),
+    ...(deps.lostMarginMs !== undefined && { lostMarginMs: deps.lostMarginMs }),
   };
   return {
     asset,
