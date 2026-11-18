@@ -176,6 +176,11 @@ export const env = Object.freeze({
   ),
 
   nearIntentsJwt: readRequiredString("NEAR_INTENTS", process.env.NEAR_INTENTS),
+
+  // ExchangeRate-API's keyed plan, the first source of USD → fiat rates.
+  // Optional: without it only the keyless currency-api is asked
+  // (src/invoice/fx-rates.ts).
+  exchangeRateApiKey: process.env.EXCHANGERATE_API_KEY?.trim() || undefined,
 });
 
 function readRequiredString(name: string, value: string | undefined): string {

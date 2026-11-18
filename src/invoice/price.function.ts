@@ -718,7 +718,7 @@ async function weightedPrice(
  * Expands scientific notation in raw JSON number text.
  * For example, "1.25e-3" → "0.00125".
  */
-function expandNumber(value: string): string {
+export function expandNumber(value: string): string {
   const match = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(value);
 
   if (!match || value.length > 100) {
