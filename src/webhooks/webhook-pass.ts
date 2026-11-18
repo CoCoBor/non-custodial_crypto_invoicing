@@ -7,6 +7,7 @@ import { swapView, type StoredSwapRecord } from "../invoice/swap-view.js";
 import { User } from "../database/users.model.js";
 import { WebhookEvent } from "../database/webhook-event.model.js";
 import { openSecret } from "../security/secret-envelope.js";
+import cryptos from "../storage/cryptos.json" with { type: "json" };
 
 export type WebhookPorts = {
   now: () => number;
@@ -81,7 +82,7 @@ const SWAP_FIELDS = [
   .join(" ");
 
 const INVOICE_FIELDS =
-  `invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer currency amount_fiat locked_rate paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out ${SWAP_FIELDS} -_id`;
+  `invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer currency amount_fiat locked_rate paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out payments transfers ${SWAP_FIELDS} -_id`;
 
 type InvoiceSummary = {
   invoice_id: string;
@@ -101,7 +102,15 @@ type InvoiceSummary = {
   received_amount?: string | null;
   tx?: { in?: string | null; out?: string | null; platform_out?: string | null } | null;
   swap?: StoredSwapRecord | null;
+  payments?: { txid: string; amount: string; first_seen_at: number; on_time: boolean }[] | null;
+  transfers?: { kind: string; txid: string; amount: string; status: string }[] | null;
 };
+
+// A token deposit's gas top-up is paid in its chain's own coin.
+function transferAsset(kind: string, depositAsset: string): string {
+  if (kind !== "gas_top_up") return depositAsset;
+  return cryptos[depositAsset as keyof typeof cryptos]?.chain.symbol ?? depositAsset;
+}
 
 function invoiceBody(invoice: InvoiceSummary) {
   return {
@@ -126,6 +135,19 @@ function invoiceBody(invoice: InvoiceSummary) {
       platformOut: invoice.tx?.platform_out ?? "",
     },
     swap: swapView(invoice.swap),
+    payments: (invoice.payments ?? []).map((p) => ({
+      txid: p.txid,
+      amount: p.amount,
+      firstSeenAt: new Date(p.first_seen_at).toISOString(),
+      onTime: p.on_time,
+    })),
+    transfers: (invoice.transfers ?? []).map((t) => ({
+      kind: t.kind,
+      txid: t.txid,
+      amount: t.amount,
+      asset: transferAsset(t.kind, invoice.crypto ?? ""),
+      status: t.status,
+    })),
   };
 }
 

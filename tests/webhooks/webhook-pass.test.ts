@@ -243,6 +243,54 @@ describe("turning status changes into webhooks", () => {
     assert.equal(olderBody.lockedRate, null);
   });
 
+  it("lists every payment and every transfer, so an invoice paid in parts can be reconciled", async () => {
+    const userId = await merchant();
+    const paidInParts = await invoiceOf(userId, "completed");
+    const unpaid = await invoiceOf(userId, "waiting");
+    await db.collection("invoices").updateOne(
+      { invoice_id: paidInParts },
+      {
+        $set: {
+          crypto: "usdteth",
+          to_crypto: "usdteth",
+          payments: [
+            { txid: "pay-1", amount: "60000", first_seen_at: NOW - 10 * MINUTE, confirmations: 3, on_time: true, payout: 0 },
+            { txid: "pay-2", amount: "40000", first_seen_at: NOW - 9 * MINUTE, confirmations: 2, on_time: true, payout: 0 },
+            { txid: "pay-late", amount: "7000", first_seen_at: NOW - MINUTE, confirmations: 1, on_time: false },
+          ],
+          transfers: [
+            { kind: "gas_top_up", to: "deposit", amount: "4200000000000000", txid: "gas-tx", status: "confirmed" },
+            { kind: "merchant_payout", to: "merchant", amount: "94300", txid: "out-tx", status: "confirmed" },
+            { kind: "platform_fee", to: "platform", amount: "5000", txid: "fee-tx", status: "confirmed" },
+            { kind: "refund_route", to: "refund", amount: "6650", txid: "route-tx", status: "pending", payout: 1 },
+          ],
+          "tx.in": "pay-1",
+        },
+      },
+    );
+
+    await runWebhookPass(ports());
+
+    const body = JSON.parse(forInvoice(paidInParts)[0]!.body);
+    assert.deepEqual(body.payments, [
+      { txid: "pay-1", amount: "60000", firstSeenAt: new Date(NOW - 10 * MINUTE).toISOString(), onTime: true },
+      { txid: "pay-2", amount: "40000", firstSeenAt: new Date(NOW - 9 * MINUTE).toISOString(), onTime: true },
+      { txid: "pay-late", amount: "7000", firstSeenAt: new Date(NOW - MINUTE).toISOString(), onTime: false },
+    ]);
+    // A token deposit's gas top-up is in the chain's own coin.
+    assert.deepEqual(body.transfers, [
+      { kind: "gas_top_up", txid: "gas-tx", amount: "4200000000000000", asset: "eth", status: "confirmed" },
+      { kind: "merchant_payout", txid: "out-tx", amount: "94300", asset: "usdteth", status: "confirmed" },
+      { kind: "platform_fee", txid: "fee-tx", amount: "5000", asset: "usdteth", status: "confirmed" },
+      { kind: "refund_route", txid: "route-tx", amount: "6650", asset: "usdteth", status: "pending" },
+    ]);
+    assert.deepEqual(body.txids, { in: "pay-1", out: "", platformOut: "" }, "the old fields stay");
+
+    const unpaidBody = JSON.parse(forInvoice(unpaid)[0]!.body);
+    assert.deepEqual(unpaidBody.payments, []);
+    assert.deepEqual(unpaidBody.transfers, []);
+  });
+
   it("sends nothing for a merchant without a webhook URL", async () => {
     const invoiceId = await invoiceOf(await merchant(""), "confirmed");
 
