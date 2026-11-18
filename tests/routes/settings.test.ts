@@ -14,6 +14,10 @@ const BTC_ADDRESS = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
 const ETH_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 const TRON_ADDRESS = "TVzYu8aczxtWAF2JmcEZEUapsYqtUWDU1p";
 const XMR_ADDRESS = "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A";
+// From Monero's tests/functional_tests/validate_address.py.
+const XMR_SUBADDRESS = "8AsN91rznfkBGTY8psSNkJBg9SZgxxGGRUhGwRptBhgr5XSQ1XzmA9m8QAnoxydecSh5aLJXdrgXwTDMMZ1AuXsN1EX5Mtm";
+const XMR_STAGENET_ADDRESS = "53teqCAESLxeJ1REzGMAat1ZeHvuajvDiXqboEocPaDRRmqWoVPzy46GLo866qRFjbNhfkNckyhST3WEvBviDwpUDd7DSzB";
+const XMR_INTEGRATED_ADDRESS = "4BxSHvcgTwu25WooY4BVmgdcKwZu5EksVZSZkDd6ooxSVVqQ4ubxXkhLF6hEqtw96i9cf3cVfLw8UWe95bdDKfRQeYtPwLm1Jiw7AKt2LY";
 
 let baseUrl: string;
 let db: Db;
@@ -135,20 +139,41 @@ describe("payout and refund addresses", () => {
       assert.equal(hex.body.error.code, "ADDRESS_INVALID");
       assert.equal((await user(m.userId))?.[field].usdttrx, TRON_ADDRESS);
     });
-  }
 
-  it("says a chain without payout code is not supported yet", async () => {
-    const m = await merchant();
+    it(`saves a Monero ${kind} address (standard or subaddress), and refuses stagenet and integrated ones`, async () => {
+      const m = await merchant();
 
-    const response = await patch("/settings/payout-addresses", m.cookie, {
-      asset: "xmr",
-      address: XMR_ADDRESS,
-      totpCode: await m.code(),
+      const standard = await patch(`/settings/${kind}-addresses`, m.cookie, {
+        asset: "xmr",
+        address: XMR_ADDRESS,
+        totpCode: await m.code(),
+      });
+      const subaddress = await patch(`/settings/${kind}-addresses`, m.cookie, {
+        asset: "xmr",
+        address: XMR_SUBADDRESS,
+        totpCode: await m.code(),
+      });
+      const stagenet = await patch(`/settings/${kind}-addresses`, m.cookie, {
+        asset: "xmr",
+        address: XMR_STAGENET_ADDRESS,
+        totpCode: await m.code(),
+      });
+
+      const integrated = await patch(`/settings/${kind}-addresses`, m.cookie, {
+        asset: "xmr",
+        address: XMR_INTEGRATED_ADDRESS,
+        totpCode: await m.code(),
+      });
+
+      assert.equal(standard.status, 200);
+      assert.equal(subaddress.status, 200);
+      assert.equal(stagenet.status, 409);
+      assert.equal(stagenet.body.error.code, "ADDRESS_INVALID");
+      assert.equal(integrated.status, 409);
+      assert.equal(integrated.body.error.code, "ADDRESS_INVALID");
+      assert.equal((await user(m.userId))?.[field].xmr, XMR_SUBADDRESS);
     });
-
-    assert.equal(response.status, 409);
-    assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
-  });
+  }
 
   it("clears an address with an empty string, still with a TOTP code", async () => {
     const m = await merchant();

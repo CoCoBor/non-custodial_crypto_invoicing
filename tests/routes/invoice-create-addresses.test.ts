@@ -102,6 +102,7 @@ const VALID_NOT_PAYABLE_YET: [asset: string, address: string, label: string][] =
   ["ton", "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_", "non-bounceable"],
   ["usdtton", "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_", "jetton"],
   ["usdttrx", "TVzYu8aczxtWAF2JmcEZEUapsYqtUWDU1p", "Tron"],
+  ["xmr", "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A", "Monero"],
 ];
 
 const WRONG_CHAIN: [asset: string, address: string, label: string][] = [
@@ -114,6 +115,7 @@ const WRONG_CHAIN: [asset: string, address: string, label: string][] = [
   ["btc", "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx", "a testnet Bitcoin address"],
   ["btc", "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyv", "a Bitcoin address with a bad checksum"],
   ["eth", "0x0000000000000000000000000000000000000000", "the Ethereum zero address"],
+  ["xmr", "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", "a Bitcoin address for XMR"],
 ];
 
 describe("creating an invoice checks the payout address for the coin's own chain", () => {
@@ -156,18 +158,6 @@ describe("creating an invoice checks the payout address for the coin's own chain
     assert.equal(result.status, 400);
     assert.equal(result.code, "INVALID_REQUEST");
   });
-
-  for (const [asset, address] of [
-    ["xmr", "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"],
-  ]) {
-    it(`says ${asset} payouts are not supported yet, rather than blaming the address`, async () => {
-      const merchantKey = await merchantWithPayoutAddress(asset, address);
-      const result = await createInvoice(merchantKey, asset);
-
-      assert.equal(result.status, 409);
-      assert.equal(result.code, "PAYOUT_NOT_SUPPORTED");
-    });
-  }
 
   for (const underpaid of [0, 2.5, 5]) {
     it(`accepts an underpaid tolerance of ${underpaid}%`, async () => {
