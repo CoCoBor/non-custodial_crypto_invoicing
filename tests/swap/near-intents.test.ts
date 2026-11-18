@@ -199,11 +199,13 @@ describe("a 1Click quote", () => {
   });
 });
 
+const REF = { provider: "near_intents", depositAddress: "x" };
+
 describe("a 1Click status", () => {
   it("asks by deposit address, with the JWT", async () => {
     const { swap, calls } = adapter(200, fixture("status-built-processing.json"));
 
-    await swap.status("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+    await swap.status({ provider: "near_intents", depositAddress: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq" });
 
     assert.equal(calls[0]!.url, "https://1click.chaindefuser.com/v0/status?depositAddress=bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
     assert.equal(calls[0]!.headers.authorization, "Bearer test-jwt");
@@ -211,7 +213,7 @@ describe("a 1Click status", () => {
 
   it("reads a swap in progress", async () => {
     const { swap } = adapter(200, fixture("status-built-processing.json"));
-    const status = await swap.status("x");
+    const status = await swap.status(REF);
     assert.equal(status?.status, "PROCESSING");
     assert.deepEqual(status?.deliveryTxids, []);
     assert.deepEqual(status?.originTxids, ["9b1a4f0c3e2d5b6a7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"]);
@@ -219,7 +221,7 @@ describe("a 1Click status", () => {
 
   it("reads a success: the amount out and the transactions that delivered it", async () => {
     const { swap } = adapter(200, fixture("status-built-success.json"));
-    const status = await swap.status("x");
+    const status = await swap.status(REF);
     assert.equal(status?.status, "SUCCESS");
     assert.equal(status?.amountOut, 64_400_000n);
     assert.equal(status?.refundedAmount, 0n);
@@ -228,18 +230,18 @@ describe("a 1Click status", () => {
 
   it("reads a refund: how much went back, and why", async () => {
     const { swap } = adapter(200, fixture("status-built-refunded.json"));
-    const status = await swap.status("x");
+    const status = await swap.status(REF);
     assert.equal(status?.status, "REFUNDED");
     assert.equal(status?.refundedAmount, 98_100n);
     assert.equal(status?.refundReason, "PARTIAL_DEPOSIT");
   });
 
   it("answers undefined for an unknown deposit address, an error or an unreadable reply", async () => {
-    assert.equal(await adapter(404, { message: "Deposit address not found" }).swap.status("x"), undefined);
-    assert.equal(await adapter(500, "oops").swap.status("x"), undefined);
+    assert.equal(await adapter(404, { message: "Deposit address not found" }).swap.status(REF), undefined);
+    assert.equal(await adapter(500, "oops").swap.status(REF), undefined);
     const bad = fixture("status-built-success.json") as Record<string, unknown>;
     bad.status = "DONE";
-    assert.equal(await adapter(200, bad).swap.status("x"), undefined);
+    assert.equal(await adapter(200, bad).swap.status(REF), undefined);
   });
 });
 
@@ -247,7 +249,7 @@ describe("telling 1Click about the deposit (start)", () => {
   it("submits the deposit transaction's hash for the deposit address", async () => {
     const { swap, calls } = adapter(200, fixture("status-built-processing.json"));
 
-    assert.equal(await swap.start({ depositAddress: "bc1qdeposit", txid: "abc123" }), true);
+    assert.equal(await swap.start({ provider: "near_intents", depositAddress: "bc1qdeposit", txid: "abc123" }), true);
 
     assert.equal(calls[0]!.url, "https://1click.chaindefuser.com/v0/deposit/submit");
     assert.equal(calls[0]!.method, "POST");
@@ -255,6 +257,6 @@ describe("telling 1Click about the deposit (start)", () => {
   });
 
   it("reports false when NEAR refuses it; it is only a hint", async () => {
-    assert.equal(await adapter(400, { message: "unknown" }).swap.start({ depositAddress: "a", txid: "b" }), false);
+    assert.equal(await adapter(400, { message: "unknown" }).swap.start({ provider: "near_intents", depositAddress: "a", txid: "b" }), false);
   });
 });

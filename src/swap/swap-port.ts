@@ -1,15 +1,14 @@
 import type { AssetId } from "../assets/payout-address.js";
 
 // The seam between the invoice lifecycle and a swap provider (spec: "Swap:
-// quote, start and status"). NEAR Intents 1Click (src/swap/near.ts) is the
-// real one. Ticket 24 adds Exolix for XMR on either side: it implements this
-// same port, and the composition in src/app.ts / the watcher picks the
-// provider whose `supports(from, to)` is true. Rules: docs/domain.md
-// ("Swap mode").
+// quote, start and status"). Two providers implement it: NEAR Intents 1Click
+// (src/swap/near.ts) and Exolix (src/swap/exolix.ts, XMR on either side).
+// The app and the watcher use the router (src/swap/router.ts), itself a
+// SwapPort, which picks the provider. Rules: docs/domain.md ("Swap mode").
 //
 // Money is bigint in each asset's smallest unit.
 
-export type SwapProvider = "near_intents";
+export type SwapProvider = "near_intents" | "exolix";
 
 export type SwapRequest = {
   from: AssetId;
@@ -26,13 +25,15 @@ export type SwapRequest = {
 
 export type SwapQuote = {
   provider: SwapProvider;
+  /** The provider's own id for this swap, when it looks swaps up by id (Exolix). */
+  swapId?: string;
   /** Send exactly `amountIn` of `from` here. */
   depositAddress: string;
   amountIn: bigint;
   amountOut: bigint;
   minAmountOut: bigint;
-  /** Unix ms. A deposit that arrives later is refunded. */
-  deadline: number;
+  /** Unix ms. A deposit that arrives later is refunded. Undefined: the provider names none. */
+  deadline?: number;
   /** The provider's whole reply, kept for disputes. */
   record: unknown;
 };
@@ -71,14 +72,22 @@ export type SwapStatus = {
   deliveryTxids: string[];
 };
 
+/** Which swap a status or start call is about, as stored with it. */
+export type SwapRef = {
+  /** The stored provider. Swaps saved before ticket 24 may have "": NEAR's. */
+  provider: string;
+  depositAddress: string;
+  /** The quote's `swapId`, for a provider that looks swaps up by id. */
+  swapId?: string;
+};
+
 export type SwapPort = {
-  provider: SwapProvider;
   /** Can this provider swap `from` into `to`? No network call. */
   supports: (from: AssetId, to: AssetId) => boolean;
   /** A real quote: it opens a deposit address for exactly `amountIn`. */
   quote: (request: SwapRequest) => Promise<QuoteAnswer>;
   /** Tells the provider the deposit was sent (a hint that can speed it up). */
-  start: (deposit: { depositAddress: string; txid: string }) => Promise<boolean>;
+  start: (deposit: SwapRef & { txid: string }) => Promise<boolean>;
   /** undefined: the lookup failed; ask again later. */
-  status: (depositAddress: string) => Promise<SwapStatus | undefined>;
+  status: (swap: SwapRef) => Promise<SwapStatus | undefined>;
 };

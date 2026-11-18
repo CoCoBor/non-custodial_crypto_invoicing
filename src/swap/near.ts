@@ -91,8 +91,6 @@ export function createNearIntentsSwap(deps: {
   }
 
   return {
-    provider: "near_intents",
-
     supports: (from, to) => from !== to && nearAssetId(from) !== undefined && nearAssetId(to) !== undefined,
 
     async quote(request: SwapRequest): Promise<QuoteAnswer> {
@@ -172,7 +170,7 @@ export function createNearIntentsSwap(deps: {
       return reply?.ok === true;
     },
 
-    async status(depositAddress): Promise<SwapStatus | undefined> {
+    async status({ depositAddress }): Promise<SwapStatus | undefined> {
       const reply = await call(`/v0/status?${new URLSearchParams({ depositAddress })}`, { method: "GET", timeoutMs: 10_000 });
       if (!reply?.ok) {
         if (reply) console.warn("NEAR swap status request failed:", reply.status, depositAddress);

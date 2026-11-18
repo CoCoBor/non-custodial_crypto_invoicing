@@ -12,7 +12,7 @@ import { Invoice } from "../database/invoices.model.js";
 import { User } from "../database/users.model.js";
 import { splitPayout } from "../money/payout-split.js";
 import { LATE_PAYMENT_NOTE_PREFIX } from "../swap/near.js";
-import type { SwapPort } from "../swap/swap-port.js";
+import type { SwapPort, SwapRef } from "../swap/swap-port.js";
 import {
   depositKeyOf,
   destinationAmount,
@@ -30,7 +30,7 @@ import {
   type LedgerPayment,
   type Sweep,
 } from "./payment-ledger.js";
-import { hintSwapStart, maxLossOf, payIntoSwap, seenDelivery, swapRecord } from "./swap-payout.js";
+import { hintSwapStart, maxLossOf, payIntoSwap, quoteRef, seenDelivery, swapRecord, swapRefOf } from "./swap-payout.js";
 import { ROUTE_GRACE_MS } from "./watch-window.js";
 
 export { watchUntil } from "./watch-window.js";
@@ -74,6 +74,8 @@ export async function closedInvoicesToWatch(now: number, assets: string[]) {
 }
 
 type StoredSwap = {
+  provider?: string | null;
+  provider_swap_id?: string | null;
   deposit_address: string;
   recipient: string;
   receive_crypto: string;
@@ -387,7 +389,12 @@ async function startSwapRoute(
     });
   }
   const run: RouteRun = {
-    route: { n, destination: answer.quote?.depositAddress ?? destination.recipient, source: "swap_to_receive_coin" },
+    route: {
+      n,
+      destination: answer.quote?.depositAddress ?? destination.recipient,
+      source: "swap_to_receive_coin",
+      ...(answer.quote ? { swapRef: quoteRef(answer.quote) } : {}),
+    },
     ...saver,
   };
   await recordRouteResult(watch, run, answer.result);
@@ -434,7 +441,14 @@ type RouteSaver = {
 };
 
 type RouteRun = Omit<RouteSaver, "save"> & {
-  route: { n: number; destination: string; source: StoredRoute["source"]; started_at?: number };
+  route: {
+    n: number;
+    destination: string;
+    source: StoredRoute["source"];
+    started_at?: number;
+    /** A swap route's swap, when it was quoted in this run. */
+    swapRef?: SwapRef;
+  };
 };
 
 function routeSaver(
@@ -605,7 +619,9 @@ async function recordRouteResult(watch: Watch, run: RouteRun, result: PayoutResu
         watch.version += 1;
         console.log(isSwap ? "Refund route reached the swap:" : "Refund route paid:", invoice.invoice_id, n);
         const deposit = result.transfers.find((t) => t.kind === "swap_deposit");
-        if (isSwap && deposit) await hintSwapStart(watch.ports.swap, deposit.to, deposit.txid);
+        const storedSwap = invoice.refund_routes.find((r) => r.n === n)?.swap;
+        const swapRef = run.route.swapRef ?? (storedSwap?.deposit_address ? swapRefOf(storedSwap) : undefined);
+        if (isSwap && deposit && swapRef?.depositAddress === deposit.to) await hintSwapStart(watch.ports.swap, swapRef, deposit.txid);
       }
       return;
     }
@@ -675,7 +691,7 @@ async function followRouteSwap(watch: Watch, stored: StoredRoute): Promise<void>
       review_reason: withLateNote(invoice, `Refund route ${stored.n} reached a swap but has no swap record (a bug or a manual DB edit). Check deposit address ${invoice.address} and the swap provider before sending anything.`),
     });
   }
-  const reply = await watch.ports.swap.status(swap.deposit_address);
+  const reply = await watch.ports.swap.status(swapRefOf(swap));
   if (reply === undefined) return await save(watch, {});
 
   const p = "refund_routes.$.";

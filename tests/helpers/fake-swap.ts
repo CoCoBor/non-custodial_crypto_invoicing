@@ -1,12 +1,12 @@
 import type { AssetId } from "../../src/assets/payout-address.js";
-import type { QuoteAnswer, SwapPort, SwapRequest, SwapStatus } from "../../src/swap/swap-port.js";
+import type { QuoteAnswer, SwapPort, SwapRef, SwapRequest, SwapStatus } from "../../src/swap/swap-port.js";
 
 /** A swap port that must not be used: for passes over invoices with no swap. */
 export function unusedSwap(): SwapPort {
   const never = async (): Promise<never> => {
     throw new Error("this test makes no swap");
   };
-  return { provider: "near_intents", supports: () => true, quote: never, start: never, status: never };
+  return { supports: () => true, quote: never, start: never, status: never };
 }
 
 /**
@@ -16,12 +16,11 @@ export function unusedSwap(): SwapPort {
  */
 export function fakeSwap(options: { now: () => number; answer?: (request: SwapRequest) => QuoteAnswer | undefined }) {
   const quotes: SwapRequest[] = [];
-  const starts: { depositAddress: string; txid: string }[] = [];
+  const starts: (SwapRef & { txid: string })[] = [];
   const statuses = new Map<string, SwapStatus | "lookup fails">();
   let counter = 0;
 
   const port: SwapPort = {
-    provider: "near_intents",
     supports: (from: AssetId, to: AssetId) => from !== to && from !== "xmr" && to !== "xmr",
     quote: async (request) => {
       quotes.push(request);
@@ -45,7 +44,7 @@ export function fakeSwap(options: { now: () => number; answer?: (request: SwapRe
       starts.push(deposit);
       return true;
     },
-    status: async (depositAddress) => {
+    status: async ({ depositAddress }) => {
       const status = statuses.get(depositAddress);
       if (status === "lookup fails") return undefined;
       return status ?? { status: "PENDING_DEPOSIT", originTxids: [], deliveryTxids: [] };

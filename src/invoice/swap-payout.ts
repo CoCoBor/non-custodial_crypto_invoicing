@@ -8,7 +8,7 @@ import type {
 } from "../chains/adapter.js";
 import { User } from "../database/users.model.js";
 import { splitPayout } from "../money/payout-split.js";
-import type { SwapPort, SwapQuote } from "../swap/swap-port.js";
+import type { SwapPort, SwapQuote, SwapRef } from "../swap/swap-port.js";
 
 // Paying a deposit into a swap, and proving the swap delivered. Shared by the
 // merchant payout (invoice.watcher.ts) and the refund route's swap to the
@@ -166,11 +166,12 @@ export async function seenDelivery(input: {
 export function swapRecord(quote: SwapQuote, receiveAsset: string, recipient: string): Record<string, unknown> {
   return {
     provider: quote.provider,
+    provider_swap_id: quote.swapId ?? "",
     deposit_address: quote.depositAddress,
     recipient,
     receive_crypto: receiveAsset,
     status: "PENDING_DEPOSIT",
-    deadline: new Date(quote.deadline).toISOString(),
+    deadline: quote.deadline === undefined ? "" : new Date(quote.deadline).toISOString(),
     amount_in: quote.amountIn.toString(),
     min_amount_out: quote.minAmountOut.toString(),
     amount_delivered: "0",
@@ -199,12 +200,26 @@ export async function maxLossOf(invoice: { swap_max_loss_bps?: number | null; us
   return valid(merchant?.swap_max_loss_bps) ? merchant.swap_max_loss_bps : DEFAULT_SWAP_MAX_LOSS_BPS;
 }
 
+/** Which swap a stored swap record is, for the port's status and start. */
+export function swapRefOf(swap: { provider?: string | null; deposit_address: string; provider_swap_id?: string | null }): SwapRef {
+  return {
+    provider: swap.provider ?? "",
+    depositAddress: swap.deposit_address,
+    ...(swap.provider_swap_id ? { swapId: swap.provider_swap_id } : {}),
+  };
+}
+
+/** The same for a quote that was just saved. */
+export function quoteRef(quote: SwapQuote): SwapRef {
+  return { provider: quote.provider, depositAddress: quote.depositAddress, ...(quote.swapId !== undefined ? { swapId: quote.swapId } : {}) };
+}
+
 /** Tells the provider the deposit was sent. Only a hint: it finds the deposit without it. */
-export async function hintSwapStart(swap: SwapPort, depositAddress: string, txid: string): Promise<void> {
+export async function hintSwapStart(swap: SwapPort, ref: SwapRef, txid: string): Promise<void> {
   try {
-    if (!(await swap.start({ depositAddress, txid }))) console.warn("Swap provider did not take the deposit hint:", depositAddress);
+    if (!(await swap.start({ ...ref, txid }))) console.warn("Swap provider did not take the deposit hint:", ref.depositAddress);
   } catch (error) {
-    console.warn("Swap deposit hint failed:", depositAddress, error instanceof Error ? error.message : error);
+    console.warn("Swap deposit hint failed:", ref.depositAddress, error instanceof Error ? error.message : error);
   }
 }
 

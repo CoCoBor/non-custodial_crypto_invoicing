@@ -61,7 +61,8 @@ const transferSchema = new Schema(
 // amount_in and amount_refunded in the deposit coin, the others in the receive
 // coin. See "Swap mode" in docs/domain.md.
 const swapFields = {
-  provider: { type: String, default: "" }, // "near_intents"
+  provider: { type: String, default: "" }, // "near_intents" or "exolix"; "" on some swaps saved before ticket 24 means NEAR
+  provider_swap_id: { type: String, default: "" }, // the provider's own id (Exolix looks swaps up by it)
   deposit_address: { type: String, default: "" },
   recipient: { type: String, default: "" },
   receive_crypto: { type: String, default: "" },

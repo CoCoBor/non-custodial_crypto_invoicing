@@ -286,7 +286,7 @@ describe("a swap-mode invoice paid in BTC, received in USDC", () => {
     await t.pass();
     await t.pass(); // the deposit transfer is proven
     assert.equal((await invoiceNow(invoiceId))?.status, "processing");
-    assert.deepEqual(t.swap.starts, [{ depositAddress: "swap-deposit-1", txid: "btc-tx-1" }], "told the provider the deposit was sent");
+    assert.deepEqual(t.swap.starts, [{ provider: "near_intents", depositAddress: "swap-deposit-1", txid: "btc-tx-1" }], "told the provider the deposit was sent");
 
     t.swap.setStatus("swap-deposit-1", { status: "SUCCESS", amountOut: 650_000n, deliveryTxids: ["0xABCDEF01"] });
     t.chain.deliver(MERCHANT_USDC, "0xabcdef01", 649_990n);
