@@ -262,6 +262,7 @@ describe("turning status changes into webhooks", () => {
             { kind: "gas_top_up", to: "deposit", amount: "4200000000000000", txid: "gas-tx", status: "confirmed" },
             { kind: "merchant_payout", to: "merchant", amount: "94300", txid: "out-tx", status: "confirmed" },
             { kind: "platform_fee", to: "platform", amount: "5000", txid: "fee-tx", status: "confirmed" },
+            { kind: "gas_sweep", to: "gas-wallet", amount: "1300000000000000", txid: "sweep-tx", status: "confirmed" },
             { kind: "refund_route", to: "refund", amount: "6650", txid: "route-tx", status: "pending", payout: 1 },
           ],
           "tx.in": "pay-1",
@@ -277,11 +278,12 @@ describe("turning status changes into webhooks", () => {
       { txid: "pay-2", amount: "40000", firstSeenAt: new Date(NOW - 9 * MINUTE).toISOString(), onTime: true },
       { txid: "pay-late", amount: "7000", firstSeenAt: new Date(NOW - MINUTE).toISOString(), onTime: false },
     ]);
-    // A token deposit's gas top-up is in the chain's own coin.
+    // A token deposit's gas top-up, and the sweep of its unused gas, are in the chain's own coin.
     assert.deepEqual(body.transfers, [
       { kind: "gas_top_up", txid: "gas-tx", amount: "4200000000000000", asset: "eth", status: "confirmed" },
       { kind: "merchant_payout", txid: "out-tx", amount: "94300", asset: "usdteth", status: "confirmed" },
       { kind: "platform_fee", txid: "fee-tx", amount: "5000", asset: "usdteth", status: "confirmed" },
+      { kind: "gas_sweep", txid: "sweep-tx", amount: "1300000000000000", asset: "eth", status: "confirmed" },
       { kind: "refund_route", txid: "route-tx", amount: "6650", asset: "usdteth", status: "pending" },
     ]);
     assert.deepEqual(body.txids, { in: "pay-1", out: "", platformOut: "" }, "the old fields stay");

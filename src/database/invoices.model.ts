@@ -53,7 +53,7 @@ const transferSchema = new Schema(
   {
     kind: {
       type: String,
-      enum: ["gas_top_up", "merchant_payout", "platform_fee", "refund_route", "swap_deposit"],
+      enum: ["gas_top_up", "gas_sweep", "merchant_payout", "platform_fee", "refund_route", "swap_deposit"],
       required: true,
     },
     to: { type: String, required: true },

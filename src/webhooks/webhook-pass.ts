@@ -115,9 +115,9 @@ type InvoiceSummary = {
   transfers?: { kind: string; txid: string; amount: string; status: string }[] | null;
 };
 
-// A token deposit's gas top-up is paid in its chain's own coin.
+// A token deposit's gas top-up, and the sweep of its unused gas, are in its chain's own coin.
 function transferAsset(kind: string, depositAsset: string): string {
-  if (kind !== "gas_top_up") return depositAsset;
+  if (kind !== "gas_top_up" && kind !== "gas_sweep") return depositAsset;
   return cryptos[depositAsset as keyof typeof cryptos]?.chain.symbol ?? depositAsset;
 }
 

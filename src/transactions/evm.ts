@@ -195,7 +195,7 @@ async function broadcast(rpc: EvmRpc, chain: EvmChain, signed: SignedTx): Promis
 // ---------- Signing ----------
 
 const signedTxSchema = z.object({
-  kind: z.enum(["gas_top_up", "merchant_payout", "platform_fee", "refund_route", "swap_deposit"]),
+  kind: z.enum(["gas_top_up", "gas_sweep", "merchant_payout", "platform_fee", "refund_route", "swap_deposit"]),
   to: z.string(),
   amount: z.string().regex(/^[0-9]+$/),
   nonce: z.number().int().nonnegative(),

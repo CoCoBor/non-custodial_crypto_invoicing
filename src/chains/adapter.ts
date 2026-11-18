@@ -40,6 +40,8 @@ export type ChainPayment = {
 
 export type TransferKind =
   | "gas_top_up"
+  /** Unused gas coin sent from the deposit back to the gas wallet, in the chain's own coin. */
+  | "gas_sweep"
   | "merchant_payout"
   | "platform_fee"
   | "refund_route"
