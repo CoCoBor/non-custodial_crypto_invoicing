@@ -12,11 +12,16 @@ export type FxRate = { rate: string; at: number };
 /** USD → fiat rates from one provider, keyed by lowercase ISO code. */
 export type FxTable = { at: number; rates: Partial<Record<FiatCode, string>> };
 
-// Both providers update once a day; 48 hours allows one missed update.
-export const FX_MAX_AGE_MS = 48 * 60 * 60 * 1000;
+// Owner decision 2026-11-19: fetch every 48 hours. Both providers update once
+// a day, so a fetched rate can already be up to a day old by the provider's
+// time; 72 hours covers that.
+export const FX_REFRESH_MS = 48 * 60 * 60 * 1000;
+export const FX_MAX_AGE_MS = 72 * 60 * 60 * 1000;
+// Fetch again no later than this long before a rate would be refused, so
+// failed fetches get this long of retries first.
+const FX_REFRESH_MARGIN_MS = 6 * 60 * 60 * 1000;
+const FX_RETRY_MS = 5 * 60 * 1000;
 const FX_MAX_FUTURE_MS = 5 * 60 * 1000;
-const CACHE_MS = 60 * 60 * 1000;
-const FAILURE_CACHE_MS = 5 * 60 * 1000;
 
 export function isFreshFxRate(rate: FxRate, now: number): boolean {
   return now - rate.at <= FX_MAX_AGE_MS && rate.at - now <= FX_MAX_FUTURE_MS;
@@ -97,8 +102,10 @@ export const CURRENCY_API_URLS = [
 /**
  * The USD → fiat port: ExchangeRate-API's keyed plan when a key is set, then
  * the keyless currency-api on jsDelivr, then its Cloudflare Pages mirror. A
- * source's table is cached for an hour (a failure for 5 minutes); the first
- * fresh rate wins. undefined: no source has a fresh rate.
+ * source is fetched again 48 hours after a good fetch (sooner if its rates
+ * would come within 6 hours of the 72-hour limit), and 5 minutes after a
+ * failed one, which keeps its last good table; the first fresh rate wins.
+ * undefined: no source has a fresh rate.
  */
 export function createUsdToFiat(options: {
   apiKey?: string;
@@ -118,7 +125,7 @@ export function createUsdToFiat(options: {
       : []),
     ...CURRENCY_API_URLS.map((url) => ({ url, parse: parseCurrencyApi })),
   ];
-  const cache = new Map<FxSource, { table: Promise<FxTable | undefined>; until: number | undefined }>();
+  const states = new Map<FxSource, { good?: FxTable; nextFetchAt: number; loading?: Promise<void> }>();
 
   async function load(source: FxSource): Promise<FxTable | undefined> {
     try {
@@ -133,19 +140,29 @@ export function createUsdToFiat(options: {
     }
   }
 
-  function tableOf(source: FxSource): Promise<FxTable | undefined> {
-    const cached = cache.get(source);
-    if (cached && (cached.until === undefined || now() < cached.until)) return cached.table;
-
-    const entry: { table: Promise<FxTable | undefined>; until: number | undefined } = {
-      table: load(source),
-      until: undefined,
-    };
-    cache.set(source, entry);
-    void entry.table.then((table) => {
-      entry.until = now() + (table ? CACHE_MS : FAILURE_CACHE_MS);
-    });
-    return entry.table;
+  async function tableOf(source: FxSource): Promise<FxTable | undefined> {
+    let state = states.get(source);
+    if (!state) {
+      state = { nextFetchAt: 0 };
+      states.set(source, state);
+    }
+    if (!state.loading && now() >= state.nextFetchAt) {
+      const current = state;
+      current.loading = load(source).then((table) => {
+        const fetchedAt = now();
+        if (table && (!current.good || table.at >= current.good.at)) current.good = table;
+        current.nextFetchAt =
+          table && current.good
+            ? Math.max(
+                fetchedAt + FX_RETRY_MS,
+                Math.min(fetchedAt + FX_REFRESH_MS, current.good.at + FX_MAX_AGE_MS - FX_REFRESH_MARGIN_MS),
+              )
+            : fetchedAt + FX_RETRY_MS;
+        current.loading = undefined;
+      });
+    }
+    if (state.loading) await state.loading;
+    return state.good;
   }
 
   return async (currency) => {

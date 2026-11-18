@@ -27,6 +27,9 @@ const NOV_17 = Date.UTC(2026, 10, 17);
 const NOV_18 = Date.UTC(2026, 10, 18);
 const KEY = "fake-key-0000";
 const ER_URL = `https://v6.exchangerate-api.com/v6/${KEY}/latest/USD`;
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+const erSampleAt = (ms: number) => ER_SAMPLE.replace("1585267200,", `${ms / 1000},`);
 
 describe("parsing the providers' replies", () => {
   it("reads all 11 non-USD codes from the recorded currency-api reply, digit for digit", () => {
@@ -122,7 +125,7 @@ describe("the USD → fiat port", () => {
     );
   });
 
-  it("refuses the primary's rates once they are older than 48 hours, and uses the fallback", async () => {
+  it("refuses the primary's rates once they are older than 72 hours, and uses the fallback", async () => {
     const { fetchFn } = fakeFetch({ [ER_URL]: ER_SAMPLE, [CURRENCY_API_URLS[0]]: JSDELIVR });
     const getUsdToFiat = createUsdToFiat({ apiKey: KEY, fetch: fetchFn, now: () => NOV_18 });
 
@@ -146,20 +149,76 @@ describe("the USD → fiat port", () => {
     assert.equal(await getUsdToFiat("eur"), undefined);
   });
 
-  it("caches a source's reply for an hour", async () => {
-    let clock = NOV_18;
-    const { fetchFn, asked } = fakeFetch({ [CURRENCY_API_URLS[0]]: JSDELIVR });
-    const getUsdToFiat = createUsdToFiat({ fetch: fetchFn, now: () => clock });
+  it("asks ExchangeRate-API again 48 hours after a fetch, and not before", async () => {
+    let clock = NOV_18 + HOUR;
+    const { fetchFn, asked } = fakeFetch({ [ER_URL]: erSampleAt(NOV_18) });
+    const getUsdToFiat = createUsdToFiat({ apiKey: KEY, fetch: fetchFn, now: () => clock });
 
     await getUsdToFiat("eur");
-    await getUsdToFiat("ngn");
-    clock += 59 * 60 * 1000;
-    await getUsdToFiat("php");
+    await getUsdToFiat("gbp");
+    clock += 48 * HOUR - 1;
+    assert.deepEqual(await getUsdToFiat("eur"), { rate: "0.9013", at: NOV_18 });
+    assert.deepEqual(asked, [ER_URL]);
+
+    clock += 1;
+    await getUsdToFiat("eur");
+    assert.deepEqual(asked, [ER_URL, ER_URL]);
+  });
+
+  it("asks sooner when the provider's own update time would bring the rate within 6 hours of the 72-hour limit", async () => {
+    let clock = NOV_18 + 20 * HOUR;
+    const { fetchFn, asked } = fakeFetch({ [ER_URL]: erSampleAt(NOV_18) });
+    const getUsdToFiat = createUsdToFiat({ apiKey: KEY, fetch: fetchFn, now: () => clock });
+
+    await getUsdToFiat("eur");
+    clock = NOV_18 + 66 * HOUR - 1;
+    await getUsdToFiat("eur");
     assert.equal(asked.length, 1);
 
-    clock += 2 * 60 * 1000;
-    await getUsdToFiat("php");
+    clock += 1;
+    await getUsdToFiat("eur");
     assert.equal(asked.length, 2);
+  });
+
+  it("after a failed refresh keeps the last good rate, without the fallbacks, and tries again 5 minutes later", async () => {
+    let clock = NOV_18 + HOUR;
+    const replies: Record<string, string | number> = { [ER_URL]: erSampleAt(NOV_18), [CURRENCY_API_URLS[0]]: JSDELIVR };
+    const { fetchFn, asked } = fakeFetch(replies);
+    const getUsdToFiat = createUsdToFiat({ apiKey: KEY, fetch: fetchFn, now: () => clock });
+
+    await getUsdToFiat("eur");
+    replies[ER_URL] = 500;
+    clock += 48 * HOUR;
+    assert.deepEqual(await getUsdToFiat("eur"), { rate: "0.9013", at: NOV_18 });
+    assert.deepEqual(asked, [ER_URL, ER_URL]);
+
+    clock += 5 * MINUTE - 1;
+    assert.deepEqual(await getUsdToFiat("eur"), { rate: "0.9013", at: NOV_18 });
+    assert.equal(asked.length, 2);
+
+    replies[ER_URL] = erSampleAt(NOV_18 + 48 * HOUR);
+    clock += 1;
+    assert.deepEqual(await getUsdToFiat("eur"), { rate: "0.9013", at: NOV_18 + 48 * HOUR });
+    assert.deepEqual(asked, [ER_URL, ER_URL, ER_URL]);
+  });
+
+  it("accepts a rate up to 72 hours old by the provider's time, and refuses it after", async () => {
+    let clock = NOV_18 + HOUR;
+    const replies: Record<string, string | number> = {
+      [ER_URL]: erSampleAt(NOV_18),
+      [CURRENCY_API_URLS[0]]: 503,
+      [CURRENCY_API_URLS[1]]: 503,
+    };
+    const { fetchFn } = fakeFetch(replies);
+    const getUsdToFiat = createUsdToFiat({ apiKey: KEY, fetch: fetchFn, now: () => clock });
+
+    await getUsdToFiat("eur");
+    replies[ER_URL] = 500;
+    clock = NOV_18 + 72 * HOUR;
+    assert.deepEqual(await getUsdToFiat("eur"), { rate: "0.9013", at: NOV_18 });
+
+    clock += 1;
+    assert.equal(await getUsdToFiat("eur"), undefined);
   });
 
   it("answers 1 for USD without asking anyone, and nothing for a code outside the list", async () => {
