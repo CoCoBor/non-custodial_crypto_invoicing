@@ -8,6 +8,14 @@ import type { ChainAdapter, ChainPayment, PayoutRequest, PayoutResult } from "..
 import { connectToMongoDb, disconnectFromMongoDB } from "../../src/infrastructure/database/mongodb.js";
 import { runWatcherPass, type WatcherPorts } from "../../src/invoice/invoice.watcher.js";
 import { splitPayout } from "../../src/money/payout-split.js";
+import { sealSecret } from "../../src/security/secret-envelope.js";
+import {
+  refundRouteEventId,
+  refundRouteSwapEventId,
+  runWebhookPass,
+  statusEventId,
+  swapEventId,
+} from "../../src/webhooks/webhook-pass.js";
 import { fakeSwap } from "../helpers/fake-swap.js";
 
 // Swap mode in a watcher pass: a BTC deposit swapped into USDC on Ethereum,
@@ -39,6 +47,7 @@ beforeEach(async () => {
 after(async () => {
   await db.collection("invoices").deleteMany({ invoice_id: { $in: invoiceIds } });
   await db.collection("users").deleteMany({ user_id: { $in: userIds } });
+  await db.collection("webhook_events").deleteMany({ invoiceId: { $in: invoiceIds } });
   await disconnectFromMongoDB();
 });
 
@@ -599,5 +608,103 @@ describe("a swap saved before ticket 15 (BTC deposit, USDC payout, fixed mode)",
     const invoice = await invoiceNow(invoiceId);
     assert.equal(invoice?.status, "failed");
     assert.match(invoice?.review_reason ?? "", /back to UQplatform, not to the deposit address/);
+  });
+});
+
+describe("swap status changes in the merchant's webhook outbox", () => {
+  async function merchantWithWebhook() {
+    const userId = await merchant();
+    await db.collection("users").updateOne(
+      { user_id: userId },
+      { $set: { webhook_url: "https://shop.example/hook", webhook_secret: sealSecret("webhook-secret", "whsec_swap_test") } },
+    );
+    return userId;
+  }
+
+  const posted: string[] = [];
+  const webhookPass = async (now: number) =>
+    await runWebhookPass({
+      now: () => now,
+      isAllowedDestination: async () => true,
+      post: async (_url, init) => {
+        posted.push(String(init?.body));
+        return new Response(null, { status: 200 });
+      },
+    });
+
+  async function outbox(invoiceId: string) {
+    const events = await db.collection("webhook_events").find({ invoiceId }).sort({ _id: 1 }).toArray();
+    return events.map((e) => ({ eventId: e.eventId as string, body: JSON.parse(e.payload as string) }));
+  }
+
+  it("announces the swap, its refund, the fallback swap and its delivery once each, under unique ids", async () => {
+    const t = setUp();
+    const { invoiceId, address, payment } = await confirmedSwapInvoice(await merchantWithWebhook());
+    t.chain.paid(address, payment);
+    const step = async () => {
+      await t.pass();
+      await webhookPass(t.now());
+    };
+
+    await step(); // quoted, paid into the swap
+    await step(); // the deposit transfer is proven
+    t.swap.setStatus("swap-deposit-1", { status: "REFUNDED", refundedAmount: 92_000n, refundReason: "slippage" });
+    await step();
+    t.chain.pay(address, "provider-refund-1", 92_000n);
+    await step(); // no BTC refund or payout address: the fallback swap is quoted
+    await step(); // its deposit transfer is proven
+    t.swap.setStatus("swap-deposit-2", { status: "SUCCESS", deliveryTxids: ["0x0bad"] });
+    t.chain.deliver(MERCHANT_USDC, "0x0bad", 590_000n);
+    await step();
+    await step(); // nothing new
+
+    const events = await outbox(invoiceId);
+    const ids = events.map((e) => e.eventId);
+    assert.equal(new Set(ids).size, ids.length, "every event id is unique");
+    for (const id of [
+      swapEventId(invoiceId, 1),
+      swapEventId(invoiceId, 2),
+      statusEventId(invoiceId, "processing", "failed"),
+      refundRouteSwapEventId(invoiceId, 1, 1),
+      refundRouteSwapEventId(invoiceId, 1, 2),
+      refundRouteEventId(invoiceId, 1),
+    ]) {
+      assert.ok(ids.includes(id), `missing ${id} in ${ids.join(", ")}`);
+    }
+    assert.equal(ids.filter((id) => id.includes(":swap:")).length, 4, "no swap change announced twice");
+
+    const byId = (id: string) => events.find((e) => e.eventId === id)!.body;
+    assert.equal(byId(swapEventId(invoiceId, 1)).swap.amountIn, INTO_SWAP.toString());
+    assert.equal(byId(swapEventId(invoiceId, 2)).swap.status, "REFUNDED");
+    assert.equal(byId(swapEventId(invoiceId, 2)).swap.amountRefunded, "92000");
+    assert.equal(byId(refundRouteSwapEventId(invoiceId, 1, 1)).refundRoute.swap.amountIn, "86400");
+    assert.equal(byId(refundRouteSwapEventId(invoiceId, 1, 2)).refundRoute.swap.amountDelivered, "590000");
+    assert.equal(byId(refundRouteEventId(invoiceId, 1)).refundRoute.amount, "86400");
+    assert.equal(
+      posted.filter((body) => JSON.parse(body).invoiceId === invoiceId).length,
+      events.length,
+      "each event was posted once",
+    );
+  });
+
+  it("announces a swap's delivered amount when it completes", async () => {
+    const t = setUp();
+    const { invoiceId, address, payment } = await confirmedSwapInvoice(await merchantWithWebhook());
+    t.chain.paid(address, payment);
+    await t.pass();
+    await t.pass();
+    t.swap.setStatus("swap-deposit-1", { status: "SUCCESS", deliveryTxids: ["0xfeed"] });
+    t.chain.deliver(MERCHANT_USDC, "0xfeed", 650_000n);
+    await t.pass();
+
+    await webhookPass(t.now());
+
+    const events = await outbox(invoiceId);
+    const completed = events.find((e) => e.eventId === statusEventId(invoiceId, "", "completed"))?.body;
+    assert.equal(completed?.swap.amountDelivered, "650000");
+    assert.equal(completed?.merchantAmount, "650000");
+    const changed = events.find((e) => e.eventId === swapEventId(invoiceId, 2))?.body;
+    assert.equal(changed?.swap.status, "SUCCESS");
+    assert.equal(changed?.swap.amountDelivered, "650000");
   });
 });

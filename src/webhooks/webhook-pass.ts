@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { Invoice } from "../database/invoices.model.js";
 import { askedAmount } from "../invoice/payment-rules.js";
 import { lockedRateView, priceView, type LockedRate } from "../invoice/pricing.js";
+import { swapView, type StoredSwapRecord } from "../invoice/swap-view.js";
 import { User } from "../database/users.model.js";
 import { WebhookEvent } from "../database/webhook-event.model.js";
 import { openSecret } from "../security/secret-envelope.js";
@@ -18,14 +19,16 @@ const RETRY_DELAYS_MS = [1, 5, 30, 120].map((minutes) => minutes * 60_000);
 const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
 
 /**
- * Records new invoice statuses, outcome changes and paid refund routes as
- * events, then sends the events that are due.
+ * Records new invoice statuses, outcome changes, paid refund routes and swap
+ * status changes as events, then sends the events that are due.
  */
 export async function runWebhookPass(ports: WebhookPorts): Promise<void> {
   const now = ports.now();
   await recordStatusChanges(now);
   await recordOutcomeChanges(now);
   await recordRefundRoutes(now);
+  await recordSwapChanges(now);
+  await recordRefundRouteSwapChanges(now);
   await deliverDueEvents(ports);
 }
 
@@ -48,8 +51,37 @@ export function refundRouteEventId(invoiceId: string, route: number): string {
   return `${invoiceId}:refund_route:${route}`;
 }
 
+/** One event per swap status change, counted by the swap's version. */
+export function swapEventId(invoiceId: string, swapVersion: number): string {
+  return `${invoiceId}:swap:${swapVersion}`;
+}
+
+/** One event per status change of a refund route's swap (the fallback swap to the receive coin). */
+export function refundRouteSwapEventId(invoiceId: string, route: number, swapVersion: number): string {
+  return `${invoiceId}:refund_route:${route}:swap:${swapVersion}`;
+}
+
+const SWAP_FIELDS = [
+  "provider",
+  "deposit_address",
+  "recipient",
+  "receive_crypto",
+  "status",
+  "deadline",
+  "amount_in",
+  "min_amount_out",
+  "amount_delivered",
+  "amount_refunded",
+  "refund_reason",
+  "destination_txids",
+  "version",
+  "notified_version",
+]
+  .map((field) => `swap.${field}`)
+  .join(" ");
+
 const INVOICE_FIELDS =
-  "invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer currency amount_fiat locked_rate paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out -_id";
+  `invoice_id user_id status notified_status outcome outcome_version notified_outcome_version crypto to_crypto amount asked_amount fee_paid_by_payer currency amount_fiat locked_rate paid_amount platform_fee network_fee received_amount tx.in tx.out tx.platform_out ${SWAP_FIELDS} -_id`;
 
 type InvoiceSummary = {
   invoice_id: string;
@@ -68,6 +100,7 @@ type InvoiceSummary = {
   network_fee?: string | null;
   received_amount?: string | null;
   tx?: { in?: string | null; out?: string | null; platform_out?: string | null } | null;
+  swap?: StoredSwapRecord | null;
 };
 
 function invoiceBody(invoice: InvoiceSummary) {
@@ -92,6 +125,7 @@ function invoiceBody(invoice: InvoiceSummary) {
       out: invoice.tx?.out ?? "",
       platformOut: invoice.tx?.platform_out ?? "",
     },
+    swap: swapView(invoice.swap),
   };
 }
 
@@ -237,7 +271,7 @@ async function recordRefundRoutes(now: number): Promise<void> {
               destination: route.destination,
               destinationSource: route.source,
               amount: transfers
-                .filter((t) => t.kind === "refund_route")
+                .filter((t) => t.kind === "refund_route" || t.kind === "swap_deposit")
                 .reduce((sum, t) => sum + BigInt(t.amount), 0n)
                 .toString(),
               platformFee: route.platform_fee,
@@ -246,6 +280,7 @@ async function recordRefundRoutes(now: number): Promise<void> {
               payments: (invoice.payments ?? [])
                 .filter((p) => p.payout === route.n)
                 .map((p) => ({ txid: p.txid, amount: p.amount, onTime: p.on_time })),
+              swap: swapView(route.swap),
             },
           },
           now,
@@ -254,6 +289,83 @@ async function recordRefundRoutes(now: number): Promise<void> {
       await Invoice.updateOne(
         { invoice_id: invoice.invoice_id, refund_routes: { $elemMatch: { n: route.n, notified: { $ne: true } } } },
         { $set: { "refund_routes.$.notified": true } },
+      ).exec();
+    }
+  }
+}
+
+const swapChanged = (path: string) => ({
+  $gt: [{ $ifNull: [`${path}.version`, 0] }, { $ifNull: [`${path}.notified_version`, 0] }],
+});
+
+// The watcher bumps swap.version on each provider status change it saves
+// (and once when the swap is quoted). Two changes between passes are
+// announced once, with the latest state, under the latest version.
+async function recordSwapChanges(now: number): Promise<void> {
+  const changed = await Invoice.find({ $expr: swapChanged("$swap") }).select(INVOICE_FIELDS).lean().exec();
+
+  for (const invoice of changed) {
+    const version = invoice.swap?.version ?? 0;
+    if (await hasWebhook(invoice.user_id)) {
+      const eventId = swapEventId(invoice.invoice_id, version);
+      await recordEvent({
+        eventId,
+        userId: invoice.user_id,
+        invoiceId: invoice.invoice_id,
+        status: invoice.status ?? "",
+        payload: { event: "invoice.swap_changed", eventId, ...invoiceBody(invoice) },
+        now,
+      });
+    }
+    await Invoice.updateOne({ invoice_id: invoice.invoice_id }, { $max: { "swap.notified_version": version } }).exec();
+  }
+}
+
+async function recordRefundRouteSwapChanges(now: number): Promise<void> {
+  const invoices = await Invoice.find({
+    $expr: {
+      $anyElementTrue: [{ $map: { input: { $ifNull: ["$refund_routes", []] }, as: "r", in: swapChanged("$$r.swap") } }],
+    },
+  })
+    .select("invoice_id user_id status outcome crypto refund_routes -_id")
+    .lean()
+    .exec();
+
+  for (const invoice of invoices) {
+    const webhook = await hasWebhook(invoice.user_id);
+    for (const route of invoice.refund_routes ?? []) {
+      const version = route.swap?.version ?? 0;
+      if (version <= (route.swap?.notified_version ?? 0)) continue;
+      if (webhook) {
+        const eventId = refundRouteSwapEventId(invoice.invoice_id, route.n, version);
+        await recordEvent({
+          eventId,
+          userId: invoice.user_id,
+          invoiceId: invoice.invoice_id,
+          status: invoice.status ?? "",
+          payload: {
+            event: "invoice.refund_route_swap_changed",
+            eventId,
+            invoiceId: invoice.invoice_id,
+            status: invoice.status ?? "",
+            outcome: invoice.outcome ?? "",
+            crypto: invoice.crypto,
+            refundRoute: {
+              number: route.n,
+              state: route.state,
+              destination: route.destination,
+              destinationSource: route.source,
+              platformFee: route.platform_fee,
+              networkFee: route.network_fee,
+              swap: swapView(route.swap),
+            },
+          },
+          now,
+        });
+      }
+      await Invoice.updateOne(
+        { invoice_id: invoice.invoice_id, "refund_routes.n": route.n },
+        { $max: { "refund_routes.$.swap.notified_version": version } },
       ).exec();
     }
   }

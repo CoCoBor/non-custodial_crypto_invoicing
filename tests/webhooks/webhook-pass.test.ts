@@ -15,8 +15,10 @@ import { sealSecret } from "../../src/security/secret-envelope.js";
 import {
   outcomeEventId,
   refundRouteEventId,
+  refundRouteSwapEventId,
   runWebhookPass,
   statusEventId,
+  swapEventId,
   type WebhookPorts,
 } from "../../src/webhooks/webhook-pass.js";
 
@@ -401,6 +403,7 @@ describe("announcing what happens to money after an invoice closed", () => {
       networkFee: "1000",
       txids: ["route-tx"],
       payments: [{ txid: "tx-late", amount: "50000", onTime: false }],
+      swap: null,
     });
     const stored = await db.collection("invoices").findOne({ invoice_id: invoiceId });
     assert.equal(stored?.refund_routes?.[0]?.notified, true);
@@ -427,5 +430,241 @@ describe("announcing what happens to money after an invoice closed", () => {
     const stored = await db.collection("invoices").findOne({ invoice_id: invoiceId });
     assert.equal(stored?.notified_outcome_version, 1);
     assert.equal(stored?.refund_routes?.[0]?.notified, true);
+  });
+});
+
+describe("announcing swap status changes", () => {
+  const SWAP = {
+    provider: "near_intents",
+    deposit_address: "swap-deposit-1",
+    recipient: "0xmerchant",
+    receive_crypto: "usdceth",
+    status: "PENDING_DEPOSIT",
+    deadline: "2026-11-18T12:00:00.000Z",
+    amount_in: "94000",
+    min_amount_out: "560000",
+    amount_delivered: "0",
+    amount_refunded: "0",
+    refund_reason: "",
+    destination_txids: [],
+    version: 1,
+    notified_version: 0,
+  };
+
+  /** A swap-mode invoice paid into a swap, its status already announced. */
+  async function swapInvoice(userId: string, swap: Record<string, unknown> = {}, fields: Record<string, unknown> = {}) {
+    const invoiceId = await invoiceOf(userId, "processing");
+    await db.collection("invoices").updateOne(
+      { invoice_id: invoiceId },
+      { $set: { notified_status: "processing", mode: "swap", to_crypto: "usdceth", swap: { ...SWAP, ...swap }, ...fields } },
+    );
+    return invoiceId;
+  }
+
+  const bodies = (invoiceId: string) => forInvoice(invoiceId).map((r) => JSON.parse(r.body));
+
+  it("sends the swap's start once, with the provider, the deposit address and the amount sent in", async () => {
+    const invoiceId = await swapInvoice(await merchant());
+
+    await runWebhookPass(ports());
+    await runWebhookPass(ports(NOW + MINUTE));
+
+    const requests = forInvoice(invoiceId);
+    assert.equal(requests.length, 1);
+    assert.ok(signatureIsValid(requests[0]!), "bad signature");
+    const body = JSON.parse(requests[0]!.body);
+    assert.equal(body.event, "invoice.swap_changed");
+    assert.equal(body.eventId, swapEventId(invoiceId, 1));
+    assert.equal(body.status, "processing");
+    assert.equal(body.swap.provider, "near_intents");
+    assert.equal(body.swap.depositAddress, "swap-deposit-1");
+    assert.equal(body.swap.status, "PENDING_DEPOSIT");
+    assert.equal(body.swap.amountIn, "94000");
+    assert.equal((await db.collection("invoices").findOne({ invoice_id: invoiceId }))?.swap?.notified_version, 1);
+  });
+
+  it("sends each later swap status under a new id: the delivered amount, then nothing more", async () => {
+    const invoiceId = await swapInvoice(await merchant());
+    await runWebhookPass(ports());
+    await db.collection("invoices").updateOne(
+      { invoice_id: invoiceId },
+      {
+        $set: {
+          status: "completed",
+          received_amount: "590000",
+          "swap.status": "SUCCESS",
+          "swap.amount_delivered": "590000",
+          "swap.destination_txids": ["0xfeed"],
+          "swap.version": 2,
+        },
+      },
+    );
+
+    await runWebhookPass(ports(NOW + MINUTE));
+    await runWebhookPass(ports(NOW + 2 * MINUTE));
+
+    const sent = bodies(invoiceId);
+    assert.deepEqual(sent.map((b) => b.eventId), [
+      swapEventId(invoiceId, 1),
+      statusEventId(invoiceId, "processing", "completed"),
+      swapEventId(invoiceId, 2),
+    ]);
+    const completed = sent[1]!;
+    assert.equal(completed.swap.amountDelivered, "590000", "the status event carries the swap too");
+    const delivered = sent[2]!;
+    assert.equal(delivered.swap.status, "SUCCESS");
+    assert.equal(delivered.swap.amountDelivered, "590000");
+    assert.deepEqual(delivered.swap.deliveryTxids, ["0xfeed"]);
+  });
+
+  it("sends a refunded swap with the amount refunded and the provider's reason", async () => {
+    const invoiceId = await swapInvoice(await merchant(), {
+      status: "REFUNDED",
+      amount_refunded: "92000",
+      refund_reason: "slippage",
+      version: 3,
+      notified_version: 2,
+    });
+
+    await runWebhookPass(ports());
+
+    const [body] = bodies(invoiceId).filter((b) => b.event === "invoice.swap_changed");
+    assert.equal(body?.eventId, swapEventId(invoiceId, 3));
+    assert.equal(body?.swap.status, "REFUNDED");
+    assert.equal(body?.swap.amountRefunded, "92000");
+    assert.equal(body?.swap.refundReason, "slippage");
+  });
+
+  it("records a swap change once even if the last pass stopped before marking it announced", async () => {
+    const userId = await merchant();
+    const invoiceId = await swapInvoice(userId);
+    await db.collection("webhook_events").insertOne({
+      eventId: swapEventId(invoiceId, 1),
+      userId,
+      invoiceId,
+      status: "processing",
+      payload: JSON.stringify({ invoiceId, event: "invoice.swap_changed" }),
+      attempts: 0,
+      nextAttemptAt: new Date(NOW),
+      deliveredAt: null,
+      failedAt: null,
+    });
+
+    await runWebhookPass(ports());
+
+    assert.equal(await db.collection("webhook_events").countDocuments({ invoiceId }), 1);
+    assert.equal(forInvoice(invoiceId).length, 1);
+  });
+
+  it("records nothing for a merchant without a webhook URL, and does not replay it later", async () => {
+    const userId = await merchant("");
+    const invoiceId = await swapInvoice(userId);
+
+    await runWebhookPass(ports());
+
+    assert.equal(await db.collection("webhook_events").countDocuments({ invoiceId }), 0);
+    assert.equal((await db.collection("invoices").findOne({ invoice_id: invoiceId }))?.swap?.notified_version, 1);
+  });
+
+  describe("a fallback swap of refunded money (refund routing's swap to the receive coin)", () => {
+    const ROUTE = {
+      n: 1,
+      destination: "swap-deposit-2",
+      source: "swap_to_receive_coin",
+      state: "swapping",
+      swept: "92000",
+      platform_fee: "4600",
+      network_fee: "1000",
+      started_at: NOW - MINUTE,
+      settled_at: null,
+      notified: false,
+      swap: { ...SWAP, deposit_address: "swap-deposit-2", amount_in: "86400" },
+    };
+    const ROUTE_TRANSFERS = [
+      { kind: "swap_deposit", to: "swap-deposit-2", amount: "86400", txid: "route-tx", status: "confirmed", payout: 1 },
+      { kind: "platform_fee", to: "platform", amount: "4600", txid: "route-tx", status: "confirmed", payout: 1 },
+    ];
+
+    /** A failed swap invoice whose own swap and status were already announced. */
+    async function withRoute(userId: string, route: Record<string, unknown>) {
+      return await swapInvoice(
+        userId,
+        { status: "REFUNDED", amount_refunded: "92000", version: 2, notified_version: 2 },
+        { status: "failed", notified_status: "failed", refund_routes: [route], transfers: ROUTE_TRANSFERS },
+      );
+    }
+
+    it("sends the fallback swap's start once, with the route number and the swap", async () => {
+      const invoiceId = await withRoute(await merchant(), ROUTE);
+
+      await runWebhookPass(ports());
+      await runWebhookPass(ports(NOW + MINUTE));
+
+      const sent = bodies(invoiceId);
+      assert.equal(sent.length, 1);
+      const body = sent[0]!;
+      assert.equal(body.event, "invoice.refund_route_swap_changed");
+      assert.equal(body.eventId, refundRouteSwapEventId(invoiceId, 1, 1));
+      assert.equal(body.status, "failed");
+      assert.equal(body.refundRoute.number, 1);
+      assert.equal(body.refundRoute.state, "swapping");
+      assert.equal(body.refundRoute.destinationSource, "swap_to_receive_coin");
+      assert.equal(body.refundRoute.swap.depositAddress, "swap-deposit-2");
+      assert.equal(body.refundRoute.swap.amountIn, "86400");
+      const stored = await db.collection("invoices").findOne({ invoice_id: invoiceId });
+      assert.equal(stored?.refund_routes?.[0]?.swap?.notified_version, 1);
+    });
+
+    it("sends a refunded fallback swap with the amount refunded", async () => {
+      const invoiceId = await withRoute(await merchant(), {
+        ...ROUTE,
+        state: "refunded",
+        swap: { ...ROUTE.swap, status: "REFUNDED", amount_refunded: "85000", version: 2, notified_version: 1 },
+      });
+
+      await runWebhookPass(ports());
+
+      const [body] = bodies(invoiceId);
+      assert.equal(body?.eventId, refundRouteSwapEventId(invoiceId, 1, 2));
+      assert.equal(body?.refundRoute.state, "refunded");
+      assert.equal(body?.refundRoute.swap.status, "REFUNDED");
+      assert.equal(body?.refundRoute.swap.amountRefunded, "85000");
+    });
+
+    it("sends a delivered fallback swap as a swap change and as a paid route, which counts the money sent into the swap", async () => {
+      const invoiceId = await withRoute(await merchant(), {
+        ...ROUTE,
+        state: "paid",
+        settled_at: NOW,
+        swap: { ...ROUTE.swap, status: "SUCCESS", amount_delivered: "590000", destination_txids: ["0x0bad"], version: 2, notified_version: 1 },
+      });
+
+      await runWebhookPass(ports());
+
+      const sent = bodies(invoiceId);
+      assert.deepEqual(sent.map((b) => b.eventId).sort(), [
+        refundRouteEventId(invoiceId, 1),
+        refundRouteSwapEventId(invoiceId, 1, 2),
+      ].sort());
+      const routed = sent.find((b) => b.event === "invoice.refund_routed")!;
+      assert.equal(routed.refundRoute.amount, "86400");
+      assert.equal(routed.refundRoute.swap.amountDelivered, "590000");
+      const changed = sent.find((b) => b.event === "invoice.refund_route_swap_changed")!;
+      assert.equal(changed.refundRoute.swap.status, "SUCCESS");
+      assert.equal(changed.refundRoute.swap.amountDelivered, "590000");
+    });
+
+    it("never gives two routes' swap changes the same id", async () => {
+      const invoiceId = await withRoute(await merchant(), ROUTE);
+      const second = { ...ROUTE, n: 2, destination: "swap-deposit-3", swap: { ...ROUTE.swap, deposit_address: "swap-deposit-3" } };
+      await db.collection("invoices").updateOne({ invoice_id: invoiceId }, { $set: { refund_routes: [ROUTE, second] } });
+
+      await runWebhookPass(ports());
+
+      assert.deepEqual(bodies(invoiceId).map((b) => b.eventId).sort(), [
+        refundRouteSwapEventId(invoiceId, 1, 1),
+        refundRouteSwapEventId(invoiceId, 2, 1),
+      ].sort());
+    });
   });
 });
