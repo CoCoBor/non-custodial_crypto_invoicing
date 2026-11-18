@@ -17,7 +17,8 @@ const BTC_ADDRESS = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
 const TON_ADDRESS = "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_";
 const LTC_ADDRESS = new litecore.PrivateKey().toAddress().toString();
 const SOL_ADDRESS = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5" }; // USD per coin
+const EVM_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500" }; // USD per coin
 
 let baseUrl: string;
 let db: Db;
@@ -140,6 +141,51 @@ describe("the merchant API", () => {
     assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
   });
 
+  it("creates a fixed-coin USDT-on-Ethereum invoice with an EVM deposit, paid out as the token", async () => {
+    const m = await merchant({ usdteth: EVM_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdteth", to_crypto: "usdteth" });
+
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "usdteth");
+    assert.equal(invoice?.to_crypto, "usdteth");
+    assert.equal(invoice?.to_address, EVM_ADDRESS);
+    assert.equal(invoice?.amount, "25000000"); // $25 at $1 = 25 USDT (6 decimals)
+    assert.match(invoice?.address ?? "", /^0x[0-9a-fA-F]{40}$/);
+    assert.ok(invoice?.private?.private_key);
+  });
+
+  it("creates a fixed-coin BNB invoice with a BSC deposit", async () => {
+    const m = await merchant({ bsc: EVM_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "bsc", to_crypto: "bsc" });
+
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "bsc");
+    assert.equal(invoice?.amount, "50000000000000000"); // $25 at $500/BNB = 0.05 BNB (18 decimals)
+    assert.match(invoice?.address ?? "", /^0x[0-9a-fA-F]{40}$/);
+  });
+
+  it("refuses a USDT-on-BSC invoice while that contract is unchecked", async () => {
+    const m = await merchant({ usdtbsc: EVM_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdtbsc", to_crypto: "usdtbsc" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "DEPOSIT_COIN_NOT_SUPPORTED");
+  });
+
+  it("refuses an ETH token deposit paid out as another coin", async () => {
+    const m = await merchant({ usdteth: EVM_ADDRESS, eth: EVM_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdteth", to_crypto: "eth" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
+  });
+
   it("refuses a fixed-coin invoice for a deposit coin with no chain adapter, rather than make a BTC one", async () => {
     const m = await merchant({ btc: BTC_ADDRESS, sol: SOL_ADDRESS });
 
@@ -171,6 +217,20 @@ describe("the merchant API", () => {
     assert.equal(invoice?.mode, "merchant_list");
     assert.equal(invoice?.address, "");
     assert.deepEqual([...invoice!.offered_coins].sort(), ["btc", "ltc", "ton"]);
+  });
+
+  it("offers ETH, its tokens and BNB on a merchant's-list invoice, and the payer can pick a token", async () => {
+    const m = await merchant({ eth: EVM_ADDRESS, usdteth: EVM_ADDRESS, usdcbsc: EVM_ADDRESS, bsc: EVM_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
+
+    const invoiceId: string = response.body.data.invoiceId;
+    assert.deepEqual([...(await invoiceInDb(invoiceId))!.offered_coins].sort(), ["bsc", "eth", "usdteth"]);
+    const choice = await postJson(`${baseUrl}/pay/${invoiceId}/choose`, { crypto: "usdteth" });
+    assert.equal(choice.status, 200, JSON.stringify(choice.body));
+    assert.equal(choice.body.data.payment.amount, "25000000");
+    assert.match(choice.body.data.payment.address, /^0x[0-9a-fA-F]{40}$/);
+    assert.equal((await invoiceInDb(invoiceId))?.to_address, EVM_ADDRESS);
   });
 
   it("can narrow the coins offered", async () => {
