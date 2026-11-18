@@ -3,6 +3,7 @@ import { isAddress as isSolAddress } from "@solana/kit";
 import { Address as TonAddress } from "@ton/core";
 import litecore from "bitcore-lib-ltc";
 import { getAddress, isAddress } from "ethers";
+import { isValidMoneroAddress } from "../chains/monero-address.js";
 // Type only: importing the module itself would loop (secret-envelope imports env).
 import { isValidTronAddress } from "../chains/tron-address.js";
 import type { SealedSecret } from "../security/secret-envelope.js";
@@ -149,6 +150,31 @@ export const env = Object.freeze({
     process.env.TRX_GAS_WALLET_KEY,
   ),
 
+  // XMR arrives in one platform wallet run by our own monero-wallet-rpc, a
+  // subaddress per invoice (docs/domain.md, "Monero adapter"). All optional
+  // so the server starts without them: without the wallet URL, XMR invoices
+  // can't be created; without the platform address, XMR payouts wait (with a
+  // review note). The login is the wallet's --rpc-login "user:password".
+  moneroWalletRpcUrl: readOptionalRpcUrl(
+    "MONERO_WALLET_RPC_URL",
+    process.env.MONERO_WALLET_RPC_URL,
+  ),
+  moneroWalletRpcLogin: readOptionalLogin(
+    "MONERO_WALLET_RPC_LOGIN",
+    process.env.MONERO_WALLET_RPC_LOGIN,
+  ),
+  // A monerod the payer-pays estimate asks for today's fee per byte
+  // (monero-wallet-rpc has no call for it). Without it, XMR payer-pays
+  // invoices are refused.
+  moneroDaemonRpcUrl: readOptionalRpcUrl(
+    "MONERO_DAEMON_RPC_URL",
+    process.env.MONERO_DAEMON_RPC_URL,
+  ),
+  platformXmrAddress: readOptionalMoneroAddress(
+    "PLATFORM_XMR_ADDRESS",
+    process.env.PLATFORM_XMR_ADDRESS,
+  ),
+
   nearIntentsJwt: readRequiredString("NEAR_INTENTS", process.env.NEAR_INTENTS),
 });
 
@@ -181,6 +207,48 @@ function readOptionalTronAddress(name: string, value: string | undefined): strin
     throw new Error(`${name} must be a valid mainnet Tron address (T…)`);
   }
   return address;
+}
+
+function readOptionalMoneroAddress(name: string, value: string | undefined): string | undefined {
+  const address = value?.trim();
+  if (!address) return undefined;
+  if (!isValidMoneroAddress(address)) {
+    throw new Error(`${name} must be a mainnet Monero standard address (4…) or subaddress (8…)`);
+  }
+  return address;
+}
+
+// The value is never put in an error: a URL can carry credentials.
+function readOptionalRpcUrl(name: string, value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    throw new Error(`${name} must be a URL like http://127.0.0.1:18083`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`${name} must be an http or https URL`);
+  }
+  if (url.username || url.password) {
+    throw new Error(`${name} must not contain a user or password; use the LOGIN setting`);
+  }
+  if (url.pathname === "/") url.pathname = "/json_rpc";
+  return url.toString();
+}
+
+function readOptionalLogin(
+  name: string,
+  value: string | undefined,
+): { username: string; password: string } | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  const colon = text.indexOf(":");
+  if (colon <= 0 || colon === text.length - 1) {
+    throw new Error(`${name} must look like "user:password"`);
+  }
+  return { username: text.slice(0, colon), password: text.slice(colon + 1) };
 }
 
 function readLtcAddress(name: string, value: string | undefined): string {
