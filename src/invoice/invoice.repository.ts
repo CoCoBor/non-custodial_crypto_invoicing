@@ -88,7 +88,16 @@ export async function createInvoice(input: {
   };
 }
 
-/** An invoice whose coin the payer picks later: no deposit address yet. */
+/** How the payer's coin reaches the merchant in swap mode: the receive coin directly, any other through a swap. */
+export function coinOptions(offeredCoins: string[], receiveCrypto: string) {
+  return offeredCoins.map((crypto) => ({ crypto, payout: crypto === receiveCrypto ? "direct" : "swap" }));
+}
+
+/**
+ * An invoice whose coin the payer picks later: no deposit address yet.
+ * merchant_list: the coin is paid out as itself. swap: it is swapped into
+ * `swap.receiveCrypto` (paid to `swap.receiveAddress`), except that coin itself.
+ */
 export async function createMerchantListInvoice(input: {
   userId: string;
   priceUnit: PriceUnit;
@@ -98,15 +107,18 @@ export async function createMerchantListInvoice(input: {
   underpaid: number;
   feePaidByPayer: boolean;
   feeRate: string;
+  swap?: { receiveCrypto: string; receiveAddress: string; maxLossBps: number };
 }) {
   const invoiceId = randomUUID();
   const now = Date.now();
+  const swap = input.swap;
 
   const result = await Invoice.create({
     invoice_id: invoiceId,
     user_id: input.userId,
     status: "waiting",
-    mode: "merchant_list",
+    mode: swap ? "swap" : "merchant_list",
+    ...(swap && { to_crypto: swap.receiveCrypto, to_address: swap.receiveAddress, swap_max_loss_bps: swap.maxLossBps }),
     fee_rate: input.feeRate,
     offered_coins: input.offeredCoins,
     currency: input.priceUnit,
@@ -129,6 +141,11 @@ export async function createMerchantListInvoice(input: {
     amountFiat: result.amount_fiat,
     price: priceView(result),
     offeredCoins: result.offered_coins,
+    ...(swap && {
+      receiveCrypto: result.to_crypto,
+      toAddress: result.to_address,
+      coinOptions: coinOptions(result.offered_coins, result.to_crypto),
+    }),
     feePaidByPayer: result.fee_paid_by_payer,
     lifetime: result.lifetime,
     createdAt: now,
@@ -136,10 +153,15 @@ export async function createMerchantListInvoice(input: {
   };
 }
 
-/** Records the payer's coin. False if one was already picked or the invoice is no longer waiting. */
+/**
+ * Records the payer's coin. False if one was already picked or the invoice is
+ * no longer waiting. `toCrypto` is the coin paid out: the chosen one, or in
+ * swap mode the receive coin.
+ */
 export async function recordChosenCoin(input: {
   invoiceId: string;
   crypto: string;
+  toCrypto: string;
   amount: bigint;
   askedAmount: bigint;
   lockedRate: LockedRate;
@@ -148,11 +170,11 @@ export async function recordChosenCoin(input: {
   now: number;
 }): Promise<boolean> {
   const result = await Invoice.updateOne(
-    { invoice_id: input.invoiceId, mode: "merchant_list", crypto: "", status: "waiting" },
+    { invoice_id: input.invoiceId, mode: { $in: ["merchant_list", "swap"] }, crypto: "", status: "waiting" },
     {
       $set: {
         crypto: input.crypto,
-        to_crypto: input.crypto,
+        to_crypto: input.toCrypto,
         amount: input.amount.toString(),
         asked_amount: input.askedAmount.toString(),
         locked_rate: input.lockedRate,

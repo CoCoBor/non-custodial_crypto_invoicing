@@ -28,11 +28,12 @@ export const requireMerchantKey: RequestHandler = async (
     });
   }
 
-  const { user_id, merchant_fee, payout_addresses } = user;
+  const { user_id, merchant_fee, payout_addresses, swap_max_loss_bps } = user;
   req.merchant = {
     user_id,
     merchant_fee,
     payout_addresses,
+    swap_max_loss_bps,
   };
   next();
 };

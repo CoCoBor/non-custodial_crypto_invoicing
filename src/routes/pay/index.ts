@@ -2,13 +2,13 @@ import { Router, type Response } from "express";
 import { z } from "zod";
 
 import type { AppDeps } from "../../app.js";
-import { checkPayoutAddress } from "../../assets/payout-address.js";
+import { checkPayoutAddress, isAssetId } from "../../assets/payout-address.js";
 import { Invoice } from "../../database/invoices.model.js";
 import { User } from "../../database/users.model.js";
 import { DepositUnavailableError } from "../../chains/adapter.js";
 import { adapterFor } from "../../chains/registry.js";
 import { cancelIfUnpaid } from "../../invoice/cancel.js";
-import { recordChosenCoin } from "../../invoice/invoice.repository.js";
+import { coinOptions, recordChosenCoin } from "../../invoice/invoice.repository.js";
 import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new-deposit.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
@@ -32,6 +32,7 @@ type PayerInvoice = {
   amount_fiat: string;
   locked_rate?: Partial<LockedRate> | null;
   crypto?: string | null;
+  to_crypto?: string | null;
   address?: string | null;
   amount: string;
   asked_amount?: string | null;
@@ -47,8 +48,12 @@ function expiresAt(invoice: PayerInvoice): number {
   return start + invoice.lifetime * 60 * 1000;
 }
 
+const PAYER_PICKS = ["merchant_list", "swap"];
+
 function payerView(invoice: PayerInvoice) {
   const chosen = Boolean(invoice.crypto);
+  const isSwapMode = invoice.mode === "swap";
+  const coins = PAYER_PICKS.includes(invoice.mode ?? "") && !chosen ? invoice.offered_coins ?? [] : [];
   return {
     invoiceId: invoice.invoice_id,
     status: invoice.status,
@@ -58,13 +63,18 @@ function payerView(invoice: PayerInvoice) {
     price: priceView(invoice),
     lockedRate: lockedRateView(invoice.locked_rate),
     expiresAt: new Date(expiresAt(invoice)).toISOString(),
-    coins: invoice.mode === "merchant_list" && !chosen ? invoice.offered_coins ?? [] : [],
+    coins,
+    ...(isSwapMode && {
+      receiveCrypto: invoice.to_crypto,
+      coinOptions: coinOptions(coins, invoice.to_crypto ?? ""),
+    }),
     payment: chosen
       ? {
           crypto: invoice.crypto,
           address: invoice.address,
           amount: askedAmount(invoice).toString(),
           paidAmount: invoice.paid_amount,
+          ...(isSwapMode && { swap: invoice.crypto !== invoice.to_crypto }),
         }
       : null,
   };
@@ -114,7 +124,7 @@ export function createPayRouter(deps: AppDeps) {
     const chain = adapterFor(parsed.data.crypto);
     const now = Date.now();
 
-    if (invoice.mode !== "merchant_list" || invoice.crypto) {
+    if (!PAYER_PICKS.includes(invoice.mode ?? "") || invoice.crypto) {
       return conflict(res, "COIN_ALREADY_CHOSEN", "the coin for this invoice is already set");
     }
     if (invoice.status !== "waiting" || now >= expiresAt(invoice)) {
@@ -125,13 +135,20 @@ export function createPayRouter(deps: AppDeps) {
     }
     const coin = chain.asset;
 
+    // The coin paid out: the chosen one, or in swap mode the receive coin
+    // (the chosen coin is swapped into it unless it is that coin).
+    const payoutCoin = invoice.mode === "swap" ? invoice.to_crypto ?? "" : coin;
+    if (!isAssetId(payoutCoin)) {
+      return conflict(res, "COIN_NOT_OFFERED", "this coin is not offered for this invoice");
+    }
+
     // The merchant's payout address as it is now: they may have changed it.
     const merchant = await User.findOne({ user_id: invoice.user_id })
       .select("payout_addresses merchant_fee")
       .lean()
       .exec();
-    const payoutAddress = merchant?.payout_addresses?.[coin];
-    if (!merchant || !payoutAddress || checkPayoutAddress(coin, payoutAddress) !== "valid") {
+    const payoutAddress = merchant?.payout_addresses?.[payoutCoin];
+    if (!merchant || !payoutAddress || checkPayoutAddress(payoutCoin, payoutAddress) !== "valid") {
       return conflict(res, "COIN_NOT_OFFERED", "this coin is not offered for this invoice");
     }
 
@@ -168,6 +185,7 @@ export function createPayRouter(deps: AppDeps) {
     const recorded = await recordChosenCoin({
       invoiceId: invoice.invoice_id,
       crypto: coin,
+      toCrypto: payoutCoin,
       amount: payment.amount,
       askedAmount: asked,
       lockedRate: payment.rate,

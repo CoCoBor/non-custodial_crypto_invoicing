@@ -10,6 +10,7 @@ import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.
 import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new-deposit.js";
 import { DepositUnavailableError } from "../../chains/adapter.js";
 import type { AppDeps } from "../../app.js";
+import { DEFAULT_SWAP_MAX_LOSS_BPS } from "../../invoice/swap-payout.js";
 
 const commonFields = {
   amount: z.string().trim().min(1).max(100),
@@ -32,6 +33,13 @@ const fixedCoinSchema = z.object({
 const merchantListSchema = z.object({
   ...commonFields,
   mode: z.literal("merchant_list"),
+  coins: z.array(z.enum(ASSET_IDS)).min(1).optional(),
+});
+
+const swapSchema = z.object({
+  ...commonFields,
+  mode: z.literal("swap"),
+  to_crypto: z.enum(ASSET_IDS),
   coins: z.array(z.enum(ASSET_IDS)).min(1).optional(),
 });
 
@@ -89,9 +97,9 @@ export function createInvoiceRouter(deps: AppDeps) {
         message: "merchant key is missing or invalid",
       });
 
-    return req.body?.mode === "merchant_list"
-      ? await createMerchantListInvoice(req, res, merchant)
-      : await createFixedCoinInvoice(req, res, merchant, deps);
+    if (req.body?.mode === "merchant_list") return await createMerchantListInvoice(req, res, merchant);
+    if (req.body?.mode === "swap") return await createSwapInvoice(req, res, merchant, deps);
+    return await createFixedCoinInvoice(req, res, merchant, deps);
   });
 
   return router;
@@ -143,13 +151,13 @@ async function createFixedCoinInvoice(
     });
   }
 
-  // The deposit below is BTC: an invoice whose payout coin a BTC deposit
-  // can't be paid out as would leave the payer's BTC stuck at the deposit.
+  // A fixed-coin deposit pays out only as itself; an invoice for another
+  // payout coin would leave the payer's coins stuck at the deposit.
   if (!chain.canPayOutAs(to_crypto)) {
     return res.status(409).json({
       error: {
         code: "PAYOUT_NOT_SUPPORTED",
-        message: `${to_crypto} payouts are not supported yet`,
+        message: `a fixed-coin invoice pays out in the coin paid (${chain.asset}); use mode "swap" to receive ${to_crypto}`,
       },
     });
   }
@@ -239,6 +247,62 @@ async function createMerchantListInvoice(req: Request, res: Response, merchant: 
     underpaid,
     feePaidByPayer: fee_paid_by_payer,
     feeRate: merchant.merchant_fee,
+  });
+
+  return res.status(201).json({ data: invoice });
+}
+
+// The payer picks any coin that can reach the merchant's receive coin: the
+// receive coin itself (paid out directly), or one the swap provider can swap
+// into it. Each needs a chain adapter, so it can be detected and paid out.
+async function createSwapInvoice(req: Request, res: Response, merchant: Merchant, deps: AppDeps) {
+  const parsed = swapSchema.safeParse(req.body);
+  if (!parsed.success) return invalidRequest(res);
+  const { lifetime, underpaid, coins, fee_paid_by_payer, to_crypto: receive } = parsed.data;
+  const price = parsePrice(res, parsed.data);
+  if (price === undefined) return res;
+
+  // XMR has no swap provider until ticket 24 (Exolix) adds one to the swap port.
+  const deposits = depositAssets();
+  const swappable = deposits.filter((coin) => coin !== receive && deps.swap.supports(coin, receive));
+  if (adapterFor(receive) === undefined || swappable.length === 0) {
+    return res.status(409).json({
+      error: { code: "RECEIVE_COIN_NOT_SUPPORTED", message: `swap mode can't pay out ${receive} yet` },
+    });
+  }
+
+  const receiveAddress = merchant.payout_addresses?.[receive];
+  if (!receiveAddress || checkPayoutAddress(receive, receiveAddress) !== "valid") {
+    return res.status(409).json({
+      error: { code: "PAYOUT_ADDRESS_REQUIRED", message: `save a valid ${receive} payout address first` },
+    });
+  }
+
+  const requested: readonly string[] = coins ?? deposits;
+  const offeredCoins = deposits.filter(
+    (coin) => requested.includes(coin) && (coin === receive || swappable.includes(coin)),
+  );
+  if (offeredCoins.length === 0) {
+    return res.status(409).json({
+      error: { code: "NO_COINS_AVAILABLE", message: `none of these coins can be paid out as ${receive}` },
+    });
+  }
+
+  const maxLoss = merchant.swap_max_loss_bps;
+  const invoice = await invoiceRepo.createMerchantListInvoice({
+    userId: merchant.user_id,
+    priceUnit: price.unit,
+    priceUnits: price.units,
+    offeredCoins,
+    lifetime,
+    underpaid,
+    feePaidByPayer: fee_paid_by_payer,
+    feeRate: merchant.merchant_fee,
+    swap: {
+      receiveCrypto: receive,
+      receiveAddress,
+      maxLossBps: Number.isInteger(maxLoss) && maxLoss >= 50 && maxLoss <= 500 ? maxLoss : DEFAULT_SWAP_MAX_LOSS_BPS,
+    },
   });
 
   return res.status(201).json({ data: invoice });

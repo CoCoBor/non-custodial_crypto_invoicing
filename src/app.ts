@@ -17,6 +17,8 @@ import type { FiatCode } from "./storage/currencies.js";
 import { env } from "./config/env.js";
 import { estimatePayoutNetworkCost } from "./invoice/network-cost.js";
 import { settingsRouter } from "./routes/settings/index.js";
+import { swapProvider } from "./swap/registry.js";
+import type { SwapPort } from "./swap/swap-port.js";
 // import { settlementRouter } from "./routes/settlement/index.js";
 
 /** The outside world the routes depend on, so a test can replace it. */
@@ -36,6 +38,8 @@ export type AppDeps = {
   estimateNetworkCost: (coin: AssetId) => Promise<bigint | "unsupported" | undefined>;
   /** The chain adapters a cancel asks for payments. */
   chains: ChainRegistry;
+  /** Which coins swap mode can take: only `supports` is used by the routes. */
+  swap: SwapPort;
 };
 
 const realDeps: AppDeps = {
@@ -43,6 +47,7 @@ const realDeps: AppDeps = {
   getUsdToFiat: createUsdToFiat({ apiKey: env.exchangeRateApiKey }),
   estimateNetworkCost: estimatePayoutNetworkCost,
   chains: chainAdapters,
+  swap: swapProvider,
 };
 
 export function createApp(overrides: Partial<AppDeps> = {}) {

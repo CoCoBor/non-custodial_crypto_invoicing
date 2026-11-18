@@ -9,7 +9,7 @@ declare global{
                 userId: string
                 expiresAt: Date
             }
-            merchant?: Pick<UserData,"user_id"|"merchant_fee"|"payout_addresses">
+            merchant?: Pick<UserData,"user_id"|"merchant_fee"|"payout_addresses"|"swap_max_loss_bps">
         }
     }
 }

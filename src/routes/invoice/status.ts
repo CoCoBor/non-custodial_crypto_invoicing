@@ -4,6 +4,7 @@ import { requireMerchantKey } from "../../middleware/require-merchant-key.js";
 import { findInvoiceById } from "../../invoice/invoice.function.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
 import { lockedRateView, priceView } from "../../invoice/pricing.js";
+import { swapView } from "../../invoice/swap-view.js";
 
 export const invoiceStatusRouter = Router();
 
@@ -57,6 +58,7 @@ invoiceStatusRouter.get("/:id", requireMerchantKey, async (req, res) => {
     data: {
       invoiceId: invoice.invoice_id,
       status: invoice.status,
+      mode: invoice.mode,
       currency: invoice.currency,
       crypto: invoice.crypto,
       amount: invoice.amount,
@@ -70,6 +72,7 @@ invoiceStatusRouter.get("/:id", requireMerchantKey, async (req, res) => {
       lifetime: invoice.lifetime,
       createdAt: invoice.timestamps?.created ?? null,
       payout,
+      swap: swapView(invoice.swap),
     },
   });
 
