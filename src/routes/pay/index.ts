@@ -5,10 +5,12 @@ import type { AppDeps } from "../../app.js";
 import { checkPayoutAddress } from "../../assets/payout-address.js";
 import { Invoice } from "../../database/invoices.model.js";
 import { User } from "../../database/users.model.js";
+import { DepositUnavailableError } from "../../chains/adapter.js";
 import { adapterFor } from "../../chains/registry.js";
 import { cancelIfUnpaid } from "../../invoice/cancel.js";
 import { recordChosenCoin } from "../../invoice/invoice.repository.js";
 import { intToDecimalStr } from "../../invoice/money.function.js";
+import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new-deposit.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
 import { askedAmount } from "../../invoice/payment-rules.js";
 import { getUsdToCrypto } from "../../invoice/price.function.js";
@@ -159,7 +161,8 @@ export function createPayRouter(deps: AppDeps) {
     });
     if (typeof asked !== "bigint") return refuseWithoutEstimate(res, coin, asked);
 
-    const deposit = await chain.newDeposit();
+    const deposit = await newDepositOrUnavailable(chain);
+    if (deposit instanceof DepositUnavailableError) return refuseWithoutDeposit(res, deposit);
     const recorded = await recordChosenCoin({
       invoiceId: invoice.invoice_id,
       crypto: coin,

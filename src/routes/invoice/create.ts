@@ -9,6 +9,8 @@ import { adapterFor, depositAssets } from "../../chains/registry.js";
 import { toleranceBasisPoints } from "../../invoice/payment-rules.js";
 import { decimalStrToBigInt } from "../../invoice/money.function.js";
 import { askedAmountFor, refuseWithoutEstimate } from "../../invoice/payer-pays.js";
+import { newDepositOrUnavailable, refuseWithoutDeposit } from "../../invoice/new-deposit.js";
+import { DepositUnavailableError } from "../../chains/adapter.js";
 import type { AppDeps } from "../../app.js";
 
 const commonFields = {
@@ -153,7 +155,8 @@ async function createFixedCoinInvoice(
   });
   if (typeof askedAmount !== "bigint") return refuseWithoutEstimate(res, depositAsset, askedAmount);
 
-  const deposit = await chain.newDeposit();
+  const deposit = await newDepositOrUnavailable(chain);
+  if (deposit instanceof DepositUnavailableError) return refuseWithoutDeposit(res, deposit);
 
   const invoice = await invoiceRepo.createInvoice({
     userId: merchant.user_id,

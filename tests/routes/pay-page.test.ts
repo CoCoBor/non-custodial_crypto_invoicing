@@ -20,7 +20,7 @@ const TRON_ADDRESS = "TVzYu8aczxtWAF2JmcEZEUapsYqtUWDU1p";
 const LTC_ADDRESS = new litecore.PrivateKey().toAddress().toString();
 const SOL_ADDRESS = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const EVM_ADDRESS = "0x000000000000000000000000000000000000dEaD";
-const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500", sol: "125", usdtsol: "1", usdcsol: "1", usdtton: "1", usdttrx: "1" }; // USD per coin
+const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500", sol: "125", usdtsol: "1", usdcsol: "1", usdtton: "1", usdttrx: "1", xmr: "250" }; // USD per coin
 
 let baseUrl: string;
 let db: Db;
@@ -507,5 +507,17 @@ describe("the payer cancelling", () => {
 
     assert.equal(cancel.status, 409);
     assert.equal((await invoiceInDb(invoiceId))?.status, "underpaid");
+  });
+});
+
+describe("XMR without a platform wallet (no MONERO_WALLET_RPC_URL)", () => {
+  it("answers a fixed-coin XMR invoice with 503 DEPOSIT_UNAVAILABLE and creates nothing", async () => {
+    const m = await merchant({ xmr: "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A" });
+
+    const response = await createInvoice(m.apiKey, { crypto: "xmr", to_crypto: "xmr" });
+
+    assert.equal(response.status, 503);
+    assert.equal(response.body.error.code, "DEPOSIT_UNAVAILABLE");
+    assert.equal(await db.collection("invoices").countDocuments({ user_id: m.userId }), 0);
   });
 });
