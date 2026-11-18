@@ -83,6 +83,16 @@ async function invoicesOf(userId: string) {
   return await db.collection("invoices").find({ user_id: userId }).toArray();
 }
 
+describe("the minimums in cryptos.json", () => {
+  it("are 10 USD for every stablecoin (owner decision 2026-11-19)", () => {
+    const stablecoins = (Object.keys(cryptos) as Coin[]).filter((coin) => /^(usdt|usdc|dai)/.test(coin));
+    assert.ok(stablecoins.length >= 10);
+    for (const coin of stablecoins) {
+      assert.equal(minimumOf(coin), 10n * 10n ** BigInt(cryptos[coin].decimal), coin);
+    }
+  });
+});
+
 describe("the minimum invoice amount", () => {
   it("is set for every coin in the list, as a positive whole number of smallest units", () => {
     for (const [coin, entry] of Object.entries(cryptos)) {
@@ -186,13 +196,13 @@ describe("coins offered on an invoice the payer picks the coin for", () => {
   it("applies the same rule to the coins of a swap invoice", async () => {
     prices = {
       btc: priceWhereMinimumIsWorth("btc", 1n),
-      ltc: priceWhereMinimumIsWorth("ltc", 4n),
-      usdceth: priceWhereMinimumIsWorth("usdceth", 2n),
+      ltc: priceWhereMinimumIsWorth("ltc", 20n),
+      usdceth: priceWhereMinimumIsWorth("usdceth", 10n),
     };
     const m = await merchant({ usdceth: EVM_ADDRESS });
 
     const response = await createInvoice(m.apiKey, {
-      amount: "3",
+      amount: "12",
       mode: "swap",
       to_crypto: "usdceth",
       coins: ["btc", "ltc", "usdceth"],
