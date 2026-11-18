@@ -5,7 +5,6 @@
       "kraken": "XXBTZUSD",
       "binance": "BTCUSD",
       "bybit": "BTCUSD",
-      "okx": "BTC-USD",
       "gate": "BTC_USD",
       "cryptocom": "BTC_USD",
       "gemini": "btcusd",
@@ -32,7 +31,6 @@
       "kraken": "XETHZUSD",
       "binance": "ETHUSD",
       "bybit": "ETHUSD",
-      "okx": "ETH-USD",
       "gate": "ETH_USD",
       "cryptocom": "ETH_USD",
       "gemini": "ethusd",
@@ -58,7 +56,6 @@
       "bitstamp": "solusd",
       "kraken": "SOLUSD",
       "binance": "SOLUSD",
-      "okx": "SOL-USD",
       "cryptocom": "SOL_USD",
       "gemini": "solusd",
       "bitfinex": "tSOLUSD"
@@ -80,7 +77,6 @@
     "usd": {
       "bitstamp": "ltcusd",
       "kraken": "XLTCZUSD",
-      "okx": "LTC-USD",
       "cryptocom": "LTC_USD",
       "gemini": "ltcusd",
       "bitfinex": "tLTCUSD"
@@ -101,7 +97,6 @@
   "xmr": {
     "usdt": {
       "kraken": "XMRUSDT",
-      "mexc": "XMRUSDT",
       "kucoin": "XMR-USDT",
       "xt": "xmr_usdt",
       "bitfinex": "tXMRUST"
@@ -116,7 +111,6 @@
       "bitstamp": "bnbusd",
       "kraken": "BNBUSD",
       "binance": "BNBUSD",
-      "okx": "BNB-USD",
       "gemini": "bnbusd"
     },
     "usdt": {
@@ -134,7 +128,6 @@
     "usd": {
       "bitstamp": "tonusd",
       "kraken": "TONUSD",
-      "okx": "GRAM-USD",
       "cryptocom": "GRAM_USD",
       "gemini": "gramusd",
       "bitfinex": "tTONUSD"

@@ -556,6 +556,7 @@ export async function getTicker(
 /**
  * Returns a weighted reference price across exchanges, as a string.
  * USD and USDT are calculated separately and never substitute for each other.
+ * A USD price may still be crossed: the USDT price × the USDT/USD price.
  */
 export async function getPrice(
   cryptoId: CryptoId,
@@ -583,6 +584,62 @@ async function priceOfCoin(
   // A same-asset unit conversion; it does not mean USDT equals USD.
   if (coin === currency) return "1";
 
+  const direct = await weightedPrice(coin, currency, MIN_SOURCES);
+  if (direct !== undefined || currency !== "usd") return direct;
+
+  return (await priceThroughUsdt(coin)) ?? (await peggedPrice(coin));
+}
+
+// Many coins have fewer than MIN_SOURCES live USD markets but plenty of USDT
+// ones. Each leg must still meet MIN_SOURCES on its own.
+async function priceThroughUsdt(coin: string): Promise<string | undefined> {
+  if (coin === "usdt") return undefined;
+
+  const [inUsdt, usdtInUsd] = await Promise.all([
+    weightedPrice(coin, "usdt", MIN_SOURCES),
+    weightedPrice("usdt", "usd", MIN_SOURCES),
+  ]);
+  if (inUsdt === undefined || usdtInUsd === undefined) return undefined;
+
+  const scale = 10n ** BigInt(PRICE_DECIMALS);
+  const raw =
+    decimalStrToBigInt(inUsdt, PRICE_DECIMALS)! *
+    decimalStrToBigInt(usdtInUsd, PRICE_DECIMALS)!;
+  const price = raw / scale + ((raw % scale) * 2n >= scale ? 1n : 0n);
+
+  return price === 0n ? undefined : intToDecimalStr(price, PRICE_DECIMALS);
+}
+
+// DAI is delisted from most exchanges, so it can't meet MIN_SOURCES. Sky's
+// LitePSM swaps DAI and USDC 1:1 with no fee (tin = tout = 0), so DAI takes
+// USDC's price, while DAI's own remaining markets confirm the peg holds.
+const PEGS: Record<string, { to: string; maxDeviationBps: bigint }> = {
+  dai: { to: "usdc", maxDeviationBps: 100n },
+};
+const PEG_CHECK_MIN_SOURCES = 2;
+
+async function peggedPrice(coin: string): Promise<string | undefined> {
+  const peg = PEGS[coin];
+  if (!peg) return undefined;
+
+  const [anchor, own] = await Promise.all([
+    priceOfCoin(peg.to, "usd"),
+    weightedPrice(coin, "usd", PEG_CHECK_MIN_SOURCES),
+  ]);
+  if (anchor === undefined || own === undefined) return undefined;
+
+  const anchorUnits = decimalStrToBigInt(anchor, PRICE_DECIMALS)!;
+  const ownUnits = decimalStrToBigInt(own, PRICE_DECIMALS)!;
+  const gap = anchorUnits > ownUnits ? anchorUnits - ownUnits : ownUnits - anchorUnits;
+
+  return gap * 10_000n > peg.maxDeviationBps * anchorUnits ? undefined : anchor;
+}
+
+async function weightedPrice(
+  coin: string,
+  currency: Currency,
+  minSources: number,
+): Promise<string | undefined> {
   const configuredMarkets = markets[coin]?.[currency];
 
   if (!configuredMarkets) return undefined;
@@ -593,7 +650,7 @@ async function priceOfCoin(
       !excludedFromWeighting.has(exchange),
   );
 
-  if (availableExchanges.length < MIN_SOURCES) {
+  if (availableExchanges.length < minSources) {
     return undefined;
   }
 
@@ -628,7 +685,7 @@ async function priceOfCoin(
     tickers.push(ticker);
   }
 
-  if (tickers.length < MIN_SOURCES) return undefined;
+  if (tickers.length < minSources) return undefined;
 
   let weightedTotal = 0n;
   let totalVolume = 0n;
