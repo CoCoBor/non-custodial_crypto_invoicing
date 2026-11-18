@@ -101,10 +101,13 @@ const VALID_NOT_PAYABLE_YET: [asset: string, address: string, label: string][] =
   ["usdcsol", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "SPL token"],
   ["ton", "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_", "non-bounceable"],
   ["usdtton", "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_", "jetton"],
+  ["usdttrx", "TVzYu8aczxtWAF2JmcEZEUapsYqtUWDU1p", "Tron"],
 ];
 
 const WRONG_CHAIN: [asset: string, address: string, label: string][] = [
   ["sol", "0x000000000000000000000000000000000000dEaD", "an Ethereum address for SOL"],
+  ["usdttrx", "0x000000000000000000000000000000000000dEaD", "an Ethereum address for USDT on Tron"],
+  ["usdttrx", "41dba38a9ecfc0e6bf49c182dab4848bcbcd23e5d5", "a hex Tron address"],
   ["ton", "0x000000000000000000000000000000000000dEaD", "an Ethereum address for TON"],
   ["ltc", "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", "a Bitcoin address for LTC"],
   ["eth", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", "a Solana address for ETH"],
@@ -155,7 +158,6 @@ describe("creating an invoice checks the payout address for the coin's own chain
   });
 
   for (const [asset, address] of [
-    ["usdttrx", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"],
     ["xmr", "44AFFq5kSiGBoZ4NMDwYtN18obc8AemS33DBLWs3H7otXft3XjrpDtQGv7SqSsaBYBb98uNbr2VBBEt7f2wfn3RVGQBEP3A"],
   ]) {
     it(`says ${asset} payouts are not supported yet, rather than blaming the address`, async () => {

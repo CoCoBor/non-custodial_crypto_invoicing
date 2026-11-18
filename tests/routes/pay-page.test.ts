@@ -5,6 +5,7 @@ import { after, before, describe, it } from "node:test";
 import litecore from "bitcore-lib-ltc";
 import type { Db } from "mongodb";
 
+import { checkPayoutAddress } from "../../src/assets/payout-address.js";
 import type { ChainAdapter } from "../../src/chains/adapter.js";
 import { computeBlindIndex } from "../../src/security/blind-index.js";
 import { postJson, startTestApp } from "../helpers/http-app.js";
@@ -15,10 +16,11 @@ import { postJson, startTestApp } from "../helpers/http-app.js";
 
 const BTC_ADDRESS = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
 const TON_ADDRESS = "UQA041P-aOeHTPWoEkr1y6dUDNMGFp9K1AORUeMYF0p2ycC_";
+const TRON_ADDRESS = "TVzYu8aczxtWAF2JmcEZEUapsYqtUWDU1p";
 const LTC_ADDRESS = new litecore.PrivateKey().toAddress().toString();
 const SOL_ADDRESS = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const EVM_ADDRESS = "0x000000000000000000000000000000000000dEaD";
-const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500", sol: "125", usdtsol: "1", usdcsol: "1", usdtton: "1" }; // USD per coin
+const PRICES: Record<string, string> = { btc: "50000", ltc: "100", ton: "5", eth: "2000", usdteth: "1", bsc: "500", sol: "125", usdtsol: "1", usdcsol: "1", usdtton: "1", usdttrx: "1" }; // USD per coin
 
 let baseUrl: string;
 let db: Db;
@@ -229,6 +231,31 @@ describe("the merchant API", () => {
     assert.ok(invoice?.private?.private_key, "the deposit key is missing");
   });
 
+  it("creates a fixed-coin USDT-on-Tron invoice with a fresh Tron deposit, paid out as USDT on Tron", async () => {
+    const m = await merchant({ usdttrx: TRON_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdttrx", to_crypto: "usdttrx" });
+
+    assert.equal(response.status, 201, JSON.stringify(response.body));
+    const invoice = await invoiceInDb(response.body.data.invoiceId);
+    assert.equal(invoice?.crypto, "usdttrx");
+    assert.equal(invoice?.to_crypto, "usdttrx");
+    assert.equal(invoice?.to_address, TRON_ADDRESS);
+    assert.equal(invoice?.amount, "25000000"); // $25 at $1 = 25 USDT (6 decimals)
+    assert.equal(checkPayoutAddress("usdttrx", invoice?.address), "valid");
+    assert.notEqual(invoice?.address, TRON_ADDRESS);
+    assert.ok(invoice?.private?.private_key, "the deposit key is missing");
+  });
+
+  it("refuses a USDT-on-Tron deposit paid out as another coin", async () => {
+    const m = await merchant({ usdttrx: TRON_ADDRESS, usdteth: "0x000000000000000000000000000000000000dEaD" });
+
+    const response = await createInvoice(m.apiKey, { crypto: "usdttrx", to_crypto: "usdteth" });
+
+    assert.equal(response.status, 409);
+    assert.equal(response.body.error.code, "PAYOUT_NOT_SUPPORTED");
+  });
+
   it("refuses a USDT-on-TON deposit paid out as GRAM", async () => {
     const m = await merchant({ usdtton: TON_ADDRESS, ton: TON_ADDRESS });
 
@@ -325,6 +352,23 @@ describe("the merchant API", () => {
     const invoice = await invoiceInDb(invoiceId);
     assert.equal(invoice?.crypto, "usdtton");
     assert.equal(invoice?.to_address, TON_ADDRESS);
+    assert.ok(invoice?.private?.private_key);
+  });
+
+  it("offers USDT on Tron on a merchant's-list invoice, and the payer can pick it", async () => {
+    const m = await merchant({ usdttrx: TRON_ADDRESS, ton: TON_ADDRESS });
+
+    const response = await createInvoice(m.apiKey, { mode: "merchant_list" });
+
+    const invoiceId: string = response.body.data.invoiceId;
+    assert.deepEqual([...(await invoiceInDb(invoiceId))!.offered_coins].sort(), ["ton", "usdttrx"]);
+    const choice = await postJson(`${baseUrl}/pay/${invoiceId}/choose`, { crypto: "usdttrx" });
+    assert.equal(choice.status, 200, JSON.stringify(choice.body));
+    assert.equal(choice.body.data.payment.amount, "25000000");
+    assert.equal(checkPayoutAddress("usdttrx", choice.body.data.payment.address), "valid");
+    const invoice = await invoiceInDb(invoiceId);
+    assert.equal(invoice?.crypto, "usdttrx");
+    assert.equal(invoice?.to_address, TRON_ADDRESS);
     assert.ok(invoice?.private?.private_key);
   });
 

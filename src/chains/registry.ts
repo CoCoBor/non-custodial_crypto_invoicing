@@ -1,7 +1,7 @@
 import { ASSET_IDS, isAssetId, type AssetId } from "../assets/payout-address.js";
 import { env } from "../config/env.js";
 import type { ChainAdapter, ChainRegistry } from "./adapter.js";
-import { getPrice } from "../invoice/price.function.js";
+import { getPrice, getTrxPrice } from "../invoice/price.function.js";
 import { createBtcAdapter } from "./btc.js";
 import { createEvmNativeAdapter, createEvmTokenAdapter, type EvmClients } from "./evm.js";
 import { nowNodesBscBlockbook, nowNodesEthBlockbook } from "./evm-payments.js";
@@ -10,6 +10,8 @@ import { createLtcAdapter } from "./ltc.js";
 import { createSolAdapter, createSplTokenAdapter } from "./sol.js";
 import { nowNodesSolRpc } from "./solana-rpc.js";
 import { createTonAdapter, createTonJettonAdapter } from "./ton.js";
+import { createTronTokenAdapter } from "./tron.js";
+import { nowNodesTronApi, nowNodesTronIndex } from "./tron-api.js";
 
 const eth: EvmClients = { rpc: nowNodesEthRpc, index: nowNodesEthBlockbook };
 const bsc: EvmClients = { rpc: nowNodesBscRpc, index: nowNodesBscBlockbook };
@@ -38,6 +40,14 @@ export const chainAdapters: ChainRegistry = {
     platformAddress: env.platformTonAddress,
     gasWalletKey: env.tonGasWalletKey,
     getPrice,
+  }),
+  usdttrx: createTronTokenAdapter({
+    asset: "usdttrx",
+    api: nowNodesTronApi,
+    index: nowNodesTronIndex,
+    platformAddress: env.platformTrxAddress,
+    gasWalletKey: env.trxGasWalletKey,
+    trxPrice: () => getTrxPrice("usdt"),
   }),
 };
 
