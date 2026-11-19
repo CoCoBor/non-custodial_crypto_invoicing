@@ -11,11 +11,28 @@ const CALCULATION_DECIMALS = 36;
 const PRICE_DECIMALS = 10;
 const MIN_SOURCES = 4;
 
+// Owner decision 2026-11-20: a source whose midpoint is further than this from
+// the leg's median midpoint is left out (docs/domain.md, Pricing).
+const OUTLIER_LIMIT_BPS = { crypto: 250n, stablecoin: 100n } as const;
+
 const MAX_AGE_MS = 60_000;
 const MAX_FUTURE_MS = 5_000;
 
 type CryptoId = keyof typeof cryptos;
 type Currency = "usd" | "usdt";
+
+const USD_STABLECOINS = new Set(
+  Object.values(cryptos)
+    .filter((asset) => "usd_stablecoin" in asset && asset.usd_stablecoin === true)
+    .map((asset) => asset.symbol.toLowerCase()),
+);
+
+function outlierLimitBps(coin: string, currency: Currency): bigint {
+  const quoteIsUsd = currency === "usd" || USD_STABLECOINS.has(currency);
+  return USD_STABLECOINS.has(coin) && quoteIsUsd
+    ? OUTLIER_LIMIT_BPS.stablecoin
+    : OUTLIER_LIMIT_BPS.crypto;
+}
 
 /**
  * Calculates the payable amount in the coin's smallest unit from a fiat amount and unit price.
@@ -713,12 +730,14 @@ async function weightedPrice(
     tickers.push(ticker);
   }
 
-  if (tickers.length < minSources) return undefined;
+  const kept = withoutOutliers(tickers, coin, currency);
+
+  if (kept.length < minSources) return undefined;
 
   let weightedTotal = 0n;
   let totalVolume = 0n;
 
-  for (const ticker of tickers) {
+  for (const ticker of kept) {
     weightedTotal += (ticker.bid + ticker.ask) * ticker.volume;
 
     totalVolume += ticker.volume;
@@ -740,6 +759,57 @@ async function weightedPrice(
   if (price === 0n) return undefined;
 
   return intToDecimalStr(price, PRICE_DECIMALS);
+}
+
+/**
+ * A ticker exactly at the limit is kept. An even count's median is the mean of
+ * the two middle midpoints; doubling every bid + ask keeps that mean, and the
+ * comparison, in whole bigints.
+ */
+function withoutOutliers(tickers: Ticker[], coin: string, currency: Currency): Ticker[] {
+  if (tickers.length === 0) return tickers;
+
+  const sums = tickers.map((t) => t.bid + t.ask).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const middle = Math.floor(sums.length / 2);
+  const twiceMedianSum =
+    sums.length % 2 === 1 ? 2n * sums[middle] : sums[middle - 1] + sums[middle];
+
+  const limitBps = outlierLimitBps(coin, currency);
+  const kept: Ticker[] = [];
+  const dropped: string[] = [];
+
+  for (const ticker of tickers) {
+    const gap = 2n * (ticker.bid + ticker.ask) - twiceMedianSum;
+    const distance = gap < 0n ? -gap : gap;
+
+    if (distance * 10_000n > limitBps * twiceMedianSum) {
+      dropped.push(`${ticker.exchange} ${gap > 0n ? "+" : ""}${percent(gap, twiceMedianSum)}`);
+    } else {
+      kept.push(ticker);
+    }
+  }
+
+  if (dropped.length > 0) {
+    // twiceMedianSum is 4 × the median midpoint, at CALCULATION_DECIMALS.
+    const median = intToDecimalStr(
+      twiceMedianSum / (4n * 10n ** BigInt(CALCULATION_DECIMALS - PRICE_DECIMALS)),
+      PRICE_DECIMALS,
+    );
+    console.warn(
+      `Price sources dropped as outliers for ${coin}/${currency} (median ${median}, limit ${percent(limitBps, 10_000n)}):`,
+      dropped.join(", "),
+      `(${kept.length} kept)`,
+    );
+  }
+
+  return kept;
+}
+
+/** part / whole as a percentage with 2 decimals, truncated; for logs only. */
+function percent(part: bigint, whole: bigint): string {
+  const hundredths = (part * 10_000n) / whole;
+  const size = hundredths < 0n ? -hundredths : hundredths;
+  return `${part < 0n ? "-" : ""}${size / 100n}.${(size % 100n).toString().padStart(2, "0")}%`;
 }
 
 /**
