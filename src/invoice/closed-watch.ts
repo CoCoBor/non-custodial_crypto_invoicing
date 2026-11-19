@@ -107,6 +107,7 @@ type StoredRoute = {
   network_fee?: string;
   started_at: number;
   swap?: StoredSwap | null;
+  after_payout_pending?: boolean | null;
 };
 
 type Destination =
@@ -132,6 +133,7 @@ type ClosedInvoice = {
   watch_until: number;
   watch_done?: boolean | null;
   watch_version?: number | null;
+  after_payout_pending?: boolean | null;
   payments: LedgerPayment[];
   transfers: StoredTransfer[];
   refund_routes: StoredRoute[];
@@ -193,7 +195,12 @@ export async function watchClosedInvoice(invoiceId: string, adapter: ChainAdapte
   if (inFlight) return inFlight.state === "swapping" ? await followRouteSwap(watch, inFlight) : await followRoute(watch, inFlight);
 
   const ready = readyToRoute(watch.payments, adapter.requiredConfirmations);
-  if (ready.length > 0 && !graceOver) return await startRoute(watch, ready);
+  if (ready.length > 0 && !graceOver) {
+    // A Tron sweep still to come takes TRX a new route would count as
+    // already at the deposit and top up too little for.
+    if (invoice.after_payout_pending || invoice.refund_routes.some((r) => r.after_payout_pending)) return await save(watch, {});
+    return await startRoute(watch, ready);
+  }
 
   const pastWindow = now >= invoice.watch_until;
   if (pastWindow && (graceOver || stillAtDeposit(watch.payments).length === 0)) return await finish(watch);
@@ -675,6 +682,7 @@ async function recordRouteResult(watch: Watch, run: RouteRun, result: PayoutResu
         {
           $set: {
             ...(isSwap ? { "refund_routes.$.state": "swapping" } : { "refund_routes.$.state": "paid", "refund_routes.$.settled_at": now }),
+            ...(watch.adapter.afterPayout !== undefined ? { "refund_routes.$.after_payout_pending": true } : {}),
             transfers: [
               ...invoice.transfers.filter((t) => t.payout !== n),
               ...storeTransfers(result.transfers, "confirmed", n),

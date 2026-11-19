@@ -105,6 +105,26 @@ export type PayoutResult =
   /** Needs a person. `message` says where the money is and how to recover it. */
   | { status: "failed"; message: string; transfers: Transfer[] };
 
+/**
+ * Work after a payout whose `paid` is recorded, which must not hold that
+ * payout up (Tron: the deposit's unused TRX back to the gas wallet). The
+ * watcher asks again on later passes until it answers `done`; the invoice's
+ * status never changes for it.
+ */
+export type AfterPayoutRequest = {
+  depositAddress: string;
+  depositKey: DepositKey;
+  /** The paid payout's checkpoint state, or what this work saved over it since. */
+  state: string;
+  /** As PayoutRequest.saveCheckpoint: awaited, and true, before anything is broadcast. */
+  saveState: (next: string) => Promise<boolean>;
+};
+
+export type AfterPayoutResult =
+  /** Finished, sent or given up. `transfers`: what it moved, proven by the chain. */
+  | { status: "done"; transfers: Transfer[] }
+  | { status: "pending"; reason: string };
+
 export type ChainAdapter = {
   /** The deposit asset this adapter serves: its registry key. */
   asset: AssetId;
@@ -122,6 +142,8 @@ export type ChainAdapter = {
    */
   estimateNetworkCost: () => Promise<bigint | "unsupported" | undefined>;
   payout: (request: PayoutRequest) => Promise<PayoutResult>;
+  /** Only chains with work after a proven payout have one. */
+  afterPayout?: (request: AfterPayoutRequest) => Promise<AfterPayoutResult>;
 };
 
 export type ChainRegistry = Partial<Record<AssetId, ChainAdapter>>;

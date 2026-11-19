@@ -13,6 +13,7 @@ import { Invoice } from "../database/invoices.model.js";
 import { LATE_PAYMENT_NOTE_PREFIX } from "../swap/near.js";
 import { swapProvider } from "../swap/registry.js";
 import type { SwapPort, SwapRef } from "../swap/swap-port.js";
+import { assetsWithAfterPayout, invoicesAfterPayout, runAfterPayouts } from "./after-payout.js";
 import { closedInvoicesToWatch, watchClosedInvoice, watchUntil } from "./closed-watch.js";
 import {
   depositKeyOf,
@@ -46,7 +47,10 @@ export type WatcherPorts = {
   swap: SwapPort;
 };
 
-/** One look at every open invoice, then at every closed one still watched. */
+/**
+ * One look at every open invoice, then at every closed one still watched,
+ * then the work adapters do after a proven payout.
+ */
 export async function runWatcherPass(
   ports: WatcherPorts,
   isStopped: () => boolean = () => false,
@@ -111,6 +115,16 @@ export async function runWatcherPass(
       await watchClosedInvoice(invoice.invoice_id, adapter, ports);
     } catch (error) {
       console.error("Closed-invoice watch failed on", invoice.invoice_id, error);
+    }
+  }
+
+  // Listed last, so a payout proven in this pass starts its work at once.
+  for (const invoice of await invoicesAfterPayout(assetsWithAfterPayout(ports.chains))) {
+    if (isStopped()) break;
+    try {
+      await runAfterPayouts(invoice.invoice_id, ports.chains);
+    } catch (error) {
+      console.error("Work after a payout failed on", invoice.invoice_id, error);
     }
   }
 }
@@ -508,6 +522,9 @@ async function recordPayoutResult(
         "tx.platform_out": result.transfers.find((t) => t.kind === "platform_fee")?.txid ?? "",
         review_reason: result.note ?? "",
       };
+      if (isAssetId(invoice.crypto) && ports.chains[invoice.crypto]?.afterPayout !== undefined) {
+        changes.after_payout_pending = true;
+      }
       if (isSwap) {
         // The coins reached the swap; its delivery completes the invoice.
         changes.status = "processing";

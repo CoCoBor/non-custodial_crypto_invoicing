@@ -110,6 +110,7 @@ const refundRouteSchema = new Schema(
     settled_at: { type: Number, default: null },
     notified: { type: Boolean, default: false }, // announced by webhook; see src/webhooks/webhook-pass.ts
     swap: { type: new Schema(swapFields, { _id: false }), default: null }, // source swap_to_receive_coin only
+    after_payout_pending: { type: Boolean, default: false }, // the adapter's work after this route's proven payout is not done; see src/invoice/after-payout.ts
   },
   { _id: false },
 );
@@ -184,6 +185,7 @@ const invoiceSchema = new Schema(
     callback_url: { type: String, default: "" }, // url where transaction notifications are sent to
     payments: { type: [paymentSchema], default: [] },
     transfers: { type: [transferSchema], default: [] },
+    after_payout_pending: { type: Boolean, default: false }, // the adapter's work after the merchant (or swap) payout was proven is not done; see src/invoice/after-payout.ts
     tx: {
       in: { type: String, default: "" },
       out: { type: String, default: "" }, // txid

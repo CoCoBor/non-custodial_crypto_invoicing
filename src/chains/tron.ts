@@ -2,7 +2,13 @@ import { checkPayoutAddress, type AssetId } from "../assets/payout-address.js";
 import { generateTronAddress } from "../crypto/tron.js";
 import type { SealedSecret } from "../security/secret-envelope.js";
 import cryptos from "../storage/cryptos.json" with { type: "json" };
-import { estimateTronTokenNetworkCost, getTronTokenPayments, payOutTronToken, type TronToken } from "../transactions/tron.js";
+import {
+  estimateTronTokenNetworkCost,
+  getTronTokenPayments,
+  payOutTronToken,
+  sweepTronDeposit,
+  type TronToken,
+} from "../transactions/tron.js";
 import type { ChainAdapter } from "./adapter.js";
 import type { TronApi, TronTokenIndex } from "./tron-api.js";
 
@@ -47,5 +53,6 @@ export function createTronTokenAdapter(deps: {
     getPayments: (address) => getTronTokenPayments({ api: deps.api, index: deps.index, token }, address),
     estimateNetworkCost: () => estimateTronTokenNetworkCost(payoutDeps),
     payout: (request) => payOutTronToken(request, payoutDeps),
+    afterPayout: (request) => sweepTronDeposit(request, payoutDeps),
   };
 }
