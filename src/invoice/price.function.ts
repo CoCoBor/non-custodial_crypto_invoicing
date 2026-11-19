@@ -430,16 +430,12 @@ const markets: Record<
   Partial<Record<Currency, Partial<Record<Exchange, string>>>>
 > = marketConfig;
 
-// These three sources can still be read on their own.
-// Their volume window is not yet confirmed to match the other sources, so they are left out of weighting for now.
-const excludedFromWeighting = new Set<Exchange>(["bitstamp", "bitfinex", "xt"]);
-
-// Owner decision 2026-11-19: XMR is listed on too few weighted exchanges to
-// meet MIN_SOURCES. XT's and Bitfinex's XMR volumes were checked to be rolling
-// 24 h base-coin volumes, like the weighted sources (docs/domain.md, Pricing).
-const weightedForCoin: Partial<Record<string, ReadonlySet<Exchange>>> = {
-  xmr: new Set<Exchange>(["xt", "bitfinex"]),
-};
+// Bitstamp can still be read on its own.
+// Its volume window is not yet confirmed to match the other sources, so it is left out of weighting for now.
+// XT and Bitfinex count for every coin (owner decision 2026-11-20): their
+// volumes were checked to be rolling 24 h base-coin volumes, like the other
+// weighted sources (docs/domain.md, Pricing).
+const excludedFromWeighting = new Set<Exchange>(["bitstamp"]);
 
 const tickerSchema = z.object({
   symbol: z.string(),
@@ -679,8 +675,7 @@ async function weightedPrice(
   const availableExchanges = exchangeNames.filter(
     (exchange) =>
       configuredMarkets[exchange] !== undefined &&
-      (!excludedFromWeighting.has(exchange) ||
-        weightedForCoin[coin]?.has(exchange) === true),
+      !excludedFromWeighting.has(exchange),
   );
 
   if (availableExchanges.length < minSources) {

@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import { getPrice, getTicker } from "../../src/invoice/price.function.js";
 
 // XMR's USD price (owner decision 2026-11-19: XT and Bitfinex count for XMR,
-// HTX added). Replies come from one snapshot in tests/fixtures/prices-xmr:
-// every XMR/USDT market and every weighted USDT/USD market, recorded within
-// 1.4 s on 2026-11-18 with one public GET each. No network.
+// HTX added; since 2026-11-20 XT and Bitfinex count for every coin).
+// Replies come from one snapshot in tests/fixtures/prices-xmr: every XMR/USDT
+// market and every USDT/USD market weighted on 2026-11-18 (so not Bitfinex's,
+// which answers 404 here), recorded within 1.4 s that day with one public GET
+// each. No network.
 
 type Recording = { url: string; status: number; file: string; exchange: string };
 const snapshot = JSON.parse(
@@ -132,11 +134,16 @@ describe("XMR's USD price", () => {
     assert.equal(await getPrice("xmr", "usd"), undefined);
   });
 
-  it("still leaves XT and Bitfinex out for every other coin", async () => {
+  it("asks XT and Bitfinex for other coins too (they count for every coin since 2026-11-20)", async () => {
     await getPrice("ltc", "usdt");
     await getPrice("btc", "usd");
 
-    assert.ok(asked.length > 0);
-    assert.deepEqual(asked.filter((u) => u.includes("sapi.xt.com") || u.includes("bitfinex")), []);
+    for (const url of [
+      "https://sapi.xt.com/v4/public/ticker?symbol=ltc_usdt",
+      "https://api-pub.bitfinex.com/v2/tickers?symbols=tLTCUST",
+      "https://api-pub.bitfinex.com/v2/tickers?symbols=tBTCUSD",
+    ]) {
+      assert.ok(asked.includes(url), `asked ${url}`);
+    }
   });
 });

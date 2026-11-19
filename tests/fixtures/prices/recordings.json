@@ -1,587 +1,7 @@
 {
-  "startedAtMs": 1794987577035,
-  "finishedAtMs": 1794987579339,
+  "startedAtMs": 1795106969753,
+  "finishedAtMs": 1795106971777,
   "recordings": [
-    {
-      "coin": "btc",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "XXBTZUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=XXBTZUSD",
-      "status": 200,
-      "file": "kraken-XXBTZUSD.json",
-      "receivedAtMs": 1794987577369
-    },
-    {
-      "coin": "btc",
-      "currency": "usd",
-      "exchange": "binance",
-      "market": "BTCUSD",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSD",
-      "status": 200,
-      "file": "binance-BTCUSD.json",
-      "receivedAtMs": 1794987577271
-    },
-    {
-      "coin": "btc",
-      "currency": "usd",
-      "exchange": "bybit",
-      "market": "BTCUSD",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSD",
-      "status": 200,
-      "file": "bybit-BTCUSD.json",
-      "receivedAtMs": 1794987577301
-    },
-    {
-      "coin": "btc",
-      "currency": "usd",
-      "exchange": "gate",
-      "market": "BTC_USD",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USD",
-      "status": 200,
-      "file": "gate-BTC_USD.json",
-      "receivedAtMs": 1794987578329
-    },
-    {
-      "coin": "btc",
-      "currency": "usd",
-      "exchange": "cryptocom",
-      "market": "BTC_USD",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=BTC_USD",
-      "status": 200,
-      "file": "cryptocom-BTC_USD.json",
-      "receivedAtMs": 1794987577896
-    },
-    {
-      "coin": "btc",
-      "currency": "usd",
-      "exchange": "gemini",
-      "market": "btcusd",
-      "url": "https://api.gemini.com/v1/pubticker/btcusd",
-      "status": 200,
-      "file": "gemini-btcusd.json",
-      "receivedAtMs": 1794987579195
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "kraken",
-      "market": "XBTUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=XBTUSDT",
-      "status": 200,
-      "file": "kraken-XBTUSDT.json",
-      "receivedAtMs": 1794987577965
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "binance",
-      "market": "BTCUSDT",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
-      "status": 200,
-      "file": "binance-BTCUSDT.json",
-      "receivedAtMs": 1794987577963
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "mexc",
-      "market": "BTCUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=BTCUSDT",
-      "status": 200,
-      "file": "mexc-BTCUSDT.json",
-      "receivedAtMs": 1794987578161
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "bybit",
-      "market": "BTCUSDT",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT",
-      "status": 200,
-      "file": "bybit-BTCUSDT.json",
-      "receivedAtMs": 1794987577962
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "okx",
-      "market": "BTC-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT",
-      "status": 200,
-      "file": "okx-BTC-USDT.json",
-      "receivedAtMs": 1794987577942
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "gate",
-      "market": "BTC_USDT",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",
-      "status": 200,
-      "file": "gate-BTC_USDT.json",
-      "receivedAtMs": 1794987578335
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "kucoin",
-      "market": "BTC-USDT",
-      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=BTC-USDT",
-      "status": 200,
-      "file": "kucoin-BTC-USDT.json",
-      "receivedAtMs": 1794987577904
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "cryptocom",
-      "market": "BTC_USDT",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=BTC_USDT",
-      "status": 200,
-      "file": "cryptocom-BTC_USDT.json",
-      "receivedAtMs": 1794987577858
-    },
-    {
-      "coin": "btc",
-      "currency": "usdt",
-      "exchange": "gemini",
-      "market": "btcusdt",
-      "url": "https://api.gemini.com/v1/pubticker/btcusdt",
-      "status": 200,
-      "file": "gemini-btcusdt.json",
-      "receivedAtMs": 1794987579241
-    },
-    {
-      "coin": "eth",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "XETHZUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=XETHZUSD",
-      "status": 200,
-      "file": "kraken-XETHZUSD.json",
-      "receivedAtMs": 1794987577965
-    },
-    {
-      "coin": "eth",
-      "currency": "usd",
-      "exchange": "binance",
-      "market": "ETHUSD",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSD",
-      "status": 200,
-      "file": "binance-ETHUSD.json",
-      "receivedAtMs": 1794987577977
-    },
-    {
-      "coin": "eth",
-      "currency": "usd",
-      "exchange": "bybit",
-      "market": "ETHUSD",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=ETHUSD",
-      "status": 200,
-      "file": "bybit-ETHUSD.json",
-      "receivedAtMs": 1794987578152
-    },
-    {
-      "coin": "eth",
-      "currency": "usd",
-      "exchange": "gate",
-      "market": "ETH_USD",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=ETH_USD",
-      "status": 200,
-      "file": "gate-ETH_USD.json",
-      "receivedAtMs": 1794987578337
-    },
-    {
-      "coin": "eth",
-      "currency": "usd",
-      "exchange": "cryptocom",
-      "market": "ETH_USD",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=ETH_USD",
-      "status": 200,
-      "file": "cryptocom-ETH_USD.json",
-      "receivedAtMs": 1794987577925
-    },
-    {
-      "coin": "eth",
-      "currency": "usd",
-      "exchange": "gemini",
-      "market": "ethusd",
-      "url": "https://api.gemini.com/v1/pubticker/ethusd",
-      "status": 200,
-      "file": "gemini-ethusd.json",
-      "receivedAtMs": 1794987579265
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "kraken",
-      "market": "ETHUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=ETHUSDT",
-      "status": 200,
-      "file": "kraken-ETHUSDT.json",
-      "receivedAtMs": 1794987578180
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "binance",
-      "market": "ETHUSDT",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT",
-      "status": 200,
-      "file": "binance-ETHUSDT.json",
-      "receivedAtMs": 1794987578161
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "mexc",
-      "market": "ETHUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=ETHUSDT",
-      "status": 200,
-      "file": "mexc-ETHUSDT.json",
-      "receivedAtMs": 1794987578181
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "bybit",
-      "market": "ETHUSDT",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=ETHUSDT",
-      "status": 200,
-      "file": "bybit-ETHUSDT.json",
-      "receivedAtMs": 1794987578155
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "okx",
-      "market": "ETH-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT",
-      "status": 200,
-      "file": "okx-ETH-USDT.json",
-      "receivedAtMs": 1794987577858
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "gate",
-      "market": "ETH_USDT",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=ETH_USDT",
-      "status": 200,
-      "file": "gate-ETH_USDT.json",
-      "receivedAtMs": 1794987578343
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "kucoin",
-      "market": "ETH-USDT",
-      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=ETH-USDT",
-      "status": 200,
-      "file": "kucoin-ETH-USDT.json",
-      "receivedAtMs": 1794987577905
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "cryptocom",
-      "market": "ETH_USDT",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=ETH_USDT",
-      "status": 200,
-      "file": "cryptocom-ETH_USDT.json",
-      "receivedAtMs": 1794987577919
-    },
-    {
-      "coin": "eth",
-      "currency": "usdt",
-      "exchange": "gemini",
-      "market": "ethusdt",
-      "url": "https://api.gemini.com/v1/pubticker/ethusdt",
-      "status": 200,
-      "file": "gemini-ethusdt.json",
-      "receivedAtMs": 1794987579051
-    },
-    {
-      "coin": "sol",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "SOLUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=SOLUSD",
-      "status": 200,
-      "file": "kraken-SOLUSD.json",
-      "receivedAtMs": 1794987578267
-    },
-    {
-      "coin": "sol",
-      "currency": "usd",
-      "exchange": "binance",
-      "market": "SOLUSD",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSD",
-      "status": 200,
-      "file": "binance-SOLUSD.json",
-      "receivedAtMs": 1794987578165
-    },
-    {
-      "coin": "sol",
-      "currency": "usd",
-      "exchange": "cryptocom",
-      "market": "SOL_USD",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=SOL_USD",
-      "status": 200,
-      "file": "cryptocom-SOL_USD.json",
-      "receivedAtMs": 1794987577925
-    },
-    {
-      "coin": "sol",
-      "currency": "usd",
-      "exchange": "gemini",
-      "market": "solusd",
-      "url": "https://api.gemini.com/v1/pubticker/solusd",
-      "status": 200,
-      "file": "gemini-solusd.json",
-      "receivedAtMs": 1794987579046
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "kraken",
-      "market": "SOLUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=SOLUSDT",
-      "status": 200,
-      "file": "kraken-SOLUSDT.json",
-      "receivedAtMs": 1794987578253
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "binance",
-      "market": "SOLUSDT",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDT",
-      "status": 200,
-      "file": "binance-SOLUSDT.json",
-      "receivedAtMs": 1794987578165
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "mexc",
-      "market": "SOLUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=SOLUSDT",
-      "status": 200,
-      "file": "mexc-SOLUSDT.json",
-      "receivedAtMs": 1794987578290
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "bybit",
-      "market": "SOLUSDT",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=SOLUSDT",
-      "status": 200,
-      "file": "bybit-SOLUSDT.json",
-      "receivedAtMs": 1794987578236
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "okx",
-      "market": "SOL-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=SOL-USDT",
-      "status": 200,
-      "file": "okx-SOL-USDT.json",
-      "receivedAtMs": 1794987577916
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "gate",
-      "market": "SOL_USDT",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=SOL_USDT",
-      "status": 200,
-      "file": "gate-SOL_USDT.json",
-      "receivedAtMs": 1794987578339
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "kucoin",
-      "market": "SOL-USDT",
-      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=SOL-USDT",
-      "status": 200,
-      "file": "kucoin-SOL-USDT.json",
-      "receivedAtMs": 1794987578144
-    },
-    {
-      "coin": "sol",
-      "currency": "usdt",
-      "exchange": "cryptocom",
-      "market": "SOL_USDT",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=SOL_USDT",
-      "status": 200,
-      "file": "cryptocom-SOL_USDT.json",
-      "receivedAtMs": 1794987578142
-    },
-    {
-      "coin": "ltc",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "XLTCZUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=XLTCZUSD",
-      "status": 200,
-      "file": "kraken-XLTCZUSD.json",
-      "receivedAtMs": 1794987578263
-    },
-    {
-      "coin": "ltc",
-      "currency": "usd",
-      "exchange": "cryptocom",
-      "market": "LTC_USD",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=LTC_USD",
-      "status": 200,
-      "file": "cryptocom-LTC_USD.json",
-      "receivedAtMs": 1794987578027
-    },
-    {
-      "coin": "ltc",
-      "currency": "usd",
-      "exchange": "gemini",
-      "market": "ltcusd",
-      "url": "https://api.gemini.com/v1/pubticker/ltcusd",
-      "status": 200,
-      "file": "gemini-ltcusd.json",
-      "receivedAtMs": 1794987579080
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "kraken",
-      "market": "LTCUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=LTCUSDT",
-      "status": 200,
-      "file": "kraken-LTCUSDT.json",
-      "receivedAtMs": 1794987578279
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "binance",
-      "market": "LTCUSDT",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=LTCUSDT",
-      "status": 200,
-      "file": "binance-LTCUSDT.json",
-      "receivedAtMs": 1794987578165
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "mexc",
-      "market": "LTCUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=LTCUSDT",
-      "status": 200,
-      "file": "mexc-LTCUSDT.json",
-      "receivedAtMs": 1794987578287
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "bybit",
-      "market": "LTCUSDT",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=LTCUSDT",
-      "status": 200,
-      "file": "bybit-LTCUSDT.json",
-      "receivedAtMs": 1794987578255
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "okx",
-      "market": "LTC-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=LTC-USDT",
-      "status": 200,
-      "file": "okx-LTC-USDT.json",
-      "receivedAtMs": 1794987578106
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "gate",
-      "market": "LTC_USDT",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=LTC_USDT",
-      "status": 200,
-      "file": "gate-LTC_USDT.json",
-      "receivedAtMs": 1794987578336
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "kucoin",
-      "market": "LTC-USDT",
-      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=LTC-USDT",
-      "status": 200,
-      "file": "kucoin-LTC-USDT.json",
-      "receivedAtMs": 1794987578135
-    },
-    {
-      "coin": "ltc",
-      "currency": "usdt",
-      "exchange": "cryptocom",
-      "market": "LTC_USDT",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=LTC_USDT",
-      "status": 200,
-      "file": "cryptocom-LTC_USDT.json",
-      "receivedAtMs": 1794987578139
-    },
-    {
-      "coin": "xmr",
-      "currency": "usdt",
-      "exchange": "kraken",
-      "market": "XMRUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=XMRUSDT",
-      "status": 200,
-      "file": "kraken-XMRUSDT.json",
-      "receivedAtMs": 1794987578279
-    },
-    {
-      "coin": "xmr",
-      "currency": "usdt",
-      "exchange": "mexc",
-      "market": "XMRUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=XMRUSDT",
-      "status": 400,
-      "file": "mexc-XMRUSDT.json",
-      "receivedAtMs": 1794987578384
-    },
-    {
-      "coin": "xmr",
-      "currency": "usdt",
-      "exchange": "kucoin",
-      "market": "XMR-USDT",
-      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=XMR-USDT",
-      "status": 200,
-      "file": "kucoin-XMR-USDT.json",
-      "receivedAtMs": 1794987578135
-    },
-    {
-      "coin": "xmr",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "XXMRZUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=XXMRZUSD",
-      "status": 200,
-      "file": "kraken-XXMRZUSD.json",
-      "receivedAtMs": 1794987578262
-    },
-    {
-      "coin": "bnb",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "BNBUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=BNBUSD",
-      "status": 200,
-      "file": "kraken-BNBUSD.json",
-      "receivedAtMs": 1794987578276
-    },
     {
       "coin": "bnb",
       "currency": "usd",
@@ -590,7 +10,7 @@
       "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BNBUSD",
       "status": 200,
       "file": "binance-BNBUSD.json",
-      "receivedAtMs": 1794987578165
+      "receivedAtMs": 1795106970433
     },
     {
       "coin": "bnb",
@@ -600,17 +20,17 @@
       "url": "https://api.gemini.com/v1/pubticker/bnbusd",
       "status": 200,
       "file": "gemini-bnbusd.json",
-      "receivedAtMs": 1794987579339
+      "receivedAtMs": 1795106971423
     },
     {
       "coin": "bnb",
-      "currency": "usdt",
+      "currency": "usd",
       "exchange": "kraken",
-      "market": "BNBUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=BNBUSDT",
+      "market": "BNBUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=BNBUSD",
       "status": 200,
-      "file": "kraken-BNBUSDT.json",
-      "receivedAtMs": 1794987578289
+      "file": "kraken-BNBUSD.json",
+      "receivedAtMs": 1795106970511
     },
     {
       "coin": "bnb",
@@ -620,17 +40,7 @@
       "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BNBUSDT",
       "status": 200,
       "file": "binance-BNBUSDT.json",
-      "receivedAtMs": 1794987578166
-    },
-    {
-      "coin": "bnb",
-      "currency": "usdt",
-      "exchange": "mexc",
-      "market": "BNBUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=BNBUSDT",
-      "status": 200,
-      "file": "mexc-BNBUSDT.json",
-      "receivedAtMs": 1794987578371
+      "receivedAtMs": 1795106970437
     },
     {
       "coin": "bnb",
@@ -640,17 +50,7 @@
       "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BNBUSDT",
       "status": 200,
       "file": "bybit-BNBUSDT.json",
-      "receivedAtMs": 1794987578257
-    },
-    {
-      "coin": "bnb",
-      "currency": "usdt",
-      "exchange": "okx",
-      "market": "BNB-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=BNB-USDT",
-      "status": 200,
-      "file": "okx-BNB-USDT.json",
-      "receivedAtMs": 1794987578133
+      "receivedAtMs": 1795106970437
     },
     {
       "coin": "bnb",
@@ -660,7 +60,17 @@
       "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BNB_USDT",
       "status": 200,
       "file": "gate-BNB_USDT.json",
-      "receivedAtMs": 1794987578467
+      "receivedAtMs": 1795106970613
+    },
+    {
+      "coin": "bnb",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "BNBUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=BNBUSDT",
+      "status": 200,
+      "file": "kraken-BNBUSDT.json",
+      "receivedAtMs": 1795106970512
     },
     {
       "coin": "bnb",
@@ -670,287 +80,217 @@
       "url": "https://api.kucoin.com/api/v1/market/stats?symbol=BNB-USDT",
       "status": 200,
       "file": "kucoin-BNB-USDT.json",
-      "receivedAtMs": 1794987578200
+      "receivedAtMs": 1795106970442
     },
     {
-      "coin": "ton",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "TONUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=TONUSD",
-      "status": 200,
-      "file": "kraken-TONUSD.json",
-      "receivedAtMs": 1794987578278
-    },
-    {
-      "coin": "ton",
-      "currency": "usd",
-      "exchange": "cryptocom",
-      "market": "GRAM_USD",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=GRAM_USD",
-      "status": 200,
-      "file": "cryptocom-GRAM_USD.json",
-      "receivedAtMs": 1794987578213
-    },
-    {
-      "coin": "ton",
-      "currency": "usd",
-      "exchange": "gemini",
-      "market": "gramusd",
-      "url": "https://api.gemini.com/v1/pubticker/gramusd",
-      "status": 200,
-      "file": "gemini-gramusd.json",
-      "receivedAtMs": 1794987579335
-    },
-    {
-      "coin": "ton",
-      "currency": "usdt",
-      "exchange": "kraken",
-      "market": "TONUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=TONUSDT",
-      "status": 200,
-      "file": "kraken-TONUSDT.json",
-      "receivedAtMs": 1794987578285
-    },
-    {
-      "coin": "ton",
-      "currency": "usdt",
-      "exchange": "binance",
-      "market": "GRAMUSDT",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=GRAMUSDT",
-      "status": 200,
-      "file": "binance-GRAMUSDT.json",
-      "receivedAtMs": 1794987578165
-    },
-    {
-      "coin": "ton",
+      "coin": "bnb",
       "currency": "usdt",
       "exchange": "mexc",
-      "market": "GRAMUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=GRAMUSDT",
+      "market": "BNBUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=BNBUSDT",
       "status": 200,
-      "file": "mexc-GRAMUSDT.json",
-      "receivedAtMs": 1794987578286
+      "file": "mexc-BNBUSDT.json",
+      "receivedAtMs": 1795106970527
     },
     {
-      "coin": "ton",
-      "currency": "usdt",
-      "exchange": "bybit",
-      "market": "GRAMUSDT",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=GRAMUSDT",
-      "status": 200,
-      "file": "bybit-GRAMUSDT.json",
-      "receivedAtMs": 1794987578239
-    },
-    {
-      "coin": "ton",
+      "coin": "bnb",
       "currency": "usdt",
       "exchange": "okx",
-      "market": "GRAM-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=GRAM-USDT",
+      "market": "BNB-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=BNB-USDT",
       "status": 200,
-      "file": "okx-GRAM-USDT.json",
-      "receivedAtMs": 1794987578225
+      "file": "okx-BNB-USDT.json",
+      "receivedAtMs": 1795106970428
     },
     {
-      "coin": "ton",
+      "coin": "bnb",
+      "currency": "usdt",
+      "exchange": "xt",
+      "market": "bnb_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=bnb_usdt",
+      "status": 200,
+      "file": "xt-bnb_usdt.json",
+      "receivedAtMs": 1795106970413
+    },
+    {
+      "coin": "btc",
+      "currency": "usd",
+      "exchange": "binance",
+      "market": "BTCUSD",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSD",
+      "status": 200,
+      "file": "binance-BTCUSD.json",
+      "receivedAtMs": 1795106969961
+    },
+    {
+      "coin": "btc",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tBTCUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tBTCUSD",
+      "status": 200,
+      "file": "bitfinex-tBTCUSD.json",
+      "receivedAtMs": 1795106970014
+    },
+    {
+      "coin": "btc",
+      "currency": "usd",
+      "exchange": "bybit",
+      "market": "BTCUSD",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSD",
+      "status": 200,
+      "file": "bybit-BTCUSD.json",
+      "receivedAtMs": 1795106969975
+    },
+    {
+      "coin": "btc",
+      "currency": "usd",
+      "exchange": "cryptocom",
+      "market": "BTC_USD",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=BTC_USD",
+      "status": 200,
+      "file": "cryptocom-BTC_USD.json",
+      "receivedAtMs": 1795106970255
+    },
+    {
+      "coin": "btc",
+      "currency": "usd",
+      "exchange": "gate",
+      "market": "BTC_USD",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USD",
+      "status": 200,
+      "file": "gate-BTC_USD.json",
+      "receivedAtMs": 1795106970458
+    },
+    {
+      "coin": "btc",
+      "currency": "usd",
+      "exchange": "gemini",
+      "market": "btcusd",
+      "url": "https://api.gemini.com/v1/pubticker/btcusd",
+      "status": 200,
+      "file": "gemini-btcusd.json",
+      "receivedAtMs": 1795106971777
+    },
+    {
+      "coin": "btc",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "XXBTZUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=XXBTZUSD",
+      "status": 200,
+      "file": "kraken-XXBTZUSD.json",
+      "receivedAtMs": 1795106970033
+    },
+    {
+      "coin": "btc",
+      "currency": "usdt",
+      "exchange": "binance",
+      "market": "BTCUSDT",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT",
+      "status": 200,
+      "file": "binance-BTCUSDT.json",
+      "receivedAtMs": 1795106970083
+    },
+    {
+      "coin": "btc",
+      "currency": "usdt",
+      "exchange": "bitfinex",
+      "market": "tBTCUST",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tBTCUST",
+      "status": 200,
+      "file": "bitfinex-tBTCUST.json",
+      "receivedAtMs": 1795106970349
+    },
+    {
+      "coin": "btc",
+      "currency": "usdt",
+      "exchange": "bybit",
+      "market": "BTCUSDT",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=BTCUSDT",
+      "status": 200,
+      "file": "bybit-BTCUSDT.json",
+      "receivedAtMs": 1795106970102
+    },
+    {
+      "coin": "btc",
+      "currency": "usdt",
+      "exchange": "cryptocom",
+      "market": "BTC_USDT",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=BTC_USDT",
+      "status": 200,
+      "file": "cryptocom-BTC_USDT.json",
+      "receivedAtMs": 1795106970436
+    },
+    {
+      "coin": "btc",
       "currency": "usdt",
       "exchange": "gate",
-      "market": "GRAM_USDT",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=GRAM_USDT",
+      "market": "BTC_USDT",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=BTC_USDT",
       "status": 200,
-      "file": "gate-GRAM_USDT.json",
-      "receivedAtMs": 1794987578482
+      "file": "gate-BTC_USDT.json",
+      "receivedAtMs": 1795106970517
     },
     {
-      "coin": "ton",
+      "coin": "btc",
+      "currency": "usdt",
+      "exchange": "gemini",
+      "market": "btcusdt",
+      "url": "https://api.gemini.com/v1/pubticker/btcusdt",
+      "status": 200,
+      "file": "gemini-btcusdt.json",
+      "receivedAtMs": 1795106971566
+    },
+    {
+      "coin": "btc",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "XBTUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=XBTUSDT",
+      "status": 200,
+      "file": "kraken-XBTUSDT.json",
+      "receivedAtMs": 1795106970240
+    },
+    {
+      "coin": "btc",
       "currency": "usdt",
       "exchange": "kucoin",
-      "market": "GRAM-USDT",
-      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=GRAM-USDT",
+      "market": "BTC-USDT",
+      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=BTC-USDT",
       "status": 200,
-      "file": "kucoin-GRAM-USDT.json",
-      "receivedAtMs": 1794987578351
+      "file": "kucoin-BTC-USDT.json",
+      "receivedAtMs": 1795106970360
     },
     {
-      "coin": "ton",
-      "currency": "usdt",
-      "exchange": "cryptocom",
-      "market": "GRAM_USDT",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=GRAM_USDT",
-      "status": 200,
-      "file": "cryptocom-GRAM_USDT.json",
-      "receivedAtMs": 1794987578239
-    },
-    {
-      "coin": "usdt",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "USDTZUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=USDTZUSD",
-      "status": 200,
-      "file": "kraken-USDTZUSD.json",
-      "receivedAtMs": 1794987578305
-    },
-    {
-      "coin": "usdt",
-      "currency": "usd",
-      "exchange": "binance",
-      "market": "USDTUSD",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=USDTUSD",
-      "status": 200,
-      "file": "binance-USDTUSD.json",
-      "receivedAtMs": 1794987578166
-    },
-    {
-      "coin": "usdt",
-      "currency": "usd",
-      "exchange": "bybit",
-      "market": "USDTUSD",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=USDTUSD",
-      "status": 200,
-      "file": "bybit-USDTUSD.json",
-      "receivedAtMs": 1794987578245
-    },
-    {
-      "coin": "usdt",
-      "currency": "usd",
-      "exchange": "okx",
-      "market": "USDT-USD",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=USDT-USD",
-      "status": 200,
-      "file": "okx-USDT-USD.json",
-      "receivedAtMs": 1794987578229
-    },
-    {
-      "coin": "usdt",
-      "currency": "usd",
-      "exchange": "cryptocom",
-      "market": "USDT_USD",
-      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=USDT_USD",
-      "status": 200,
-      "file": "cryptocom-USDT_USD.json",
-      "receivedAtMs": 1794987578241
-    },
-    {
-      "coin": "usdt",
-      "currency": "usd",
-      "exchange": "gemini",
-      "market": "usdtusd",
-      "url": "https://api.gemini.com/v1/pubticker/usdtusd",
-      "status": 200,
-      "file": "gemini-usdtusd.json",
-      "receivedAtMs": 1794987579113
-    },
-    {
-      "coin": "usdc",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "USDCUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=USDCUSD",
-      "status": 200,
-      "file": "kraken-USDCUSD.json",
-      "receivedAtMs": 1794987578312
-    },
-    {
-      "coin": "usdc",
-      "currency": "usd",
-      "exchange": "binance",
-      "market": "USDCUSD",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=USDCUSD",
-      "status": 200,
-      "file": "binance-USDCUSD.json",
-      "receivedAtMs": 1794987578166
-    },
-    {
-      "coin": "usdc",
-      "currency": "usd",
-      "exchange": "gemini",
-      "market": "usdcusd",
-      "url": "https://api.gemini.com/v1/pubticker/usdcusd",
-      "status": 200,
-      "file": "gemini-usdcusd.json",
-      "receivedAtMs": 1794987579108
-    },
-    {
-      "coin": "usdc",
-      "currency": "usdt",
-      "exchange": "kraken",
-      "market": "USDCUSDT",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=USDCUSDT",
-      "status": 200,
-      "file": "kraken-USDCUSDT.json",
-      "receivedAtMs": 1794987578303
-    },
-    {
-      "coin": "usdc",
-      "currency": "usdt",
-      "exchange": "binance",
-      "market": "USDCUSDT",
-      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=USDCUSDT",
-      "status": 200,
-      "file": "binance-USDCUSDT.json",
-      "receivedAtMs": 1794987578166
-    },
-    {
-      "coin": "usdc",
+      "coin": "btc",
       "currency": "usdt",
       "exchange": "mexc",
-      "market": "USDCUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=USDCUSDT",
+      "market": "BTCUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=BTCUSDT",
       "status": 200,
-      "file": "mexc-USDCUSDT.json",
-      "receivedAtMs": 1794987578303
+      "file": "mexc-BTCUSDT.json",
+      "receivedAtMs": 1795106970296
     },
     {
-      "coin": "usdc",
-      "currency": "usdt",
-      "exchange": "bybit",
-      "market": "USDCUSDT",
-      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=USDCUSDT",
-      "status": 200,
-      "file": "bybit-USDCUSDT.json",
-      "receivedAtMs": 1794987578245
-    },
-    {
-      "coin": "usdc",
+      "coin": "btc",
       "currency": "usdt",
       "exchange": "okx",
-      "market": "USDC-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=USDC-USDT",
+      "market": "BTC-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT",
       "status": 200,
-      "file": "okx-USDC-USDT.json",
-      "receivedAtMs": 1794987578223
+      "file": "okx-BTC-USDT.json",
+      "receivedAtMs": 1795106970157
     },
     {
-      "coin": "usdc",
+      "coin": "btc",
       "currency": "usdt",
-      "exchange": "gate",
-      "market": "USDC_USDT",
-      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=USDC_USDT",
+      "exchange": "xt",
+      "market": "btc_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=btc_usdt",
       "status": 200,
-      "file": "gate-USDC_USDT.json",
-      "receivedAtMs": 1794987578481
-    },
-    {
-      "coin": "usdc",
-      "currency": "usdt",
-      "exchange": "kucoin",
-      "market": "USDC-USDT",
-      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=USDC-USDT",
-      "status": 200,
-      "file": "kucoin-USDC-USDT.json",
-      "receivedAtMs": 1794987578385
-    },
-    {
-      "coin": "dai",
-      "currency": "usd",
-      "exchange": "kraken",
-      "market": "DAIUSD",
-      "url": "https://api.kraken.com/0/public/Ticker?pair=DAIUSD",
-      "status": 200,
-      "file": "kraken-DAIUSD.json",
-      "receivedAtMs": 1794987578312
+      "file": "xt-btc_usdt.json",
+      "receivedAtMs": 1795106970107
     },
     {
       "coin": "dai",
@@ -960,7 +300,17 @@
       "url": "https://api.gemini.com/v1/pubticker/daiusd",
       "status": 200,
       "file": "gemini-daiusd.json",
-      "receivedAtMs": 1794987579105
+      "receivedAtMs": 1795106971406
+    },
+    {
+      "coin": "dai",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "DAIUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=DAIUSD",
+      "status": 200,
+      "file": "kraken-DAIUSD.json",
+      "receivedAtMs": 1795106970590
     },
     {
       "coin": "dai",
@@ -970,7 +320,617 @@
       "url": "https://api.kraken.com/0/public/Ticker?pair=DAIUSDT",
       "status": 200,
       "file": "kraken-DAIUSDT.json",
-      "receivedAtMs": 1794987578305
+      "receivedAtMs": 1795106970646
+    },
+    {
+      "coin": "eth",
+      "currency": "usd",
+      "exchange": "binance",
+      "market": "ETHUSD",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSD",
+      "status": 200,
+      "file": "binance-ETHUSD.json",
+      "receivedAtMs": 1795106970212
+    },
+    {
+      "coin": "eth",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tETHUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tETHUSD",
+      "status": 200,
+      "file": "bitfinex-tETHUSD.json",
+      "receivedAtMs": 1795106970129
+    },
+    {
+      "coin": "eth",
+      "currency": "usd",
+      "exchange": "bybit",
+      "market": "ETHUSD",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=ETHUSD",
+      "status": 200,
+      "file": "bybit-ETHUSD.json",
+      "receivedAtMs": 1795106970227
+    },
+    {
+      "coin": "eth",
+      "currency": "usd",
+      "exchange": "cryptocom",
+      "market": "ETH_USD",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=ETH_USD",
+      "status": 200,
+      "file": "cryptocom-ETH_USD.json",
+      "receivedAtMs": 1795106970437
+    },
+    {
+      "coin": "eth",
+      "currency": "usd",
+      "exchange": "gate",
+      "market": "ETH_USD",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=ETH_USD",
+      "status": 200,
+      "file": "gate-ETH_USD.json",
+      "receivedAtMs": 1795106970609
+    },
+    {
+      "coin": "eth",
+      "currency": "usd",
+      "exchange": "gemini",
+      "market": "ethusd",
+      "url": "https://api.gemini.com/v1/pubticker/ethusd",
+      "status": 200,
+      "file": "gemini-ethusd.json",
+      "receivedAtMs": 1795106971343
+    },
+    {
+      "coin": "eth",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "XETHZUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=XETHZUSD",
+      "status": 200,
+      "file": "kraken-XETHZUSD.json",
+      "receivedAtMs": 1795106970368
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "binance",
+      "market": "ETHUSDT",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=ETHUSDT",
+      "status": 200,
+      "file": "binance-ETHUSDT.json",
+      "receivedAtMs": 1795106970274
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "bitfinex",
+      "market": "tETHUST",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tETHUST",
+      "status": 200,
+      "file": "bitfinex-tETHUST.json",
+      "receivedAtMs": 1795106970415
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "bybit",
+      "market": "ETHUSDT",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=ETHUSDT",
+      "status": 200,
+      "file": "bybit-ETHUSDT.json",
+      "receivedAtMs": 1795106970274
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "cryptocom",
+      "market": "ETH_USDT",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=ETH_USDT",
+      "status": 200,
+      "file": "cryptocom-ETH_USDT.json",
+      "receivedAtMs": 1795106970437
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "gate",
+      "market": "ETH_USDT",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=ETH_USDT",
+      "status": 200,
+      "file": "gate-ETH_USDT.json",
+      "receivedAtMs": 1795106970646
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "gemini",
+      "market": "ethusdt",
+      "url": "https://api.gemini.com/v1/pubticker/ethusdt",
+      "status": 200,
+      "file": "gemini-ethusdt.json",
+      "receivedAtMs": 1795106971407
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "ETHUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=ETHUSDT",
+      "status": 200,
+      "file": "kraken-ETHUSDT.json",
+      "receivedAtMs": 1795106970368
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "kucoin",
+      "market": "ETH-USDT",
+      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=ETH-USDT",
+      "status": 200,
+      "file": "kucoin-ETH-USDT.json",
+      "receivedAtMs": 1795106970356
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "mexc",
+      "market": "ETHUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=ETHUSDT",
+      "status": 200,
+      "file": "mexc-ETHUSDT.json",
+      "receivedAtMs": 1795106970310
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "okx",
+      "market": "ETH-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=ETH-USDT",
+      "status": 200,
+      "file": "okx-ETH-USDT.json",
+      "receivedAtMs": 1795106970255
+    },
+    {
+      "coin": "eth",
+      "currency": "usdt",
+      "exchange": "xt",
+      "market": "eth_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=eth_usdt",
+      "status": 200,
+      "file": "xt-eth_usdt.json",
+      "receivedAtMs": 1795106970286
+    },
+    {
+      "coin": "ltc",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tLTCUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tLTCUSD",
+      "status": 200,
+      "file": "bitfinex-tLTCUSD.json",
+      "receivedAtMs": 1795106970457
+    },
+    {
+      "coin": "ltc",
+      "currency": "usd",
+      "exchange": "cryptocom",
+      "market": "LTC_USD",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=LTC_USD",
+      "status": 200,
+      "file": "cryptocom-LTC_USD.json",
+      "receivedAtMs": 1795106970513
+    },
+    {
+      "coin": "ltc",
+      "currency": "usd",
+      "exchange": "gemini",
+      "market": "ltcusd",
+      "url": "https://api.gemini.com/v1/pubticker/ltcusd",
+      "status": 200,
+      "file": "gemini-ltcusd.json",
+      "receivedAtMs": 1795106971391
+    },
+    {
+      "coin": "ltc",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "XLTCZUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=XLTCZUSD",
+      "status": 200,
+      "file": "kraken-XLTCZUSD.json",
+      "receivedAtMs": 1795106970456
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "binance",
+      "market": "LTCUSDT",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=LTCUSDT",
+      "status": 200,
+      "file": "binance-LTCUSDT.json",
+      "receivedAtMs": 1795106970407
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "bitfinex",
+      "market": "tLTCUST",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tLTCUST",
+      "status": 200,
+      "file": "bitfinex-tLTCUST.json",
+      "receivedAtMs": 1795106970480
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "bybit",
+      "market": "LTCUSDT",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=LTCUSDT",
+      "status": 200,
+      "file": "bybit-LTCUSDT.json",
+      "receivedAtMs": 1795106970414
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "cryptocom",
+      "market": "LTC_USDT",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=LTC_USDT",
+      "status": 200,
+      "file": "cryptocom-LTC_USDT.json",
+      "receivedAtMs": 1795106970427
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "gate",
+      "market": "LTC_USDT",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=LTC_USDT",
+      "status": 200,
+      "file": "gate-LTC_USDT.json",
+      "receivedAtMs": 1795106970606
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "LTCUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=LTCUSDT",
+      "status": 200,
+      "file": "kraken-LTCUSDT.json",
+      "receivedAtMs": 1795106970457
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "kucoin",
+      "market": "LTC-USDT",
+      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=LTC-USDT",
+      "status": 200,
+      "file": "kucoin-LTC-USDT.json",
+      "receivedAtMs": 1795106970415
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "mexc",
+      "market": "LTCUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=LTCUSDT",
+      "status": 200,
+      "file": "mexc-LTCUSDT.json",
+      "receivedAtMs": 1795106970510
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "okx",
+      "market": "LTC-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=LTC-USDT",
+      "status": 200,
+      "file": "okx-LTC-USDT.json",
+      "receivedAtMs": 1795106970414
+    },
+    {
+      "coin": "ltc",
+      "currency": "usdt",
+      "exchange": "xt",
+      "market": "ltc_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=ltc_usdt",
+      "status": 200,
+      "file": "xt-ltc_usdt.json",
+      "receivedAtMs": 1795106970393
+    },
+    {
+      "coin": "sol",
+      "currency": "usd",
+      "exchange": "binance",
+      "market": "SOLUSD",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSD",
+      "status": 200,
+      "file": "binance-SOLUSD.json",
+      "receivedAtMs": 1795106970382
+    },
+    {
+      "coin": "sol",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tSOLUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tSOLUSD",
+      "status": 200,
+      "file": "bitfinex-tSOLUSD.json",
+      "receivedAtMs": 1795106970432
+    },
+    {
+      "coin": "sol",
+      "currency": "usd",
+      "exchange": "cryptocom",
+      "market": "SOL_USD",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=SOL_USD",
+      "status": 200,
+      "file": "cryptocom-SOL_USD.json",
+      "receivedAtMs": 1795106970385
+    },
+    {
+      "coin": "sol",
+      "currency": "usd",
+      "exchange": "gemini",
+      "market": "solusd",
+      "url": "https://api.gemini.com/v1/pubticker/solusd",
+      "status": 200,
+      "file": "gemini-solusd.json",
+      "receivedAtMs": 1795106971340
+    },
+    {
+      "coin": "sol",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "SOLUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=SOLUSD",
+      "status": 200,
+      "file": "kraken-SOLUSD.json",
+      "receivedAtMs": 1795106970415
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "binance",
+      "market": "SOLUSDT",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=SOLUSDT",
+      "status": 200,
+      "file": "binance-SOLUSDT.json",
+      "receivedAtMs": 1795106970385
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "bitfinex",
+      "market": "tSOLUST",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tSOLUST",
+      "status": 200,
+      "file": "bitfinex-tSOLUST.json",
+      "receivedAtMs": 1795106970481
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "bybit",
+      "market": "SOLUSDT",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=SOLUSDT",
+      "status": 200,
+      "file": "bybit-SOLUSDT.json",
+      "receivedAtMs": 1795106970393
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "cryptocom",
+      "market": "SOL_USDT",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=SOL_USDT",
+      "status": 200,
+      "file": "cryptocom-SOL_USDT.json",
+      "receivedAtMs": 1795106970572
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "gate",
+      "market": "SOL_USDT",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=SOL_USDT",
+      "status": 200,
+      "file": "gate-SOL_USDT.json",
+      "receivedAtMs": 1795106970590
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "SOLUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=SOLUSDT",
+      "status": 200,
+      "file": "kraken-SOLUSDT.json",
+      "receivedAtMs": 1795106970432
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "kucoin",
+      "market": "SOL-USDT",
+      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=SOL-USDT",
+      "status": 200,
+      "file": "kucoin-SOL-USDT.json",
+      "receivedAtMs": 1795106970395
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "mexc",
+      "market": "SOLUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=SOLUSDT",
+      "status": 200,
+      "file": "mexc-SOLUSDT.json",
+      "receivedAtMs": 1795106970438
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "okx",
+      "market": "SOL-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=SOL-USDT",
+      "status": 200,
+      "file": "okx-SOL-USDT.json",
+      "receivedAtMs": 1795106970395
+    },
+    {
+      "coin": "sol",
+      "currency": "usdt",
+      "exchange": "xt",
+      "market": "sol_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=sol_usdt",
+      "status": 200,
+      "file": "xt-sol_usdt.json",
+      "receivedAtMs": 1795106970367
+    },
+    {
+      "coin": "ton",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tTONUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tTONUSD",
+      "status": 200,
+      "file": "bitfinex-tTONUSD.json",
+      "receivedAtMs": 1795106970520
+    },
+    {
+      "coin": "ton",
+      "currency": "usd",
+      "exchange": "cryptocom",
+      "market": "GRAM_USD",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=GRAM_USD",
+      "status": 200,
+      "file": "cryptocom-GRAM_USD.json",
+      "receivedAtMs": 1795106970572
+    },
+    {
+      "coin": "ton",
+      "currency": "usd",
+      "exchange": "gemini",
+      "market": "gramusd",
+      "url": "https://api.gemini.com/v1/pubticker/gramusd",
+      "status": 200,
+      "file": "gemini-gramusd.json",
+      "receivedAtMs": 1795106971440
+    },
+    {
+      "coin": "ton",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "TONUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=TONUSD",
+      "status": 200,
+      "file": "kraken-TONUSD.json",
+      "receivedAtMs": 1795106970536
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "binance",
+      "market": "GRAMUSDT",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=GRAMUSDT",
+      "status": 200,
+      "file": "binance-GRAMUSDT.json",
+      "receivedAtMs": 1795106970443
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "bitfinex",
+      "market": "tTONUST",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tTONUST",
+      "status": 200,
+      "file": "bitfinex-tTONUST.json",
+      "receivedAtMs": 1795106970527
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "bybit",
+      "market": "GRAMUSDT",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=GRAMUSDT",
+      "status": 200,
+      "file": "bybit-GRAMUSDT.json",
+      "receivedAtMs": 1795106970445
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "cryptocom",
+      "market": "GRAM_USDT",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=GRAM_USDT",
+      "status": 200,
+      "file": "cryptocom-GRAM_USDT.json",
+      "receivedAtMs": 1795106970682
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "gate",
+      "market": "GRAM_USDT",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=GRAM_USDT",
+      "status": 200,
+      "file": "gate-GRAM_USDT.json",
+      "receivedAtMs": 1795106970693
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "TONUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=TONUSDT",
+      "status": 200,
+      "file": "kraken-TONUSDT.json",
+      "receivedAtMs": 1795106970529
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "kucoin",
+      "market": "GRAM-USDT",
+      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=GRAM-USDT",
+      "status": 200,
+      "file": "kucoin-GRAM-USDT.json",
+      "receivedAtMs": 1795106970442
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "mexc",
+      "market": "GRAMUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=GRAMUSDT",
+      "status": 200,
+      "file": "mexc-GRAMUSDT.json",
+      "receivedAtMs": 1795106970528
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "okx",
+      "market": "GRAM-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=GRAM-USDT",
+      "status": 200,
+      "file": "okx-GRAM-USDT.json",
+      "receivedAtMs": 1795106970436
+    },
+    {
+      "coin": "ton",
+      "currency": "usdt",
+      "exchange": "xt",
+      "market": "gram_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=gram_usdt",
+      "status": 200,
+      "file": "xt-gram_usdt.json",
+      "receivedAtMs": 1795106970413
     },
     {
       "coin": "trx",
@@ -980,17 +940,7 @@
       "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=TRXUSDT",
       "status": 200,
       "file": "binance-TRXUSDT.json",
-      "receivedAtMs": 1794987578167
-    },
-    {
-      "coin": "trx",
-      "currency": "usdt",
-      "exchange": "mexc",
-      "market": "TRXUSDT",
-      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=TRXUSDT",
-      "status": 200,
-      "file": "mexc-TRXUSDT.json",
-      "receivedAtMs": 1794987578344
+      "receivedAtMs": 1795106970481
     },
     {
       "coin": "trx",
@@ -1000,17 +950,7 @@
       "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=TRXUSDT",
       "status": 200,
       "file": "bybit-TRXUSDT.json",
-      "receivedAtMs": 1794987578244
-    },
-    {
-      "coin": "trx",
-      "currency": "usdt",
-      "exchange": "okx",
-      "market": "TRX-USDT",
-      "url": "https://www.okx.com/api/v5/market/ticker?instId=TRX-USDT",
-      "status": 200,
-      "file": "okx-TRX-USDT.json",
-      "receivedAtMs": 1794987578231
+      "receivedAtMs": 1795106970486
     },
     {
       "coin": "trx",
@@ -1020,7 +960,7 @@
       "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=TRX_USDT",
       "status": 200,
       "file": "gate-TRX_USDT.json",
-      "receivedAtMs": 1794987578606
+      "receivedAtMs": 1795106970732
     },
     {
       "coin": "trx",
@@ -1030,7 +970,297 @@
       "url": "https://api.kucoin.com/api/v1/market/stats?symbol=TRX-USDT",
       "status": 200,
       "file": "kucoin-TRX-USDT.json",
-      "receivedAtMs": 1794987578235
+      "receivedAtMs": 1795106970485
+    },
+    {
+      "coin": "trx",
+      "currency": "usdt",
+      "exchange": "mexc",
+      "market": "TRXUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=TRXUSDT",
+      "status": 200,
+      "file": "mexc-TRXUSDT.json",
+      "receivedAtMs": 1795106970557
+    },
+    {
+      "coin": "trx",
+      "currency": "usdt",
+      "exchange": "okx",
+      "market": "TRX-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=TRX-USDT",
+      "status": 200,
+      "file": "okx-TRX-USDT.json",
+      "receivedAtMs": 1795106970479
+    },
+    {
+      "coin": "usdc",
+      "currency": "usd",
+      "exchange": "binance",
+      "market": "USDCUSD",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=USDCUSD",
+      "status": 200,
+      "file": "binance-USDCUSD.json",
+      "receivedAtMs": 1795106970458
+    },
+    {
+      "coin": "usdc",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tUDCUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tUDCUSD",
+      "status": 200,
+      "file": "bitfinex-tUDCUSD.json",
+      "receivedAtMs": 1795106970432
+    },
+    {
+      "coin": "usdc",
+      "currency": "usd",
+      "exchange": "gemini",
+      "market": "usdcusd",
+      "url": "https://api.gemini.com/v1/pubticker/usdcusd",
+      "status": 200,
+      "file": "gemini-usdcusd.json",
+      "receivedAtMs": 1795106971421
+    },
+    {
+      "coin": "usdc",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "USDCUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=USDCUSD",
+      "status": 200,
+      "file": "kraken-USDCUSD.json",
+      "receivedAtMs": 1795106970563
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "binance",
+      "market": "USDCUSDT",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=USDCUSDT",
+      "status": 200,
+      "file": "binance-USDCUSDT.json",
+      "receivedAtMs": 1795106970463
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "bitfinex",
+      "market": "tUDCUST",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tUDCUST",
+      "status": 200,
+      "file": "bitfinex-tUDCUST.json",
+      "receivedAtMs": 1795106970554
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "bybit",
+      "market": "USDCUSDT",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=USDCUSDT",
+      "status": 200,
+      "file": "bybit-USDCUSDT.json",
+      "receivedAtMs": 1795106970466
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "gate",
+      "market": "USDC_USDT",
+      "url": "https://api.gateio.ws/api/v4/spot/tickers?currency_pair=USDC_USDT",
+      "status": 200,
+      "file": "gate-USDC_USDT.json",
+      "receivedAtMs": 1795106970624
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "USDCUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=USDCUSDT",
+      "status": 200,
+      "file": "kraken-USDCUSDT.json",
+      "receivedAtMs": 1795106970578
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "kucoin",
+      "market": "USDC-USDT",
+      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=USDC-USDT",
+      "status": 200,
+      "file": "kucoin-USDC-USDT.json",
+      "receivedAtMs": 1795106970467
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "mexc",
+      "market": "USDCUSDT",
+      "url": "https://api.mexc.com/api/v3/ticker/24hr?symbol=USDCUSDT",
+      "status": 200,
+      "file": "mexc-USDCUSDT.json",
+      "receivedAtMs": 1795106970573
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "okx",
+      "market": "USDC-USDT",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=USDC-USDT",
+      "status": 200,
+      "file": "okx-USDC-USDT.json",
+      "receivedAtMs": 1795106970456
+    },
+    {
+      "coin": "usdc",
+      "currency": "usdt",
+      "exchange": "xt",
+      "market": "usdc_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=usdc_usdt",
+      "status": 200,
+      "file": "xt-usdc_usdt.json",
+      "receivedAtMs": 1795106970437
+    },
+    {
+      "coin": "usdt",
+      "currency": "usd",
+      "exchange": "binance",
+      "market": "USDTUSD",
+      "url": "https://api.binance.com/api/v3/ticker/24hr?symbol=USDTUSD",
+      "status": 200,
+      "file": "binance-USDTUSD.json",
+      "receivedAtMs": 1795106970450
+    },
+    {
+      "coin": "usdt",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tUSTUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tUSTUSD",
+      "status": 200,
+      "file": "bitfinex-tUSTUSD.json",
+      "receivedAtMs": 1795106970432
+    },
+    {
+      "coin": "usdt",
+      "currency": "usd",
+      "exchange": "bybit",
+      "market": "USDTUSD",
+      "url": "https://api.bybit.com/v5/market/tickers?category=spot&symbol=USDTUSD",
+      "status": 200,
+      "file": "bybit-USDTUSD.json",
+      "receivedAtMs": 1795106970454
+    },
+    {
+      "coin": "usdt",
+      "currency": "usd",
+      "exchange": "cryptocom",
+      "market": "USDT_USD",
+      "url": "https://api.crypto.com/exchange/v1/public/get-tickers?instrument_name=USDT_USD",
+      "status": 200,
+      "file": "cryptocom-USDT_USD.json",
+      "receivedAtMs": 1795106970695
+    },
+    {
+      "coin": "usdt",
+      "currency": "usd",
+      "exchange": "gemini",
+      "market": "usdtusd",
+      "url": "https://api.gemini.com/v1/pubticker/usdtusd",
+      "status": 200,
+      "file": "gemini-usdtusd.json",
+      "receivedAtMs": 1795106971431
+    },
+    {
+      "coin": "usdt",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "USDTZUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=USDTZUSD",
+      "status": 200,
+      "file": "kraken-USDTZUSD.json",
+      "receivedAtMs": 1795106970539
+    },
+    {
+      "coin": "usdt",
+      "currency": "usd",
+      "exchange": "okx",
+      "market": "USDT-USD",
+      "url": "https://www.okx.com/api/v5/market/ticker?instId=USDT-USD",
+      "status": 200,
+      "file": "okx-USDT-USD.json",
+      "receivedAtMs": 1795106970446
+    },
+    {
+      "coin": "xmr",
+      "currency": "usd",
+      "exchange": "bitfinex",
+      "market": "tXMRUSD",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tXMRUSD",
+      "status": 200,
+      "file": "bitfinex-tXMRUSD.json",
+      "receivedAtMs": 1795106970511
+    },
+    {
+      "coin": "xmr",
+      "currency": "usd",
+      "exchange": "kraken",
+      "market": "XXMRZUSD",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=XXMRZUSD",
+      "status": 200,
+      "file": "kraken-XXMRZUSD.json",
+      "receivedAtMs": 1795106970496
+    },
+    {
+      "coin": "xmr",
+      "currency": "usdt",
+      "exchange": "bitfinex",
+      "market": "tXMRUST",
+      "url": "https://api-pub.bitfinex.com/v2/tickers?symbols=tXMRUST",
+      "status": 200,
+      "file": "bitfinex-tXMRUST.json",
+      "receivedAtMs": 1795106970395
+    },
+    {
+      "coin": "xmr",
+      "currency": "usdt",
+      "exchange": "htx",
+      "market": "xmrusdt",
+      "url": "https://api.huobi.pro/market/detail/merged?symbol=xmrusdt",
+      "status": 200,
+      "file": "htx-xmrusdt.json",
+      "receivedAtMs": 1795106970508
+    },
+    {
+      "coin": "xmr",
+      "currency": "usdt",
+      "exchange": "kraken",
+      "market": "XMRUSDT",
+      "url": "https://api.kraken.com/0/public/Ticker?pair=XMRUSDT",
+      "status": 200,
+      "file": "kraken-XMRUSDT.json",
+      "receivedAtMs": 1795106970510
+    },
+    {
+      "coin": "xmr",
+      "currency": "usdt",
+      "exchange": "kucoin",
+      "market": "XMR-USDT",
+      "url": "https://api.kucoin.com/api/v1/market/stats?symbol=XMR-USDT",
+      "status": 200,
+      "file": "kucoin-XMR-USDT.json",
+      "receivedAtMs": 1795106970427
+    },
+    {
+      "coin": "xmr",
+      "currency": "usdt",
+      "exchange": "xt",
+      "market": "xmr_usdt",
+      "url": "https://sapi.xt.com/v4/public/ticker?symbol=xmr_usdt",
+      "status": 200,
+      "file": "xt-xmr_usdt.json",
+      "receivedAtMs": 1795106970403
     }
   ]
 }

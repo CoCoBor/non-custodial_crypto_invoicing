@@ -2,15 +2,16 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 
-import { getPrice, getTrxPrice } from "../../src/invoice/price.function.js";
+import { getPrice, getTicker, getTrxPrice } from "../../src/invoice/price.function.js";
 
 // The multi-exchange USD prices, answered from one recorded snapshot of every
 // weighted market in src/storage/markets.json (tests/fixtures/prices, all
-// recorded within 3 s on 2026-11-18 with one public GET each). No network.
-// XMR's markets (XT, Bitfinex and HTX count for XMR since 2026-11-19) have
-// their own snapshot: tests/invoice/xmr-price.test.ts.
+// recorded within 2.1 s on 2026-11-20 with one public GET each, XT and
+// Bitfinex included: they count for every coin since that day). No network.
+// XMR's own tests (HTX, the 4-source rule for XMR) use the snapshot in
+// tests/invoice/xmr-price.test.ts.
 
-type Recording = { url: string; status: number; file?: string };
+type Recording = { url: string; status: number; file?: string; coin: string; currency: string; exchange: string };
 const snapshot = JSON.parse(
   readFileSync(new URL("../fixtures/prices/recordings.json", import.meta.url), "utf8"),
 ) as { finishedAtMs: number; recordings: Recording[] };
@@ -38,6 +39,15 @@ function down(...patterns: RegExp[]) {
     assert.ok(urls.length > 0, `no recorded market matches ${pattern}`);
     for (const url of urls) replies.set(url, { status: 503, body: "" });
   }
+}
+
+/** Makes every recorded market of one pair answer 503, except on the exchanges named. */
+function downAllBut(coin: string, currency: string, ...answering: string[]) {
+  const urls = snapshot.recordings
+    .filter((r) => r.coin === coin && r.currency === currency && !answering.includes(r.exchange))
+    .map((r) => r.url);
+  assert.ok(urls.length > 0, `no recorded ${coin}/${currency} market to take down`);
+  for (const url of urls) replies.set(url, { status: 503, body: "" });
 }
 
 /** Replaces bid and ask in a Kraken or Gemini reply. */
@@ -85,6 +95,19 @@ function product(a: string, b: string): bigint {
   const raw = scaled(a) * scaled(b);
   return raw / SCALE + ((raw % SCALE) * 2n >= SCALE ? 1n : 0n);
 }
+/** The volume-weighted bid/ask midpoint of these exchanges' tickers, at 10 decimals, rounded half up. */
+async function weightedMidpoint(coin: string, currency: "usd" | "usdt", exchanges: string[]): Promise<bigint> {
+  let weighted = 0n;
+  let volume = 0n;
+  for (const exchange of exchanges) {
+    const ticker = await getTicker(exchange as Parameters<typeof getTicker>[0], coin, currency);
+    assert.ok(ticker, `${exchange} ${coin}/${currency} answers`);
+    weighted += (ticker.bid + ticker.ask) * ticker.volume;
+    volume += ticker.volume;
+  }
+  const denominator = 2n * volume * 10n ** 26n;
+  return weighted / denominator + ((weighted % denominator) * 2n >= denominator ? 1n : 0n);
+}
 
 describe("USD prices from the recorded snapshot", () => {
   it("prices BTC, ETH and SOL from their own USD markets, as before", async () => {
@@ -99,11 +122,8 @@ describe("USD prices from the recorded snapshot", () => {
   });
 
   for (const [asset, low, high] of [
-    ["ltc", 40, 50],
     ["bsc", 550, 650],
     ["ton", 1, 1.2],
-    ["usdceth", 0.99, 1.01],
-    ["usdcsol", 0.99, 1.01],
   ] as const) {
     it(`prices ${asset}, whose own USD markets are too few, as its USDT price × the USDT/USD price`, async () => {
       const usd = await getPrice(asset, "usd");
@@ -151,23 +171,51 @@ describe("USD prices from the recorded snapshot", () => {
   });
 });
 
+describe("XT and Bitfinex count for every coin (owner decision 2026-11-20)", () => {
+  for (const coin of ["btc", "ltc"] as const) {
+    it(`count toward the 4 sources and the average for ${coin.toUpperCase()}/USDT`, async () => {
+      downAllBut(coin, "usdt", "kraken", "binance", "xt", "bitfinex");
+
+      const price = await getPrice(coin, "usdt");
+
+      assert.ok(price, `${coin} has a USDT price from Kraken, Binance, XT and Bitfinex`);
+      assert.equal(scaled(price), await weightedMidpoint(coin, "usdt", ["kraken", "binance", "xt", "bitfinex"]));
+    });
+  }
+
+  for (const [asset, coin, others] of [
+    ["ltc", "ltc", ["kraken", "cryptocom", "gemini"]],
+    ["usdceth", "usdc", ["kraken", "binance", "gemini"]],
+  ] as const) {
+    it(`give ${asset} a 4th own USD market (Bitfinex), so it is priced without the USDT route`, async () => {
+      downAllBut(coin, "usdt");
+
+      const usd = await getPrice(asset, "usd");
+
+      assert.equal(await getPrice(asset, "usdt"), undefined);
+      assert.ok(usd, `${asset} has a USD price`);
+      assert.equal(scaled(usd), await weightedMidpoint(coin, "usd", [...others, "bitfinex"]));
+    });
+  }
+});
+
 describe("the 4-source rule", () => {
-  it("is kept on the USDT leg: LTC has no price with only 3 LTC/USDT markets answering", async () => {
-    down(/api\.mexc\.com.*LTCUSDT$/, /LTC-USDT$/, /LTC_USDT$/); // MEXC, OKX, KuCoin, Gate, Crypto.com
-    // Left: Kraken, Binance and Bybit.
-    assert.equal(await getPrice("ltc", "usdt"), undefined);
-    assert.equal(await getPrice("ltc", "usd"), undefined);
+  it("is kept on the USDT leg: BNB has no price with only 3 BNB/USDT markets answering", async () => {
+    downAllBut("bnb", "usdt", "kraken", "binance", "bybit");
+
+    assert.equal(await getPrice("bsc", "usdt"), undefined);
+    assert.equal(await getPrice("bsc", "usd"), undefined);
   });
 
-  it("is kept on the USDT/USD leg: LTC has no price with only 3 USDT/USD markets answering", async () => {
-    down(/pair=USDTZUSD$/, /symbol=USDTUSD$/, /instId=USDT-USD$/); // Kraken, Binance, Bybit, OKX: 2 left
+  it("is kept on the USDT/USD leg: BNB has no price with only 3 USDT/USD markets answering", async () => {
+    downAllBut("usdt", "usd", "cryptocom", "gemini", "bitfinex");
 
-    assert.equal(await getPrice("ltc", "usd"), undefined);
+    assert.equal(await getPrice("bsc", "usd"), undefined);
   });
 
   it("uses BTC's own USD markets while 4 answer, and the USDT route only when they don't", async () => {
     const direct = await getPrice("btc", "usd");
-    down(/pair=XXBTZUSD$/, /symbol=BTCUSD$/); // Kraken, Binance, Bybit: 3 left
+    downAllBut("btc", "usd", "cryptocom", "gate", "gemini");
     const crossed = await getPrice("btc", "usd");
     const inUsdt = await getPrice("btc", "usdt");
     const usdtInUsd = await getPrice("usdteth", "usd");
