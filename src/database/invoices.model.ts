@@ -156,7 +156,7 @@ const invoiceSchema = new Schema(
     fee_rate: { type: String, default: "" }, // the merchant's fee rate when the invoice was made; "" on older invoices, which use the merchant's current rate
     swap_max_loss_bps: { type: Number, default: null }, // the merchant's swap max loss when the invoice was made; null on older invoices, which use the merchant's current one
     swap_quoted_at: { type: Number, default: null }, // unix ms of the last swap quote for the merchant payout; quotes are spaced out
-    swap_fee: { type: Number, default: 0 }, // if to_crypto is another crypto and NEAR Intents is used, fee = amount transferred - network fees - near estimated receive quote
+    swap_fee: { type: Number, default: 0 }, // written only by the removed legacy swap code; nothing reads it
     review_reason: { type: String, default: "" },
     notified_status: { type: String, default: "" }, // last status announced by webhook; see src/webhooks/webhook-pass.ts
     status_log: { type: [statusChangeSchema], default: [] }, // empty on invoices made before it existed
@@ -180,7 +180,7 @@ const invoiceSchema = new Schema(
     to_address: { type: String, default: "" }, // address to send to after invoice completed
     link: { type: String, default: "" }, // invoice payment link
     bot_link: { type: String, default: "" }, // invoice payment link in telegram bot
-    return_url: { type: String, default: "" }, // url the user returns to after invoice is completed
+    return_url: { type: String, default: "" }, // offered to the payer once they are done paying or the invoice ended unpaid; see src/invoice/return-url.ts
     callback_url: { type: String, default: "" }, // url where transaction notifications are sent to
     payments: { type: [paymentSchema], default: [] },
     transfers: { type: [transferSchema], default: [] },

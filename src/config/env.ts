@@ -117,7 +117,7 @@ export const env = Object.freeze({
     process.env.SOL_GAS_WALLET_KEY,
   ),
 
-  // Receives the TON platform fee and NEAR refunds of TON swaps.
+  // Receives the TON platform fee.
   // Address only: this wallet's key never goes on the server.
   platformTonAddress: readTonAddress(
     "PLATFORM_TON_ADDRESS",

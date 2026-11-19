@@ -134,8 +134,8 @@ async function createFixedCoinInvoice(
   const price = parsePrice(res, parsed.data);
   if (price === undefined) return res;
 
-  // Fixed-coin invoices can only take BTC deposits today; never quietly make
-  // a BTC invoice for a payer who was told to pay something else.
+  // A coin with no chain adapter can't be watched or paid out; never quietly
+  // make an invoice in another coin for a payer who was told to pay this one.
   const chain = adapterFor(crypto);
   if (chain === undefined) {
     return res.status(409).json({
@@ -233,7 +233,8 @@ async function createFixedCoinInvoice(
 }
 
 // The payer picks the coin later, on the payment page. Offered: the coins
-// the merchant has a valid payout address for that can be paid end to end.
+// the merchant has a valid payout address for that can be paid end to end
+// and whose price clears the coin's minimum invoice amount.
 async function createMerchantListInvoice(req: Request, res: Response, merchant: Merchant, deps: AppDeps) {
   const parsed = merchantListSchema.safeParse(req.body);
   if (!parsed.success) return invalidRequest(res);

@@ -67,8 +67,8 @@ export const TON_PAYOUT_FEE = 5_000_000n;
 // that; the merchant gets that much less.
 const TON_SHORTFALL_PER_HOUR = 75n;
 
-// The smallest balance that counts as "paid in full" for an invoice amount.
-// The watcher (invoice.function.ts) and the payout both use this.
+// The smallest deposit balance the payout accepts for the accepted amount.
+// Only the payout needs it: the watcher sums payments, not the balance.
 // 30-minute invoice: up to 38 nanoton short. 60 minutes: up to 75.
 export function tonMinimumPayment(
   invoiceAmount: bigint,
@@ -514,7 +514,7 @@ async function prepareTonPayout(input: {
   feeExempt: bigint;
   toCrypto: string;
   sealedDepositKey: SealedSecret | null | undefined;
-  // The deposit must hold at least this much (the invoice amount).
+  // The deposit must hold at least this much (the accepted amount, tolerance included).
   minimumTotal: bigint;
   // The invoice lifetime, for the storage-fee allowance.
   lifetimeMinutes: number;

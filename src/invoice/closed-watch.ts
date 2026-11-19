@@ -322,7 +322,7 @@ function feePaidMoney(invoice: ClosedInvoice, n: number): bigint {
   for (const route of [...invoice.refund_routes].sort((a, b) => a.n - b.n)) {
     if (route.n >= n) break;
     if (SWEPT.includes(route.state)) {
-      // From its transfers, not its stored `swept`, which leaves out a swap deposit.
+      // From its transfers: a `swept` saved before fix ticket H leaves out a swap deposit.
       const sentOn = invoice.transfers
         .filter((t) => t.payout === route.n && DESTINATION_KINDS.has(t.kind))
         .reduce((sum, t) => sum + BigInt(t.amount), 0n);
